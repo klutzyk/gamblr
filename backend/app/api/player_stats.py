@@ -1,0 +1,74 @@
+from fastapi import APIRouter, Query
+from ..services.nba_client import NBAClient
+
+router = APIRouter()
+client = NBAClient(timeout=15)
+
+# Helper function to convert DataFrame to list of dicts for API response
+
+
+def df_to_dict(df):
+    return df.to_dict(orient="records")
+
+
+@router.get("/top_scorers")
+def top_scorers(season: str = "2025-26", top_n: int = 10):
+    df = client.fetch_player_stats(
+        season=season,
+        per_mode_detailed="PerGame",
+        measure_type_detailed_defense="Base",
+        season_type_all_star="Regular Season"
+    )
+    df_sorted = df.sort_values("PTS", ascending=False).head(top_n)
+    return df_to_dict(df_sorted)
+
+
+@router.get("/top_assists")
+def top_assists(season: str = "2025-26", top_n: int = 10):
+    df = client.fetch_player_stats(
+        season=season,
+        per_mode_detailed="PerGame",
+        measure_type_detailed_defense="Base",
+        season_type_all_star="Regular Season"
+    )
+    df_sorted = df.sort_values("AST", ascending=False).head(top_n)
+    return df_to_dict(df_sorted)
+
+
+@router.get("/top_rebounders")
+def top_rebounders(season: str = "2025-26", top_n: int = 10):
+    df = client.fetch_player_stats(
+        season=season,
+        per_mode_detailed="PerGame",
+        measure_type_detailed_defense="Base",
+        season_type_all_star="Regular Season"
+    )
+    df_sorted = df.sort_values("REB", ascending=False).head(top_n)
+    return df_to_dict(df_sorted)
+
+
+@router.get("/guards_stats")
+def guards_stats(season: str = "2025-26", top_n: int = 10):
+    df = client.fetch_player_stats(
+        season=season,
+        per_mode_detailed="PerGame",
+        measure_type_detailed_defense="Base",
+        season_type_all_star="Regular Season",
+        player_position_abbreviation_nullable="G"
+    )
+    df_filtered = df[["PLAYER_NAME", "PTS", "AST",
+                      "REB", "NBA_FANTASY_PTS"]].head(top_n)
+    return df_to_dict(df_filtered)
+
+
+@router.get("/recent_performers")
+def recent_performers(season: str = "2025-26", last_n_games: int = 5, top_n: int = 10):
+    df = client.fetch_player_stats(
+        season=season,
+        per_mode_detailed="PerGame",
+        measure_type_detailed_defense="Base",
+        season_type_all_star="Regular Season",
+        last_n_games=last_n_games
+    )
+    df_sorted = df.sort_values("NBA_FANTASY_PTS", ascending=False).head(top_n)
+    return df_to_dict(df_sorted)

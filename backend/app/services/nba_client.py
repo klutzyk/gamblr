@@ -31,3 +31,31 @@ class NBAClient:
         # Return common info as DataFrame
         df_info = player_info.common_player_info.get_data_frame()
         return df_info, df_seasons
+
+    def fetch_player_stats(self, **kwargs):
+        """
+        Fetch player stats with customizable parameters.
+
+        Example kwargs:
+            season="2025-26"
+            per_mode_detailed="PerGame"
+            measure_type_detailed_defense="Base"
+            season_type_all_star="Regular Season"
+            month=0
+            last_n_games=0
+            vs_conference_nullable=""
+            player_position_abbreviation_nullable=""
+            etc.
+
+        Returns:
+            pandas.DataFrame of LeagueDashPlayerStats
+        """
+        # Call the endpoint with dynamic kwargs
+        stats = leaguedashplayerstats.LeagueDashPlayerStats(
+            timeout=self.timeout,
+            **kwargs
+        )
+
+        # The main dataset is always the first DataFrame
+        df = stats.get_data_frames()[0]
+        return df
