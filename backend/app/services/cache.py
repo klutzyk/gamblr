@@ -3,6 +3,9 @@ import functools
 import inspect
 import hashlib
 import json
+import logging
+
+logger = logging.getLogger("cache")
 
 
 # cache utility
@@ -77,9 +80,12 @@ def cached(ttl_seconds: int):
             async def async_wrapper(*args, **kwargs):
                 key = make_cache_key(func, args, kwargs)
                 cached_value = CACHE.get(key)
+
                 if cached_value is not None:
+                    logger.info(f"[CACHE HIT] {func.__qualname__}")
                     return cached_value
 
+                logger.info(f"[CACHE MISS] {func.__qualname__}")
                 value = await func(*args, **kwargs)
                 CACHE.set(key, value, ttl_seconds)
                 return value
@@ -92,9 +98,12 @@ def cached(ttl_seconds: int):
             def sync_wrapper(*args, **kwargs):
                 key = make_cache_key(func, args, kwargs)
                 cached_value = CACHE.get(key)
+
                 if cached_value is not None:
+                    logger.info(f"[CACHE HIT] {func.__qualname__}")
                     return cached_value
 
+                logger.info(f"[CACHE MISS] {func.__qualname__}")
                 value = func(*args, **kwargs)
                 CACHE.set(key, value, ttl_seconds)
                 return value

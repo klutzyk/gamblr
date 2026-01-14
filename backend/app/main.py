@@ -3,6 +3,14 @@ from fastapi import FastAPI
 from app.api import health, player_stats, player_props
 from app.db.base import Base
 from app.db.session import engine
+import logging
+
+# for logging in fastapi
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(name)s: %(message)s",
+)
+
 
 app = FastAPI(title="NBA Betting API")
 
