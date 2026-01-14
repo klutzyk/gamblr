@@ -1,5 +1,6 @@
 import httpx
 from app.core.config import settings
+from app.services.cache import cached
 
 
 class SportsDataClient:
@@ -7,6 +8,7 @@ class SportsDataClient:
         self.base_url = settings.SPORTSDATA_BASE_URL
         self.api_key = settings.SPORTSDATA_API_KEY
 
+    @cached(ttl_seconds=60 * 5)
     async def get_player_props_by_game(self, game_id: int):
         url = f"{self.base_url}/odds/json/BettingPlayerPropsByGameID/{game_id}"
         params = {"key": self.api_key}
