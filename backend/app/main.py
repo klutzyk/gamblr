@@ -36,10 +36,10 @@ app.include_router(player_props.router, prefix="/player-props", tags=["Player Pr
 app.include_router(theodds.router, prefix="/odds", tags=["Odds API"])
 
 
-@app.on_event("startup")
-async def startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+# @app.on_event("startup")
+# async def startup():
+#     async with engine.begin() as conn:
+#         await conn.run_sync(Base.metadata.create_all)
 
 
 @app.get("/")
