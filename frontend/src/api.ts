@@ -60,7 +60,7 @@ async function fetchWithCache<T>(
   return data;
 }
 
-// Player stats endpoints (cached client‑side for 10 minutes)
+// Player stats endpoints (cached clientside for 10 minutes)
 const PLAYER_TTL = 10 * 60 * 1000;
 
 export function getTopScorers(
@@ -119,7 +119,7 @@ export function getRecentPerformers(
   );
 }
 
-// Player props – much stricter TTL (1 hour) because of low quota
+// Player props  much stricter TTL (1 hour) because of low quota
 const PROPS_TTL = 60 * 60 * 1000;
 
 export function getPlayerPropsByGame(

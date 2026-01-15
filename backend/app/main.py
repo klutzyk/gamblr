@@ -1,9 +1,10 @@
 # Main FastAPI application
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import health, player_stats, player_props
+from app.api import health, player_stats, player_props, theodds
 from app.db.base import Base
 from app.db.session import engine
+
 import logging
 
 # for logging in fastapi
@@ -32,6 +33,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(player_stats.router, prefix="/players", tags=["Players"])
 app.include_router(player_props.router, prefix="/player-props", tags=["Player Props"])
+app.include_router(theodds.router, prefix="/odds", tags=["Odds API"])
 
 
 @app.on_event("startup")
