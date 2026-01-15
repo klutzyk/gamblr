@@ -31,6 +31,7 @@ async def save_event_odds(event_data: dict, db: AsyncSession):
             title=b["title"],
         )
         db.add(bookmaker)
+        await db.flush()  # assign an ID without committing
 
         # --- Markets ---
         for m in b.get("markets", []):
@@ -44,6 +45,7 @@ async def save_event_odds(event_data: dict, db: AsyncSession):
                 ),
             )
             db.add(market)
+            await db.flush()  # assign market.id without commiting
 
             # --- Player Props ---
             for o in m.get("outcomes", []):
