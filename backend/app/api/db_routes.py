@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.services.theodds_client import TheOddsClient
 from app.db.store_odds import save_event_odds
+from app.db.store_player_game_stats import save_last_5_games
 import logging
 
 logger = logging.getLogger(__name__)
@@ -55,3 +56,26 @@ async def refresh_all_player_points(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error fetching/storing all events: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# get and store the last 5 box score stats for the givn player
+@router.post("/last-5/{player_id}")
+async def store_last_5_games(
+    player_id: int,
+    season: str = "2025-26",
+    db: AsyncSession = Depends(get_db),
+):
+    df = client.fetch_player_game_log(player_id, season)
+
+    if df.empty:
+        return {"status": "no data"}
+
+    await save_last_5_games(
+        player_id=player_id,
+        player_name=df.iloc[0]["PLAYER_NAME"],
+        team_abbr=df.iloc[0]["TEAM_ABBREVIATION"],
+        df=df,
+        db=db,
+    )
+
+    return {"status": "saved", "games": len(df.head(5))}

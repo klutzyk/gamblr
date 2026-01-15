@@ -35,7 +35,7 @@ app.include_router(player_stats.router, prefix="/players", tags=["Players"])
 app.include_router(player_props.router, prefix="/player-props", tags=["Player Props"])
 app.include_router(theodds.router, prefix="/odds", tags=["Odds API"])
 app.include_router(db_routes.router, prefix="/db", tags=["DB Storage"])
-
+app.include_router(db_routes.router, prefix="/db", tags=["DB Storage"])
 # @app.on_event("startup")
 # async def startup():
 #     async with engine.begin() as conn:
