@@ -7,7 +7,7 @@ from app.services.cache import cached
 
 
 class NBAClient:
-    def __init__(self, timeout=10):
+    def __init__(self, timeout=30):
         self.timeout = timeout
 
     # cache for 30 mins
