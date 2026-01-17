@@ -62,6 +62,61 @@ async def refresh_all_player_points(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# get and store last 5 box score stats for ALL active players
+# MIGHT TAKE A LONG TIME
+@router.post("/last-5/all")
+async def store_last_5_games_all_players(
+    season: str = "2025-26",
+    db: AsyncSession = Depends(get_db),
+):
+    active_players = players.get_active_players()
+
+    saved = 0
+    skipped = 0
+    failed = 0
+
+    for p in active_players:
+        player_id = p["id"]
+
+        try:
+            df = nba_client.fetch_player_game_log(player_id, season)
+
+            if df.empty:
+                skipped += 1
+                continue
+
+            info_df, _ = nba_client.fetch_player_info(player_id)
+
+            player_name = info_df.iloc[0]["DISPLAY_FIRST_LAST"]
+            team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
+
+            await save_last_5_games(
+                player_id=player_id,
+                player_name=player_name,
+                team_abbr=team_abbr,
+                df=df,
+                db=db,
+            )
+
+            saved += 1
+
+            # short sleep to avoid overloading NBA API
+            await asyncio.sleep(0.4)
+
+        except Exception as e:
+            logger.error(f"Failed player {player_id}: {e}")
+            failed += 1
+            continue
+
+    return {
+        "status": "completed",
+        "players_total": len(active_players),
+        "players_saved": saved,
+        "players_skipped": skipped,
+        "players_failed": failed,
+    }
+
+
 # get and store the last 5 box score stats for the givn player
 @router.post("/last-5/{player_id}")
 async def store_last_5_games(
@@ -88,53 +143,3 @@ async def store_last_5_games(
     )
 
     return {"status": "saved", "games": len(df.head(5))}
-
-
-# get and store last 5 box score stats for ALL active players
-# MIGHT TAKE A LONG TIME
-@router.post("/last-5/all")
-async def store_last_5_games_all_players(
-    season: str = "2025-26",
-    db: AsyncSession = Depends(get_db),
-):
-    active_players = players.get_active_players()
-
-    saved = 0
-    skipped = 0
-    failed = 0
-
-    for p in active_players:
-        player_id = p["id"]
-
-        try:
-            df = nba_client.fetch_player_game_log(player_id, season)
-
-            if df.empty:
-                skipped += 1
-                continue
-
-            await save_last_5_games(
-                player_id=player_id,
-                player_name=df.iloc[0]["PLAYER_NAME"],
-                team_abbr=df.iloc[0]["TEAM_ABBREVIATION"],
-                df=df,
-                db=db,
-            )
-
-            saved += 1
-
-            # short sleep to avoid overloading NBA API
-            await asyncio.sleep(0.4)
-
-        except Exception as e:
-            logger.error(f"Failed player {player_id}: {e}")
-            failed += 1
-            continue
-
-    return {
-        "status": "completed",
-        "players_total": len(active_players),
-        "players_saved": saved,
-        "players_skipped": skipped,
-        "players_failed": failed,
-    }
