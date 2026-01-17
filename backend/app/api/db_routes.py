@@ -4,7 +4,7 @@ from app.db.session import get_db
 from app.services.theodds_client import TheOddsClient
 from app.services.nba_client import NBAClient
 from app.db.store_odds import save_event_odds
-from app.db.store_player_game_stats import save_last_5_games
+from app.db.store_player_game_stats import save_last_n_games
 from nba_api.stats.static import players
 import logging
 import asyncio
@@ -65,10 +65,10 @@ async def refresh_all_player_points(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# get and store last 5 box score stats for ALL active players
+# get and store last N box score stats for ALL active players. N takes on the value of MAX_GAMES_PER_PLAYER
 # MIGHT TAKE A LONG TIME
-@router.post("/last-5/all")
-async def store_last_5_games_all_players(
+@router.post("/last-n/all")
+async def store_last_n_games_all_players(
     season: str = "2025-26",
     db: AsyncSession = Depends(get_db),
 ):
@@ -95,7 +95,7 @@ async def store_last_5_games_all_players(
                 else None
             )
 
-            await save_last_5_games(
+            await save_last_n_games(
                 player_id=player_id,
                 player_name=player_name,
                 team_abbr=team_abbr,
@@ -104,14 +104,12 @@ async def store_last_5_games_all_players(
             )
 
             saved += 1
-            # small sleep to avoid hitting NBA API too fast
             await asyncio.sleep(0.2)
 
         except Exception as e:
             logger.error(f"Failed player {player_id}: {e}")
             failed += 1
             await asyncio.sleep(0.2)
-            continue
 
     return {
         "status": "completed",
@@ -122,9 +120,9 @@ async def store_last_5_games_all_players(
     }
 
 
-# get and store the last 5 box score stats for the givn player
-@router.post("/last-5/{player_id}")
-async def store_last_5_games(
+# get and store the last N box score stats for the givn player. N takes on the value of MAX_GAMES_PER_PLAYER
+@router.post("/last-n/{player_id}")
+async def store_last_n_games_player(
     player_id: int,
     season: str = "2025-26",
     db: AsyncSession = Depends(get_db),
@@ -139,7 +137,7 @@ async def store_last_5_games(
     player_name = info_df.iloc[0]["DISPLAY_FIRST_LAST"]
     team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
 
-    await save_last_5_games(
+    await save_last_n_games(
         player_id=player_id,
         player_name=player_name,
         team_abbr=team_abbr,
@@ -147,4 +145,4 @@ async def store_last_5_games(
         db=db,
     )
 
-    return {"status": "saved", "games": len(df.head(5))}
+    return {"status": "saved", "games": min(len(df), 20)}

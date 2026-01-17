@@ -3,16 +3,17 @@ from sqlalchemy import select, delete
 from app.models.player import Player
 from app.models.player_game_stat import PlayerGameStat
 from datetime import datetime
+from app.core.constants import MAX_GAMES_PER_PLAYER
 
 
-async def save_last_5_games(
+async def save_last_n_games(
     player_id: int,
     player_name: str,
     team_abbr: str,
     df,
     db: AsyncSession,
 ):
-    # --- Player ---
+    # player row
     player = await db.get(Player, player_id)
     if not player:
         player = Player(
@@ -23,21 +24,14 @@ async def save_last_5_games(
         db.add(player)
         await db.flush()
 
-    # Keep only last 5 games
-    df = df.sort_values("GAME_DATE", ascending=False).head(5)
+    # keep only last N games from API upto the value of MAX_GAMES_PER_PLAYER (20 for now)
+    df = df.sort_values("GAME_DATE", ascending=False).head(MAX_GAMES_PER_PLAYER)
 
-    # delete rows older than 5
-    stmt = select(PlayerGameStat).where(PlayerGameStat.player_id == player_id)
-    res = await db.execute(stmt)
-    existing = res.scalars().all()
+    # delete existing games for this player
+    delete_stmt = delete(PlayerGameStat).where(PlayerGameStat.player_id == player_id)
+    await db.execute(delete_stmt)
 
-    if len(existing) >= 5:
-        delete_stmt = delete(PlayerGameStat).where(
-            PlayerGameStat.player_id == player_id
-        )
-        await db.execute(delete_stmt)
-
-    # Insert games
+    # insert fresh window
     for _, row in df.iterrows():
         game = PlayerGameStat(
             player_id=player_id,
