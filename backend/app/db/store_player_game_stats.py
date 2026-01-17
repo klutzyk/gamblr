@@ -17,7 +17,7 @@ async def save_last_5_games(
     if not player:
         player = Player(
             id=player_id,
-            full_name=player_name or "UNKNOWN",
+            full_name=player_name,
             team_abbreviation=team_abbr,
         )
         db.add(player)

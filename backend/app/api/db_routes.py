@@ -8,6 +8,9 @@ from app.db.store_player_game_stats import save_last_5_games
 from nba_api.stats.static import players
 import logging
 import asyncio
+import httpx
+from asyncio_throttle import Throttler
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,7 @@ async def store_last_5_games_all_players(
 
     for p in active_players:
         player_id = p["id"]
+        player_name = p["full_name"]
 
         try:
             df = nba_client.fetch_player_game_log(player_id, season)
@@ -85,10 +89,11 @@ async def store_last_5_games_all_players(
                 skipped += 1
                 continue
 
-            info_df, _ = nba_client.fetch_player_info(player_id)
-
-            player_name = info_df.iloc[0]["DISPLAY_FIRST_LAST"]
-            team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
+            team_abbr = (
+                df.iloc[0]["TEAM_ABBREVIATION"]
+                if "TEAM_ABBREVIATION" in df.columns
+                else None
+            )
 
             await save_last_5_games(
                 player_id=player_id,
@@ -99,13 +104,13 @@ async def store_last_5_games_all_players(
             )
 
             saved += 1
-
-            # short sleep to avoid overloading NBA API
-            await asyncio.sleep(0.4)
+            # small sleep to avoid hitting NBA API too fast
+            await asyncio.sleep(0.2)
 
         except Exception as e:
             logger.error(f"Failed player {player_id}: {e}")
             failed += 1
+            await asyncio.sleep(0.2)
             continue
 
     return {

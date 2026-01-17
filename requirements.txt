@@ -8,3 +8,4 @@ pydantic-settings
 requests
 pandas
 nba_api
+asyncio-throttle
