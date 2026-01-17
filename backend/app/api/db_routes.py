@@ -11,12 +11,16 @@ import asyncio
 import httpx
 from asyncio_throttle import Throttler
 import pandas as pd
+from app.core.constants import MAX_GAMES_PER_PLAYER
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 odds_client = TheOddsClient()
 nba_client = NBAClient()
+
+#  throttler to prevent hammering NBA API. rate limiting to 5 requests/sec
+throttler = Throttler(rate_limit=5, period=1)
 
 
 # store player points props for a single event (game)
@@ -69,47 +73,18 @@ async def refresh_all_player_points(db: AsyncSession = Depends(get_db)):
 # MIGHT TAKE A LONG TIME
 @router.post("/last-n/all")
 async def store_last_n_games_all_players(
-    season: str = "2025-26",
-    db: AsyncSession = Depends(get_db),
+    season: str = "2025-26", db: AsyncSession = Depends(get_db)
 ):
     active_players = players.get_active_players()
 
-    saved = 0
-    skipped = 0
-    failed = 0
+    #  run the fetch and saveing of plauers in parallel for every active player
+    tasks = [fetch_player_and_save(p, season, db) for p in active_players]
+    results = await asyncio.gather(*tasks)
 
-    for p in active_players:
-        player_id = p["id"]
-        player_name = p["full_name"]
-
-        try:
-            df = nba_client.fetch_player_game_log(player_id, season)
-
-            if df.empty:
-                skipped += 1
-                continue
-
-            team_abbr = (
-                df.iloc[0]["TEAM_ABBREVIATION"]
-                if "TEAM_ABBREVIATION" in df.columns
-                else None
-            )
-
-            await save_last_n_games(
-                player_id=player_id,
-                player_name=player_name,
-                team_abbr=team_abbr,
-                df=df,
-                db=db,
-            )
-
-            saved += 1
-            await asyncio.sleep(0.2)
-
-        except Exception as e:
-            logger.error(f"Failed player {player_id}: {e}")
-            failed += 1
-            await asyncio.sleep(0.2)
+    # tracking variables (for verification)
+    saved = results.count("saved")
+    skipped = results.count("skipped")
+    failed = results.count("failed")
 
     return {
         "status": "completed",
@@ -145,4 +120,36 @@ async def store_last_n_games_player(
         db=db,
     )
 
-    return {"status": "saved", "games": min(len(df), 20)}
+    return {"status": "saved", "games": min(len(df), MAX_GAMES_PER_PLAYER)}
+
+
+# helper to fetch and store players in db implementing retry logic and rate limiting
+async def fetch_player_and_save(player, season, db):
+    player_id = player["id"]
+    player_name = player["full_name"]
+
+    # retry 3 times if fetching fails
+    for attempt in range(3):
+        try:
+            # throttling to 5 requests per second
+            async with throttler:
+                df = nba_client.fetch_player_game_log(player_id, season)
+            break  # on success, exit retry loop
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1} failed for {player_name}: {e}")
+            await asyncio.sleep(0.5)  # wait a bit before retry
+    else:
+        logger.error(f"All retries failed for {player_name}")
+        return "failed"
+
+    if df.empty:
+        return "skipped"
+
+    team_abbr = (
+        df.iloc[0]["TEAM_ABBREVIATION"] if "TEAM_ABBREVIATION" in df.columns else None
+    )
+
+    await save_last_n_games(
+        player_id=player_id, player_name=player_name, team_abbr=team_abbr, df=df, db=db
+    )
+    return "saved"
