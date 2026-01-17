@@ -77,7 +77,7 @@ async def store_last_n_games_all_players(
 ):
     active_players = players.get_active_players()
 
-    #  run the fetch and saveing of plauers in parallel for every active player
+    #  run the fetch and saveing of plauers in parallel for every active
     tasks = [fetch_player_and_save(p, season, db) for p in active_players]
     results = await asyncio.gather(*tasks)
 
