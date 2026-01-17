@@ -76,15 +76,56 @@ async def store_last_n_games_all_players(
     season: str = "2025-26", db: AsyncSession = Depends(get_db)
 ):
     active_players = players.get_active_players()
+    saved = 0
+    skipped = 0
+    failed = 0
 
-    #  run the fetch and saveing of plauers in parallel for every active
-    tasks = [fetch_player_and_save(p, season, db) for p in active_players]
-    results = await asyncio.gather(*tasks)
+    for p in active_players:
+        player_id = p["id"]
+        player_name = p["full_name"]
 
-    # tracking variables (for verification)
-    saved = results.count("saved")
-    skipped = results.count("skipped")
-    failed = results.count("failed")
+        # Retry logic to try up to 3 times if fetch fails
+        for attempt in range(3):
+            try:
+                # rate limiting to max 5 requests per second
+                async with throttler:
+                    df = nba_client.fetch_player_game_log(player_id, season)
+                break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for {player_name}: {e}")
+                await asyncio.sleep(0.5)
+        else:
+            logger.error(f"All retries failed for {player_name}")
+            failed += 1
+            continue
+
+        if df.empty:
+            skipped += 1
+            continue
+
+        team_abbr = (
+            df.iloc[0]["TEAM_ABBREVIATION"]
+            if "TEAM_ABBREVIATION" in df.columns
+            else None
+        )
+
+        try:
+            await save_last_n_games(
+                player_id=player_id,
+                player_name=player_name,
+                team_abbr=team_abbr,
+                df=df,
+                db=db,
+                n=MAX_GAMES_PER_PLAYER,
+            )
+            saved += 1
+        except Exception as e:
+            logger.warning(f"Failed saving {player_name}: {e}")
+            failed += 1
+            continue
+
+        # small delay for safety
+        await asyncio.sleep(0.05)
 
     return {
         "status": "completed",
@@ -124,32 +165,32 @@ async def store_last_n_games_player(
 
 
 # helper to fetch and store players in db implementing retry logic and rate limiting
-async def fetch_player_and_save(player, season, db):
-    player_id = player["id"]
-    player_name = player["full_name"]
+# async def fetch_player_and_save(player, season, db):
+#     player_id = player["id"]
+#     player_name = player["full_name"]
 
-    # retry 3 times if fetching fails
-    for attempt in range(3):
-        try:
-            # throttling to 5 requests per second
-            async with throttler:
-                df = nba_client.fetch_player_game_log(player_id, season)
-            break  # on success, exit retry loop
-        except Exception as e:
-            logger.warning(f"Attempt {attempt + 1} failed for {player_name}: {e}")
-            await asyncio.sleep(0.5)  # wait a bit before retry
-    else:
-        logger.error(f"All retries failed for {player_name}")
-        return "failed"
+#     # retry 3 times if fetching fails
+#     for attempt in range(3):
+#         try:
+#             # throttling to 5 requests per second
+#             async with throttler:
+#                 df = nba_client.fetch_player_game_log(player_id, season)
+#             break  # on success, exit retry loop
+#         except Exception as e:
+#             logger.warning(f"Attempt {attempt + 1} failed for {player_name}: {e}")
+#             await asyncio.sleep(0.5)  # wait a bit before retry
+#     else:
+#         logger.error(f"All retries failed for {player_name}")
+#         return "failed"
 
-    if df.empty:
-        return "skipped"
+#     if df.empty:
+#         return "skipped"
 
-    team_abbr = (
-        df.iloc[0]["TEAM_ABBREVIATION"] if "TEAM_ABBREVIATION" in df.columns else None
-    )
+#     team_abbr = (
+#         df.iloc[0]["TEAM_ABBREVIATION"] if "TEAM_ABBREVIATION" in df.columns else None
+#     )
 
-    await save_last_n_games(
-        player_id=player_id, player_name=player_name, team_abbr=team_abbr, df=df, db=db
-    )
-    return "saved"
+#     await save_last_n_games(
+#         player_id=player_id, player_name=player_name, team_abbr=team_abbr, df=df, db=db
+#     )
+#     return "saved"
