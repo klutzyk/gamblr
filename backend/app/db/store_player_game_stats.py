@@ -17,7 +17,7 @@ async def save_last_5_games(
     if not player:
         player = Player(
             id=player_id,
-            full_name=player_name,
+            full_name=player_name or "UNKNOWN",
             team_abbreviation=team_abbr,
         )
         db.add(player)
@@ -42,7 +42,7 @@ async def save_last_5_games(
         game = PlayerGameStat(
             player_id=player_id,
             game_id=row["Game_ID"],
-            game_date=datetime.strptime(row["GAME_DATE"], "%Y-%m-%d").date(),
+            game_date=datetime.strptime(row["GAME_DATE"], "%b %d, %Y").date(),
             matchup=row["MATCHUP"],
             minutes=row["MIN"],
             points=row["PTS"],
