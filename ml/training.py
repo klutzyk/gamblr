@@ -93,12 +93,19 @@ df_features["opponent_avg_blocks_last5"] = opponent_avg_blocks
 df_features["opponent_avg_steals_last5"] = opponent_avg_steals
 df_features["opponent_avg_turnovers_last5"] = opponent_avg_turnovers
 
+# store the rolling average of minutes as well to avoid data leakage during prediction
+# can pass the rolling avg during prediction as real minutes arent known yet
+df_features["avg_minutes_last5"] = df_features.groupby("player_id")[
+    "minutes"
+].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1))
+
 # drop first few games with NaN
 df_features = df_features.dropna()
 
+
 # features to feed model
 features = [
-    "minutes",
+    "avg_minutes_last5",
     "is_home",
     "avg_points_last5",
     "avg_assists_last5",
