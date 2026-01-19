@@ -1,6 +1,7 @@
 import joblib
 import pandas as pd
 from pathlib import Path
+from utils import compute_rolling_features
 
 MODEL_PATH = Path(__file__).parent.parent / "models"
 
@@ -13,11 +14,14 @@ def load_latest_model():
     return joblib.load(model_files[-1])
 
 
-def predict_points(df_next_game):
+def predict_points(df_next, df_history):
     """
     df_next_game: DataFrame containing next game's players with
     precomputed features: avg_minutes_last5, is_home, avg_points_last5, etc.
     """
+    # Compute all features for prediction
+    df_next_features = compute_rolling_features(df_next, df_history)
+
     model = load_latest_model()
     features = [
         "avg_minutes_last5",
@@ -31,6 +35,11 @@ def predict_points(df_next_game):
         "opponent_avg_steals_last5",
         "opponent_avg_turnovers_last5",
     ]
-    X = df_next_game[features]
-    df_next_game["pred_points"] = model.predict(X)
-    return df_next_game
+
+    # Ensure is_home is computed
+    df_next_features["is_home"] = df_next_features["matchup"].apply(
+        lambda x: 1 if "@" not in x else 0
+    )
+
+    df_next_features["pred_points"] = model.predict(df_next_features[features])
+    return df_next_features
