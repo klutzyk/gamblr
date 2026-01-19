@@ -4,19 +4,23 @@ from app.db.session import get_db
 from app.services.theodds_client import TheOddsClient
 from app.services.nba_client import NBAClient
 from app.db.store_odds import save_event_odds
-from app.db.store_player_game_stats import save_last_5_games
+from app.db.store_player_game_stats import save_last_n_games
 from nba_api.stats.static import players
 import logging
 import asyncio
 import httpx
 from asyncio_throttle import Throttler
 import pandas as pd
+from app.core.constants import MAX_GAMES_PER_PLAYER
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 odds_client = TheOddsClient()
 nba_client = NBAClient()
+
+#  throttler to prevent hammering NBA API. rate limiting to 5 requests/sec
+throttler = Throttler(rate_limit=5, period=1)
 
 
 # store player points props for a single event (game)
@@ -65,37 +69,49 @@ async def refresh_all_player_points(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# get and store last 5 box score stats for ALL active players
+# get and store last N box score stats for ALL active players. N takes on the value of MAX_GAMES_PER_PLAYER
 # MIGHT TAKE A LONG TIME
-@router.post("/last-5/all")
-async def store_last_5_games_all_players(
-    season: str = "2025-26",
-    db: AsyncSession = Depends(get_db),
+@router.post("/last-n/all")
+async def store_last_n_games_all_players(
+    season: str = "2025-26", db: AsyncSession = Depends(get_db)
 ):
     active_players = players.get_active_players()
-
     saved = 0
     skipped = 0
     failed = 0
+    total_new_games = 0
 
     for p in active_players:
         player_id = p["id"]
         player_name = p["full_name"]
 
+        # Retry logic to try up to 3 times if fetch fails
+        for attempt in range(3):
+            try:
+                # rate limiting to max 5 requests per second
+                async with throttler:
+                    df = nba_client.fetch_player_game_log(player_id, season)
+                break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for {player_name}: {e}")
+                await asyncio.sleep(0.5)
+        else:
+            logger.error(f"All retries failed for {player_name}")
+            failed += 1
+            continue
+
+        if df.empty:
+            skipped += 1
+            continue
+
+        team_abbr = (
+            df.iloc[0]["TEAM_ABBREVIATION"]
+            if "TEAM_ABBREVIATION" in df.columns
+            else None
+        )
+
         try:
-            df = nba_client.fetch_player_game_log(player_id, season)
-
-            if df.empty:
-                skipped += 1
-                continue
-
-            team_abbr = (
-                df.iloc[0]["TEAM_ABBREVIATION"]
-                if "TEAM_ABBREVIATION" in df.columns
-                else None
-            )
-
-            await save_last_5_games(
+            new_games = await save_last_n_games(
                 player_id=player_id,
                 player_name=player_name,
                 team_abbr=team_abbr,
@@ -103,15 +119,19 @@ async def store_last_5_games_all_players(
                 db=db,
             )
 
-            saved += 1
-            # small sleep to avoid hitting NBA API too fast
-            await asyncio.sleep(0.2)
+            if new_games > 0:
+                saved += 1
+                total_new_games += new_games
+            else:
+                skipped += 1
 
         except Exception as e:
-            logger.error(f"Failed player {player_id}: {e}")
+            logger.warning(f"Failed saving {player_name}: {e}")
             failed += 1
-            await asyncio.sleep(0.2)
             continue
+
+        # small delay for safety
+        await asyncio.sleep(0.05)
 
     return {
         "status": "completed",
@@ -119,12 +139,13 @@ async def store_last_5_games_all_players(
         "players_saved": saved,
         "players_skipped": skipped,
         "players_failed": failed,
+        "total_new_games_inserted": total_new_games,
     }
 
 
-# get and store the last 5 box score stats for the givn player
-@router.post("/last-5/{player_id}")
-async def store_last_5_games(
+# get and store the last N box score stats for the givn player. N takes on the value of MAX_GAMES_PER_PLAYER
+@router.post("/last-n/{player_id}")
+async def store_last_n_games_player(
     player_id: int,
     season: str = "2025-26",
     db: AsyncSession = Depends(get_db),
@@ -139,7 +160,7 @@ async def store_last_5_games(
     player_name = info_df.iloc[0]["DISPLAY_FIRST_LAST"]
     team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
 
-    await save_last_5_games(
+    new_games = await save_last_n_games(
         player_id=player_id,
         player_name=player_name,
         team_abbr=team_abbr,
@@ -147,4 +168,7 @@ async def store_last_5_games(
         db=db,
     )
 
-    return {"status": "saved", "games": len(df.head(5))}
+    return {
+        "status": "saved",
+        "games": new_games,
+    }
