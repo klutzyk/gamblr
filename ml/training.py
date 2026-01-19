@@ -5,6 +5,7 @@ from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 import joblib
 from sqlalchemy import create_engine
+from datetime import datetime
 
 # load env variables
 load_dotenv()
@@ -126,5 +127,7 @@ model = XGBRegressor(n_estimators=500, learning_rate=0.05, max_depth=5, random_s
 model.fit(X_train, y_train)
 
 # save the trained model
-joblib.dump(model, "ml_models/models/xgb_points_model.pkl")
-print("model trained and saved!")
+today_str = datetime.now().strftime("%Y%m%d")
+model_filename = f"../models/xgb_points_model_{today_str}.pkl"
+joblib.dump(model, model_filename)
+print(f"Model trained and saved as {model_filename}")
