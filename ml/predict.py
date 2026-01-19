@@ -1,29 +1,63 @@
-import joblib
+# ml/predict.py
 import pandas as pd
+import joblib
 from pathlib import Path
-from utils import compute_rolling_features
+from utils import compute_prediction_features
 
-MODEL_PATH = Path(__file__).parent.parent / "models"
-
-
-def load_latest_model():
-    # get latest model file based on date
-    model_files = sorted(MODEL_PATH.glob("xgb_points_model_*.pkl"))
-    if not model_files:
-        raise FileNotFoundError("No model found")
-    return joblib.load(model_files[-1])
+# ml folder
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+MODELS_DIR = BASE_DIR / "models"
 
 
-def predict_points(df_next, df_history):
+def load_latest_model(models_dir: Path = MODELS_DIR):
+    models = sorted(models_dir.glob("xgb_points_model_*.pkl"))
+    if not models:
+        raise FileNotFoundError("No trained models found.")
+    return joblib.load(models[-1])
+
+
+def predict_points(
+    engine,
+    models_dir: Path = MODELS_DIR,
+    rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+):
     """
-    df_next_game: DataFrame containing next game's players with
-    precomputed features: avg_minutes_last5, is_home, avg_points_last5, etc.
+    Predict points for upcoming NBA games.
     """
-    # Compute all features for prediction
-    df_next_features = compute_rolling_features(df_next, df_history)
+    # Load rolling CSV
+    df_rolling = pd.read_csv(rolling_path)
 
-    model = load_latest_model()
-    features = [
+    # Load all historical games
+    df_history = pd.read_sql(
+        """
+        SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
+               pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers
+        FROM player_game_stats pg
+        JOIN players p ON pg.player_id = p.id
+    """,
+        engine,
+    )
+
+    # Load upcoming games
+    df_next = pd.read_sql(
+        """
+        SELECT player_id, matchup, team_abbreviation, game_date
+        FROM player_game_stats
+        WHERE game_date > CURRENT_DATE
+        ORDER BY game_date
+    """,
+        engine,
+    )
+
+    if df_next.empty:
+        print("No upcoming games.")
+        return pd.DataFrame()
+
+    # Build features
+    df_next = compute_prediction_features(df_next, df_history)
+
+    FEATURES = [
         "avg_minutes_last5",
         "is_home",
         "avg_points_last5",
@@ -36,10 +70,10 @@ def predict_points(df_next, df_history):
         "opponent_avg_turnovers_last5",
     ]
 
-    # Ensure is_home is computed
-    df_next_features["is_home"] = df_next_features["matchup"].apply(
-        lambda x: 1 if "@" not in x else 0
-    )
+    model = load_latest_model(models_dir)
 
-    df_next_features["pred_points"] = model.predict(df_next_features[features])
-    return df_next_features
+    df_next["pred_points"] = model.predict(df_next[FEATURES])
+
+    return df_next[
+        ["player_id", "team_abbreviation", "matchup", "game_date", "pred_points"]
+    ]
