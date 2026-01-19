@@ -1,11 +1,14 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from datetime import datetime
 from app.models.player import Player
 from app.models.player_game_stat import PlayerGameStat
-from datetime import datetime
 from app.core.constants import MAX_GAMES_PER_PLAYER
 
 
+# Save the last n games (N takes on the value of MAX_GAMES_PER_PLAYER constant)
+# If player data a;lready exists in the db, get the latest player game data and only insert the new records
+# Remove old records until each player has MAX_GAMES_PER_PLAYER records
 async def save_last_n_games(
     player_id: int,
     player_name: str,
@@ -13,7 +16,7 @@ async def save_last_n_games(
     df,
     db: AsyncSession,
 ):
-    # player row
+    # Ensure player exists
     player = await db.get(Player, player_id)
     if not player:
         player = Player(
@@ -24,28 +27,61 @@ async def save_last_n_games(
         db.add(player)
         await db.flush()
 
-    # keep only last N games from API upto the value of MAX_GAMES_PER_PLAYER (20 for now)
-    df = df.sort_values("GAME_DATE", ascending=False).head(MAX_GAMES_PER_PLAYER)
+    # Get latest stored game_date for this player
+    result = await db.execute(
+        select(PlayerGameStat.game_date)
+        .where(PlayerGameStat.player_id == player_id)
+        .order_by(PlayerGameStat.game_date.desc())
+        .limit(1)
+    )
+    last_game_date = result.scalar_one_or_none()
 
-    # delete existing games for this player
-    delete_stmt = delete(PlayerGameStat).where(PlayerGameStat.player_id == player_id)
-    await db.execute(delete_stmt)
+    # Normalize API dates
+    df["GAME_DATE"] = df["GAME_DATE"].apply(
+        lambda d: datetime.strptime(d, "%b %d, %Y").date()
+    )
 
-    # insert fresh window
+    # Keep only th NEW games
+    if last_game_date:
+        df = df[df["GAME_DATE"] > last_game_date]
+
+    if df.empty:
+        return 0  # nothing new to insert
+
+    # Insert only new games
     for _, row in df.iterrows():
-        game = PlayerGameStat(
-            player_id=player_id,
-            game_id=row["Game_ID"],
-            game_date=datetime.strptime(row["GAME_DATE"], "%b %d, %Y").date(),
-            matchup=row["MATCHUP"],
-            minutes=row["MIN"],
-            points=row["PTS"],
-            assists=row["AST"],
-            rebounds=row["REB"],
-            steals=row["STL"],
-            blocks=row["BLK"],
-            turnovers=row["TOV"],
+        db.add(
+            PlayerGameStat(
+                player_id=player_id,
+                game_id=row["Game_ID"],
+                game_date=row["GAME_DATE"],
+                matchup=row["MATCHUP"],
+                minutes=row["MIN"],
+                points=row["PTS"],
+                assists=row["AST"],
+                rebounds=row["REB"],
+                steals=row["STL"],
+                blocks=row["BLK"],
+                turnovers=row["TOV"],
+            )
         )
-        db.add(game)
 
     await db.commit()
+
+    # Enforce rolling window (keep newest N and delete old)
+    await db.execute(
+        delete(PlayerGameStat)
+        .where(PlayerGameStat.player_id == player_id)
+        .where(
+            PlayerGameStat.game_id.notin_(
+                select(PlayerGameStat.game_id)
+                .where(PlayerGameStat.player_id == player_id)
+                .order_by(PlayerGameStat.game_date.desc())
+                .limit(MAX_GAMES_PER_PLAYER)
+            )
+        )
+    )
+
+    await db.commit()
+
+    return len(df)
