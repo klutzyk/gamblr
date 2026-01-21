@@ -39,16 +39,35 @@ def predict_points(
         engine,
     )
 
-    # Load upcoming games
+    # Load upcoming games (join players to get team)
     df_next = pd.read_sql(
         """
-        SELECT player_id, matchup, team_abbreviation, game_date
-        FROM player_game_stats
-        WHERE game_date > CURRENT_DATE
-        ORDER BY game_date
-    """,
+        SELECT pg.player_id,
+            pg.matchup,
+            p.team_abbreviation,
+            pg.game_date
+        FROM player_game_stats pg
+        JOIN players p ON pg.player_id = p.id
+        WHERE pg.game_date > CURRENT_DATE
+        ORDER BY pg.game_date
+        """,
         engine,
     )
+
+    # Fpor testing purposes - Using the latest played game as a proxy for "next game"
+    # df_next = pd.read_sql(
+    #     """
+    #     SELECT DISTINCT ON (pg.player_id)
+    #         pg.player_id,
+    #         pg.matchup,
+    #         p.team_abbreviation,
+    #         pg.game_date
+    #     FROM player_game_stats pg
+    #     JOIN players p ON pg.player_id = p.id
+    #     ORDER BY pg.player_id, pg.game_date DESC
+    #     """,
+    #     engine,
+    # )
 
     if df_next.empty:
         print("No upcoming games.")
