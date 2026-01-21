@@ -6,7 +6,16 @@ from sqlalchemy import pool
 from alembic import context
 from app.db.base import Base
 from app.db.session import engine
-from app.models import event, bookmaker, market, player_prop, player, player_game_stat
+from app.models import (
+    event,
+    bookmaker,
+    market,
+    player_prop,
+    player,
+    player_game_stat,
+    game_schedule,
+    team,
+)
 
 
 # this is the Alembic Config object, which provides
