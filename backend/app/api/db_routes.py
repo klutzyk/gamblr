@@ -5,6 +5,8 @@ from app.services.theodds_client import TheOddsClient
 from app.services.nba_client import NBAClient
 from app.db.store_odds import save_event_odds
 from app.db.store_player_game_stats import save_last_n_games
+from app.db.store_teams import load_teams
+from app.db.store_schedule import load_schedule
 from nba_api.stats.static import players
 import logging
 import asyncio
@@ -172,3 +174,38 @@ async def store_last_n_games_player(
         "status": "saved",
         "games": new_games,
     }
+
+
+# Get and store the team metadata
+@router.post("/teams/load")
+async def load_all_teams(db: AsyncSession = Depends(get_db)):
+    """
+    Load all NBA teams from nba_api static endpoints into DB.
+    """
+    try:
+        await load_teams(db)
+        return {"status": "success", "message": "Teams loaded/updated"}
+    except Exception as e:
+        logger.error(f"Error loading teams: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# fetch and store the schedule info for the given season
+@router.post("/schedule/load")
+async def load_season_schedule(
+    season: str = "2025-26",
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Load all games for a season from NBA API into DB.
+    """
+    try:
+        await load_schedule(db, season)
+        return {
+            "status": "success",
+            "season": season,
+            "message": "Schedule loaded/updated",
+        }
+    except Exception as e:
+        logger.error(f"Error loading schedule for season {season}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
