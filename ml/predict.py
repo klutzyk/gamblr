@@ -3,6 +3,7 @@ import pandas as pd
 import joblib
 from pathlib import Path
 from utils import compute_prediction_features
+from datetime import datetime
 
 # ml folder
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,6 +28,7 @@ def predict_points(
     """
     # Load rolling CSV
     df_rolling = pd.read_csv(rolling_path)
+    df_rolling["game_date"] = pd.to_datetime(df_rolling["game_date"], dayfirst=True)
 
     # Load all historical games
     df_history = pd.read_sql(
@@ -38,44 +40,31 @@ def predict_points(
     """,
         engine,
     )
+    df_history["game_date"] = pd.to_datetime(df_history["game_date"])
 
-    # Load upcoming games (join players to get team)
-    # df_next = pd.read_sql(
-    #     """
-    #     SELECT pg.player_id,
-    #         pg.matchup,
-    #         p.team_abbreviation,
-    #         pg.game_date
-    #     FROM player_game_stats pg
-    #     JOIN players p ON pg.player_id = p.id
-    #     WHERE pg.game_date > CURRENT_DATE
-    #     ORDER BY pg.game_date
-    #     """,
-    #     engine,
-    # )
+    # Get upcoming games from schedule
+    df_schedule = pd.read_sql("SELECT * FROM game_schedule", engine)
+    df_schedule["game_date"] = pd.to_datetime(df_schedule["game_date"], dayfirst=True)
 
-    # Fpor testing purposes - Using the latest played game as a proxy for "next game"
-    df_next = pd.read_sql(
-        """
-        SELECT DISTINCT ON (pg.player_id)
-            pg.player_id,
-            pg.matchup,
-            p.team_abbreviation,
-            pg.game_date
-        FROM player_game_stats pg
-        JOIN players p ON pg.player_id = p.id
-        ORDER BY pg.player_id, pg.game_date DESC
-        """,
-        engine,
-    )
+    # get games for today
+    today = pd.to_datetime(datetime.now().date())
+    df_next_games = df_schedule[df_schedule["game_date"] == today]
 
-    if df_next.empty:
-        print("No upcoming games.")
-        return pd.DataFrame()
+    # For each upcoming game, get all players from the two teams using rolling stats
+    rows = []
+    for _, game in df_next_games.iterrows():
+        for team_abbr in [game["home_team_abbr"], game["away_team_abbr"]]:
+            players = df_rolling[df_rolling["team_abbreviation"] == team_abbr].copy()
+            players["matchup"] = game["matchup"]  # schedule matchup
+            players["game_date"] = game["game_date"]
+            rows.append(players)
 
-    # Build features
-    df_next = compute_prediction_features(df_next, df_history)
+    df_next_players = pd.concat(rows, ignore_index=True)
 
+    # Now compute features using historical stats
+    df_next_features = compute_prediction_features(df_next_players, df_history)
+
+    # Features to feed the model
     FEATURES = [
         "avg_minutes_last5",
         "is_home",
@@ -89,10 +78,18 @@ def predict_points(
         "opponent_avg_turnovers_last5",
     ]
 
+    # Ensure all feature columns are numeric for XGBoost
+    df_next_features[FEATURES] = (
+        df_next_features[FEATURES].apply(pd.to_numeric, errors="coerce").fillna(0)
+    )
+
+    # Load model
     model = load_latest_model(models_dir)
 
-    df_next["pred_points"] = model.predict(df_next[FEATURES])
+    # Predict points
+    df_next_features["pred_points"] = model.predict(df_next_features[FEATURES])
 
-    return df_next[
+    # Return only relevant columns
+    return df_next_features[
         ["player_id", "team_abbreviation", "matchup", "game_date", "pred_points"]
     ]
