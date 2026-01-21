@@ -24,7 +24,7 @@ def predict_points(
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
 ):
     """
-    Predict points for upcoming NBA games.
+    Predict points for upcoming NBA games. sds
     """
     # Load rolling CSV
     df_rolling = pd.read_csv(rolling_path)
