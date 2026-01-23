@@ -3,7 +3,7 @@ import pandas as pd
 import joblib
 from pathlib import Path
 from utils import compute_prediction_features
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ml folder
 BASE_DIR = Path(__file__).resolve().parent
@@ -47,7 +47,7 @@ def predict_points(
     df_schedule["game_date"] = pd.to_datetime(df_schedule["game_date"], dayfirst=True)
 
     # get games for today
-    today = pd.to_datetime(datetime.now().date())
+    today = pd.to_datetime((datetime.now() - timedelta(days=1)).date())
     df_next_games = df_schedule[df_schedule["game_date"] == today]
 
     # For each upcoming game, get all players from the two teams using rolling stats
