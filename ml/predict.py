@@ -20,6 +20,7 @@ def load_latest_model(models_dir: Path = MODELS_DIR):
 
 def predict_points(
     engine,
+    day: str = "today",  # "today", "tomorrow", "yesterday"
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
 ):
@@ -46,9 +47,26 @@ def predict_points(
     df_schedule = pd.read_sql("SELECT * FROM game_schedule", engine)
     df_schedule["game_date"] = pd.to_datetime(df_schedule["game_date"], dayfirst=True)
 
-    # get games for today
-    today = pd.to_datetime((datetime.now() - timedelta(days=1)).date())
-    df_next_games = df_schedule[df_schedule["game_date"] == today]
+    # get the target date (taking us datetime as the base because its nba)
+    base_date = datetime.now().date()
+
+    if day == "today":
+        target_date = base_date - timedelta(days=1)
+    elif day == "tomorrow":
+        target_date = base_date
+    elif day == "yesterday":
+        target_date = base_date - timedelta(days=2)
+    else:
+        raise ValueError("day must be one of: today, tomorrow, yesterday")
+
+    target_date = pd.to_datetime(target_date)
+
+    # get the games for that  date
+    df_next_games = df_schedule[df_schedule["game_date"] == target_date]
+
+    if df_next_games.empty:
+        print(f"No games found for NBA date: {target_date.date()}")
+        return pd.DataFrame()
 
     # For each upcoming game, get all players from the two teams using rolling stats
     rows = []
