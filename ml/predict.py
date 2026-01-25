@@ -2,7 +2,7 @@
 import pandas as pd
 import joblib
 from pathlib import Path
-from utils import compute_prediction_features
+from .utils import compute_prediction_features
 from datetime import datetime, timedelta
 
 # ml folder
