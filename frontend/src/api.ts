@@ -153,4 +153,3 @@ export function getPointsPredictions(
     PREDICTIONS_TTL
   );
 }
-

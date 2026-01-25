@@ -103,34 +103,62 @@ function normalizeMarkets(markets: BettingMarket[]): NormalizedPropRow[] {
 }
 
 function PlayerTable({ rows }: { rows: PlayerRow[] }) {
-  if (!rows.length) return <p className="muted">No data.</p>;
+  if (!rows.length) {
+    return (
+      <div className="text-center py-5">
+        <p className="text-secondary">No data available.</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="table-wrapper">
-      <table>
+    <div className="table-responsive">
+      <table className="table align-items-center mb-0">
         <thead>
           <tr>
-            <th>Player</th>
-            <th>Team</th>
-            <th>GP</th>
-            <th>MIN</th>
-            <th>PTS</th>
-            <th>REB</th>
-            <th>AST</th>
-            <th>Fantasy</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Team</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">GP</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">MIN</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">PTS</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">REB</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">AST</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Fantasy</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr key={row.PLAYER_ID}>
-              <td>{row.PLAYER_NAME}</td>
-              <td>{row.TEAM_ABBREVIATION ?? "-"}</td>
-              <td>{row.GP ?? "-"}</td>
-              <td>{formatNumber(row.MIN)}</td>
-              <td>{formatNumber(row.PTS)}</td>
-              <td>{formatNumber(row.REB)}</td>
-              <td>{formatNumber(row.AST)}</td>
-              <td>{formatNumber(row.NBA_FANTASY_PTS)}</td>
+              <td>
+                <div className="d-flex px-2 py-1">
+                  <div className="d-flex flex-column justify-content-center">
+                    <h6 className="mb-0 text-sm">{row.PLAYER_NAME}</h6>
+                  </div>
+                </div>
+              </td>
+              <td>
+                <span className="badge badge-sm bg-gradient-primary">
+                  {row.TEAM_ABBREVIATION ?? "-"}
+                </span>
+              </td>
+              <td className="align-middle text-center text-sm">
+                <span className="text-secondary font-weight-bold">{row.GP ?? "-"}</span>
+              </td>
+              <td className="align-middle text-center text-sm">
+                <span className="text-secondary font-weight-bold">{formatNumber(row.MIN)}</span>
+              </td>
+              <td className="align-middle text-center text-sm">
+                <span className="text-primary font-weight-bold">{formatNumber(row.PTS)}</span>
+              </td>
+              <td className="align-middle text-center text-sm">
+                <span className="text-secondary font-weight-bold">{formatNumber(row.REB)}</span>
+              </td>
+              <td className="align-middle text-center text-sm">
+                <span className="text-secondary font-weight-bold">{formatNumber(row.AST)}</span>
+              </td>
+              <td className="align-middle text-center text-sm">
+                <span className="text-success font-weight-bold">{formatNumber(row.NBA_FANTASY_PTS)}</span>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -140,7 +168,13 @@ function PlayerTable({ rows }: { rows: PlayerRow[] }) {
 }
 
 function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
-  if (!predictions.length) return <p className="muted">No predictions available.</p>;
+  if (!predictions.length) {
+    return (
+      <div className="text-center py-5">
+        <p className="text-secondary">No predictions available.</p>
+      </div>
+    );
+  }
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -152,29 +186,33 @@ function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
   };
 
   return (
-    <div className="predictions-grid">
+    <div className="row mt-4">
       {predictions.map((pred) => (
-        <div key={pred.player_id} className="prediction-card">
-          <div className="prediction-card-header">
-            <div className="prediction-player-info">
-              <h3 className="prediction-player-name">{pred.full_name}</h3>
-              <span className="prediction-team-badge">{pred.team_abbreviation}</span>
+        <div key={pred.player_id} className="col-lg-4 col-md-6 mb-4">
+          <div className="card card-body border-radius-xl shadow-lg">
+            <div className="d-flex justify-content-between align-items-start mb-3">
+              <div className="flex-grow-1">
+                <h5 className="mb-1">{pred.full_name}</h5>
+                <span className="badge badge-sm bg-gradient-primary mb-2">
+                  {pred.team_abbreviation}
+                </span>
+              </div>
+              <div className="text-end">
+                <h2 className="mb-0 text-gradient text-primary">
+                  {pred.pred_points.toFixed(1)}
+                </h2>
+                <span className="text-xs text-secondary">pts</span>
+              </div>
             </div>
-            <div className="prediction-points">
-              <span className="prediction-points-value">
-                {pred.pred_points.toFixed(1)}
-              </span>
-              <span className="prediction-points-label">pts</span>
-            </div>
-          </div>
-          <div className="prediction-card-body">
-            <div className="prediction-matchup">
-              <span className="prediction-matchup-icon">🏀</span>
-              <span>{pred.matchup}</span>
-            </div>
-            <div className="prediction-date">
-              <span className="prediction-date-icon">📅</span>
-              <span>{formatDate(pred.game_date)}</span>
+            <div className="border-top pt-3">
+              <div className="d-flex align-items-center mb-2">
+                <i className="material-symbols-rounded text-primary me-2">sports_basketball</i>
+                <span className="text-sm font-weight-bold">{pred.matchup}</span>
+              </div>
+              <div className="d-flex align-items-center">
+                <i className="material-symbols-rounded text-secondary me-2">calendar_today</i>
+                <span className="text-sm text-secondary">{formatDate(pred.game_date)}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -286,129 +324,246 @@ function App() {
     switch (activeTab) {
       case "top_scorers":
         return (
-          <section className="card">
-            <header className="card-header">
+          <div className="card card-body border-radius-xl shadow-lg">
+            <div className="d-flex justify-content-between align-items-center mb-4">
               <div>
-                <h2>Top Scorers</h2>
-                <p className="muted">Per-game points leaders.</p>
+                <h4 className="mb-1">Top Scorers</h4>
+                <p className="text-sm text-secondary mb-0">Per-game points leaders.</p>
               </div>
-              <button onClick={handleLoadTopScorers} disabled={topScorers.loading}>
-                {topScorers.loading ? "Loading..." : "Refresh data"}
+              <button
+                className="btn btn-sm bg-gradient-primary mb-0"
+                onClick={handleLoadTopScorers}
+                disabled={topScorers.loading}
+              >
+                {topScorers.loading ? (
+                  <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                ) : (
+                  <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>refresh</i>
+                )}
+                Refresh
               </button>
-            </header>
+            </div>
             {topScorers.error && (
-              <p className="error">Error: {topScorers.error}</p>
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {topScorers.error}
+              </div>
+            )}
+            {topScorers.loading && !topScorers.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading data...</p>
+              </div>
             )}
             {topScorers.data && <PlayerTable rows={topScorers.data} />}
-          </section>
+          </div>
         );
       case "top_assists":
         return (
-          <section className="card">
-            <header className="card-header">
+          <div className="card card-body border-radius-xl shadow-lg">
+            <div className="d-flex justify-content-between align-items-center mb-4">
               <div>
-                <h2>Top Playmakers</h2>
-                <p className="muted">Assist leaders.</p>
+                <h4 className="mb-1">Top Playmakers</h4>
+                <p className="text-sm text-secondary mb-0">Assist leaders.</p>
               </div>
-              <button onClick={handleLoadTopAssists} disabled={topAssists.loading}>
-                {topAssists.loading ? "Loading..." : "Refresh data"}
+              <button
+                className="btn btn-sm bg-gradient-primary mb-0"
+                onClick={handleLoadTopAssists}
+                disabled={topAssists.loading}
+              >
+                {topAssists.loading ? (
+                  <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                ) : (
+                  <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>refresh</i>
+                )}
+                Refresh
               </button>
-            </header>
+            </div>
             {topAssists.error && (
-              <p className="error">Error: {topAssists.error}</p>
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {topAssists.error}
+              </div>
+            )}
+            {topAssists.loading && !topAssists.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading data...</p>
+              </div>
             )}
             {topAssists.data && <PlayerTable rows={topAssists.data} />}
-          </section>
+          </div>
         );
       case "top_rebounders":
         return (
-          <section className="card">
-            <header className="card-header">
+          <div className="card card-body border-radius-xl shadow-lg">
+            <div className="d-flex justify-content-between align-items-center mb-4">
               <div>
-                <h2>Top Rebounders</h2>
-                <p className="muted">Rebound leaders.</p>
+                <h4 className="mb-1">Top Rebounders</h4>
+                <p className="text-sm text-secondary mb-0">Rebound leaders.</p>
               </div>
               <button
+                className="btn btn-sm bg-gradient-primary mb-0"
                 onClick={handleLoadTopRebounders}
                 disabled={topRebounders.loading}
               >
-                {topRebounders.loading ? "Loading..." : "Refresh data"}
+                {topRebounders.loading ? (
+                  <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                ) : (
+                  <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>refresh</i>
+                )}
+                Refresh
               </button>
-            </header>
+            </div>
             {topRebounders.error && (
-              <p className="error">Error: {topRebounders.error}</p>
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {topRebounders.error}
+              </div>
+            )}
+            {topRebounders.loading && !topRebounders.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading data...</p>
+              </div>
             )}
             {topRebounders.data && <PlayerTable rows={topRebounders.data} />}
-          </section>
+          </div>
         );
       case "guards":
         return (
-          <section className="card">
-            <header className="card-header">
+          <div className="card card-body border-radius-xl shadow-lg">
+            <div className="d-flex justify-content-between align-items-center mb-4">
               <div>
-                <h2>Guards Snapshot</h2>
-                <p className="muted">Guard scoring and fantasy output.</p>
+                <h4 className="mb-1">Guards Snapshot</h4>
+                <p className="text-sm text-secondary mb-0">Guard scoring and fantasy output.</p>
               </div>
-              <button onClick={handleLoadGuards} disabled={guards.loading}>
-                {guards.loading ? "Loading..." : "Refresh data"}
+              <button
+                className="btn btn-sm bg-gradient-primary mb-0"
+                onClick={handleLoadGuards}
+                disabled={guards.loading}
+              >
+                {guards.loading ? (
+                  <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                ) : (
+                  <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>refresh</i>
+                )}
+                Refresh
               </button>
-            </header>
-            {guards.error && <p className="error">Error: {guards.error}</p>}
+            </div>
+            {guards.error && (
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {guards.error}
+              </div>
+            )}
+            {guards.loading && !guards.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading data...</p>
+              </div>
+            )}
             {guards.data && <PlayerTable rows={guards.data} />}
-          </section>
+          </div>
         );
       case "recent":
         return (
-          <section className="card">
-            <header className="card-header">
+          <div className="card card-body border-radius-xl shadow-lg">
+            <div className="d-flex justify-content-between align-items-center mb-4">
               <div>
-                <h2>Recent Performers</h2>
-                <p className="muted">Recent form based on fantasy production.</p>
+                <h4 className="mb-1">Recent Performers</h4>
+                <p className="text-sm text-secondary mb-0">Recent form based on fantasy production.</p>
               </div>
-              <button onClick={handleLoadRecent} disabled={recent.loading}>
-                {recent.loading ? "Loading..." : "Refresh data"}
+              <button
+                className="btn btn-sm bg-gradient-primary mb-0"
+                onClick={handleLoadRecent}
+                disabled={recent.loading}
+              >
+                {recent.loading ? (
+                  <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                ) : (
+                  <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>refresh</i>
+                )}
+                Refresh
               </button>
-            </header>
-            {recent.error && <p className="error">Error: {recent.error}</p>}
+            </div>
+            {recent.error && (
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {recent.error}
+              </div>
+            )}
+            {recent.loading && !recent.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading data...</p>
+              </div>
+            )}
             {recent.data && <PlayerTable rows={recent.data} />}
-          </section>
+          </div>
         );
       case "props":
         return (
-          <section className="card">
-            <header className="card-header">
-              <div>
-                <h2>Player Props (by Game)</h2>
-                <p className="muted">
-                  Snapshot of available player prop markets for a game.
-                </p>
-              </div>
-            </header>
-            <div className="props-controls">
+          <div className="card card-body border-radius-xl shadow-lg">
+            <div className="mb-4">
+              <h4 className="mb-1">Player Props (by Game)</h4>
+              <p className="text-sm text-secondary mb-0">
+                Snapshot of available player prop markets for a game.
+              </p>
+            </div>
+            <div className="d-flex flex-wrap gap-2 mb-4">
               <input
                 type="number"
+                className="form-control"
                 placeholder="Game ID"
                 value={gameIdInput}
                 onChange={(e) => setGameIdInput(e.target.value)}
+                style={{ maxWidth: "200px" }}
               />
-              <button onClick={handleLoadProps} disabled={propsState.loading}>
-                {propsState.loading ? "Loading..." : "Refresh data"}
+              <button
+                className="btn btn-sm bg-gradient-primary mb-0"
+                onClick={handleLoadProps}
+                disabled={propsState.loading}
+              >
+                {propsState.loading ? (
+                  <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                ) : (
+                  <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>search</i>
+                )}
+                Load Props
               </button>
             </div>
             {propsState.error && (
-              <p className="error">Error: {propsState.error}</p>
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {propsState.error}
+              </div>
+            )}
+            {propsState.loading && !propsState.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading data...</p>
+              </div>
             )}
             {propsState.data && (
               <>
-                <div className="props-summary">
-                  <p>
-                    <strong>Game ID:</strong> {propsState.data.game_id}
-                  </p>
-                  <p>
-                    <strong>Markets:</strong> {propsState.data.count}
-                  </p>
+                <div className="d-flex gap-4 mb-4">
+                  <div>
+                    <span className="text-sm text-secondary">Game ID:</span>
+                    <span className="text-sm font-weight-bold ms-2">{propsState.data.game_id}</span>
+                  </div>
+                  <div>
+                    <span className="text-sm text-secondary">Markets:</span>
+                    <span className="text-sm font-weight-bold ms-2">{propsState.data.count}</span>
+                  </div>
                 </div>
-                <div className="table-wrapper" style={{ marginTop: "0.75rem" }}>
+                <div className="table-responsive">
                   {(() => {
                     const markets = propsState.data
                       .markets as BettingMarket[];
@@ -417,36 +572,46 @@ function App() {
                     // If we have fully populated outcomes, show the detailed table.
                     if (rows.length) {
                       return (
-                        <table>
+                        <table className="table align-items-center mb-0">
                           <thead>
                             <tr>
-                              <th>Player</th>
-                              <th>Team</th>
-                              <th>Bet</th>
-                              <th>Period</th>
-                              <th>Side</th>
-                              <th>Line</th>
-                              <th>Odds</th>
-                              <th>Book</th>
-                              <th>In-Play</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Team</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Bet</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Period</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Side</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Line</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Odds</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Book</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">In-Play</th>
                             </tr>
                           </thead>
                           <tbody>
                             {rows.map((row, index) => (
                               <tr key={`${row.marketId}-${index}`}>
-                                <td>{row.player}</td>
-                                <td>{row.team ?? "-"}</td>
-                                <td>{row.betType}</td>
-                                <td>{row.period}</td>
-                                <td>{row.outcomeType}</td>
+                                <td className="text-sm">{row.player}</td>
                                 <td>
+                                  <span className="badge badge-sm bg-gradient-secondary">
+                                    {row.team ?? "-"}
+                                  </span>
+                                </td>
+                                <td className="text-sm">{row.betType}</td>
+                                <td className="text-sm">{row.period}</td>
+                                <td className="text-sm">{row.outcomeType}</td>
+                                <td className="text-sm">
                                   {row.line !== null ? row.line.toFixed(1) : "-"}
                                 </td>
-                                <td>
+                                <td className="text-sm">
                                   {row.odds > 0 ? `+${row.odds}` : row.odds}
                                 </td>
-                                <td>{row.sportsbook}</td>
-                                <td>{row.inPlay ? "Yes" : "No"}</td>
+                                <td className="text-sm">{row.sportsbook}</td>
+                                <td>
+                                  {row.inPlay ? (
+                                    <span className="badge badge-sm bg-gradient-success">Yes</span>
+                                  ) : (
+                                    <span className="badge badge-sm bg-gradient-secondary">No</span>
+                                  )}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -456,30 +621,36 @@ function App() {
 
                     // Fallback: show market-level view when there are no outcomes yet.
                     if (!markets.length) {
-                      return <p className="muted">No markets available.</p>;
+                      return <p className="text-secondary text-center py-4">No markets available.</p>;
                     }
 
                     return (
-                      <table>
+                      <table className="table align-items-center mb-0">
                         <thead>
                           <tr>
-                            <th>Player</th>
-                            <th>Team</th>
-                            <th>Bet</th>
-                            <th>Period</th>
-                            <th>Any Bets</th>
-                            <th>Updated</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Team</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Bet</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Period</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Any Bets</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Updated</th>
                           </tr>
                         </thead>
                         <tbody>
                           {markets.map((m) => (
                             <tr key={m.BettingMarketID}>
-                              <td>{m.PlayerName ?? "-"}</td>
-                              <td>{m.TeamKey ?? "-"}</td>
-                              <td>{m.BettingBetType}</td>
-                              <td>{m.BettingPeriodType}</td>
-                              <td>{m.AnyBetsAvailable ? "Yes" : "No"}</td>
-                              <td>{m.Updated}</td>
+                              <td className="text-sm">{m.PlayerName ?? "-"}</td>
+                              <td className="text-sm">{m.TeamKey ?? "-"}</td>
+                              <td className="text-sm">{m.BettingBetType}</td>
+                              <td className="text-sm">{m.BettingPeriodType}</td>
+                              <td>
+                                {m.AnyBetsAvailable ? (
+                                  <span className="badge badge-sm bg-gradient-success">Yes</span>
+                                ) : (
+                                  <span className="badge badge-sm bg-gradient-secondary">No</span>
+                                )}
+                              </td>
+                              <td className="text-sm">{m.Updated}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -489,51 +660,62 @@ function App() {
                 </div>
               </>
             )}
-          </section>
+          </div>
         );
       case "predictions":
         return (
-          <section className="card">
-            <header className="card-header">
+          <div className="card card-body border-radius-xl shadow-lg">
+            <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap">
               <div>
-                <h2>Points Predictions</h2>
-                <p className="muted">ML-powered predictions for player points.</p>
+                <h4 className="mb-1">Points Predictions</h4>
+                <p className="text-sm text-secondary mb-0">ML-powered predictions for player points.</p>
               </div>
-              <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+              <div className="d-flex gap-2 align-items-center flex-wrap">
                 <select
+                  className="form-select form-select-sm"
                   value={predictionDay}
                   onChange={(e) =>
                     setPredictionDay(
                       e.target.value as "today" | "tomorrow" | "yesterday"
                     )
                   }
-                  style={{
-                    borderRadius: "999px",
-                    border: "1px solid #d1d5db",
-                    padding: "0.45rem 0.75rem",
-                    fontSize: "0.9rem",
-                    background: "#ffffff",
-                  }}
+                  style={{ maxWidth: "150px" }}
                 >
                   <option value="today">Today</option>
                   <option value="tomorrow">Tomorrow</option>
                   <option value="yesterday">Yesterday</option>
                 </select>
                 <button
+                  className="btn btn-sm bg-gradient-primary mb-0"
                   onClick={handleLoadPredictions}
                   disabled={predictionsState.loading}
                 >
-                  {predictionsState.loading ? "Loading..." : "Get Predictions"}
+                  {predictionsState.loading ? (
+                    <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                  ) : (
+                    <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>psychology</i>
+                  )}
+                  Get Predictions
                 </button>
               </div>
-            </header>
+            </div>
             {predictionsState.error && (
-              <p className="error">Error: {predictionsState.error}</p>
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {predictionsState.error}
+              </div>
+            )}
+            {predictionsState.loading && !predictionsState.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading predictions...</p>
+              </div>
             )}
             {predictionsState.data && (
               <PredictionsGrid predictions={predictionsState.data} />
             )}
-          </section>
+          </div>
         );
       default:
         return null;
@@ -541,71 +723,117 @@ function App() {
   };
 
   return (
-    <div className="app-root">
-      <header className="top-bar">
-        <div>
-          <h1>NBA Betting Dashboard</h1>
-          <p className="muted">
-            Clean, read-only view of NBA player performance and betting markets.
+    <div className="min-vh-100 bg-gray-100">
+      <div className="container py-5">
+        {/* Header */}
+        <div className="mb-5">
+          <h1 className="text-gradient text-primary mb-2">NBA Betting Dashboard</h1>
+          <p className="lead text-secondary">
+            Professional analytics and insights for NBA player performance and betting markets.
           </p>
         </div>
-      </header>
 
-      <nav className="tabs">
-        <button
-          className={activeTab === "top_scorers" ? "tab active" : "tab"}
-          onClick={() => setActiveTab("top_scorers")}
-        >
-          Top Scorers
-        </button>
-        <button
-          className={activeTab === "top_assists" ? "tab active" : "tab"}
-          onClick={() => setActiveTab("top_assists")}
-        >
-          Assists
-        </button>
-        <button
-          className={activeTab === "top_rebounders" ? "tab active" : "tab"}
-          onClick={() => setActiveTab("top_rebounders")}
-        >
-          Rebounds
-        </button>
-        <button
-          className={activeTab === "guards" ? "tab active" : "tab"}
-          onClick={() => setActiveTab("guards")}
-        >
-          Guards
-        </button>
-        <button
-          className={activeTab === "recent" ? "tab active" : "tab"}
-          onClick={() => setActiveTab("recent")}
-        >
-          Recent
-        </button>
-        <button
-          className={activeTab === "props" ? "tab active" : "tab"}
-          onClick={() => setActiveTab("props")}
-        >
-          Player Props
-        </button>
-        <button
-          className={activeTab === "predictions" ? "tab active" : "tab"}
-          onClick={() => setActiveTab("predictions")}
-        >
-          Predictions
-        </button>
-      </nav>
+        {/* Navigation Tabs */}
+        <div className="nav-wrapper position-relative mb-4">
+          <ul className="nav nav-pills nav-fill flex-row p-1" role="tablist">
+            <li className="nav-item">
+              <a
+                className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_scorers" ? "active" : ""}`}
+                onClick={() => setActiveTab("top_scorers")}
+                role="tab"
+                style={{ cursor: "pointer" }}
+              >
+                <i className="material-symbols-rounded me-2">emoji_events</i>
+                Top Scorers
+              </a>
+            </li>
+            <li className="nav-item">
+              <a
+                className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_assists" ? "active" : ""}`}
+                onClick={() => setActiveTab("top_assists")}
+                role="tab"
+                style={{ cursor: "pointer" }}
+              >
+                <i className="material-symbols-rounded me-2">pass</i>
+                Assists
+              </a>
+            </li>
+            <li className="nav-item">
+              <a
+                className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_rebounders" ? "active" : ""}`}
+                onClick={() => setActiveTab("top_rebounders")}
+                role="tab"
+                style={{ cursor: "pointer" }}
+              >
+                <i className="material-symbols-rounded me-2">sports_basketball</i>
+                Rebounds
+              </a>
+            </li>
+            <li className="nav-item">
+              <a
+                className={`nav-link mb-0 px-0 py-1 ${activeTab === "guards" ? "active" : ""}`}
+                onClick={() => setActiveTab("guards")}
+                role="tab"
+                style={{ cursor: "pointer" }}
+              >
+                <i className="material-symbols-rounded me-2">person</i>
+                Guards
+              </a>
+            </li>
+            <li className="nav-item">
+              <a
+                className={`nav-link mb-0 px-0 py-1 ${activeTab === "recent" ? "active" : ""}`}
+                onClick={() => setActiveTab("recent")}
+                role="tab"
+                style={{ cursor: "pointer" }}
+              >
+                <i className="material-symbols-rounded me-2">trending_up</i>
+                Recent
+              </a>
+            </li>
+            <li className="nav-item">
+              <a
+                className={`nav-link mb-0 px-0 py-1 ${activeTab === "props" ? "active" : ""}`}
+                onClick={() => setActiveTab("props")}
+                role="tab"
+                style={{ cursor: "pointer" }}
+              >
+                <i className="material-symbols-rounded me-2">casino</i>
+                Player Props
+              </a>
+            </li>
+            <li className="nav-item">
+              <a
+                className={`nav-link mb-0 px-0 py-1 ${activeTab === "predictions" ? "active" : ""}`}
+                onClick={() => setActiveTab("predictions")}
+                role="tab"
+                style={{ cursor: "pointer" }}
+              >
+                <i className="material-symbols-rounded me-2">psychology</i>
+                Predictions
+              </a>
+            </li>
+          </ul>
+        </div>
 
-      <main>{renderContent()}</main>
+        {/* Main Content */}
+        <main>{renderContent()}</main>
 
-      <footer className="footer">
-        <p className="muted">
-          Backend: FastAPI · Frontend: React + Vite.
-        </p>
-      </footer>
+        {/* Footer */}
+        <footer className="footer py-5 mt-5">
+          <div className="container">
+            <div className="row">
+              <div className="col-8 mx-auto text-center mt-1">
+                <p className="mb-0 text-secondary">
+                  Powered by FastAPI & React · Built with Material Kit
+                </p>
+              </div>
+            </div>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }
 
 export default App;
-
