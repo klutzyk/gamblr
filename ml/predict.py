@@ -107,7 +107,26 @@ def predict_points(
     # Predict points
     df_next_features["pred_points"] = model.predict(df_next_features[FEATURES])
 
+    # Attach player names
+    df_players = pd.read_sql(
+        "SELECT id AS player_id, full_name FROM players",
+        engine,
+    )
+
+    df_next_features = df_next_features.merge(
+        df_players,
+        on="player_id",
+        how="left",
+    )
+
     # Return only relevant columns
     return df_next_features[
-        ["player_id", "team_abbreviation", "matchup", "game_date", "pred_points"]
+        [
+            "player_id",
+            "full_name",
+            "team_abbreviation",
+            "matchup",
+            "game_date",
+            "pred_points",
+        ]
     ]
