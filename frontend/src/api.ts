@@ -17,6 +17,15 @@ export type PlayerPropsResponse = {
   count: number;
 };
 
+export type PointsPrediction = {
+  player_id: number;
+  full_name: string;
+  team_abbreviation: string;
+  matchup: string;
+  game_date: string;
+  pred_points: number;
+};
+
 const API_BASE =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -129,6 +138,19 @@ export function getPlayerPropsByGame(
     `/player-props/${gameId}`,
     undefined,
     PROPS_TTL
+  );
+}
+
+// Predictions endpoint (cached for 5 minutes since predictions may update)
+const PREDICTIONS_TTL = 5 * 60 * 1000;
+
+export function getPointsPredictions(
+  day: "today" | "tomorrow" | "yesterday" = "today"
+): Promise<PointsPrediction[]> {
+  return fetchWithCache<PointsPrediction[]>(
+    "/players/predictions/points",
+    { day },
+    PREDICTIONS_TTL
   );
 }
 

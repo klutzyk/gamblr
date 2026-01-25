@@ -7,8 +7,10 @@ import {
   getGuardStats,
   getRecentPerformers,
   getPlayerPropsByGame,
+  getPointsPredictions,
   type PlayerRow,
   type PlayerPropsResponse,
+  type PointsPrediction,
 } from "./api";
 
 // Types derived from the SportsData BettingMarket / BettingOutcome shape.
@@ -54,7 +56,8 @@ type TabKey =
   | "top_rebounders"
   | "guards"
   | "recent"
-  | "props";
+  | "props"
+  | "predictions";
 
 type ApiState<T> = {
   loading: boolean;
@@ -136,6 +139,50 @@ function PlayerTable({ rows }: { rows: PlayerRow[] }) {
   );
 }
 
+function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
+  if (!predictions.length) return <p className="muted">No predictions available.</p>;
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  };
+
+  return (
+    <div className="predictions-grid">
+      {predictions.map((pred) => (
+        <div key={pred.player_id} className="prediction-card">
+          <div className="prediction-card-header">
+            <div className="prediction-player-info">
+              <h3 className="prediction-player-name">{pred.full_name}</h3>
+              <span className="prediction-team-badge">{pred.team_abbreviation}</span>
+            </div>
+            <div className="prediction-points">
+              <span className="prediction-points-value">
+                {pred.pred_points.toFixed(1)}
+              </span>
+              <span className="prediction-points-label">pts</span>
+            </div>
+          </div>
+          <div className="prediction-card-body">
+            <div className="prediction-matchup">
+              <span className="prediction-matchup-icon">🏀</span>
+              <span>{pred.matchup}</span>
+            </div>
+            <div className="prediction-date">
+              <span className="prediction-date-icon">📅</span>
+              <span>{formatDate(pred.game_date)}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("top_scorers");
 
@@ -150,6 +197,11 @@ function App() {
   const [propsState, setPropsState] =
     useState<ApiState<PlayerPropsResponse>>(initialState);
   const [gameIdInput, setGameIdInput] = useState("");
+  const [predictionsState, setPredictionsState] =
+    useState<ApiState<PointsPrediction[]>>(initialState);
+  const [predictionDay, setPredictionDay] = useState<
+    "today" | "tomorrow" | "yesterday"
+  >("today");
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -221,6 +273,14 @@ function App() {
       60 * 60 * 1000 // 1 hour cooldown for props
     );
   };
+
+  const handleLoadPredictions = () =>
+    safeLoad(
+      predictionsState,
+      setPredictionsState,
+      () => getPointsPredictions(predictionDay),
+      5 * 60 * 1000 // 5 minute cooldown for predictions
+    );
 
   const renderContent = () => {
     switch (activeTab) {
@@ -431,6 +491,50 @@ function App() {
             )}
           </section>
         );
+      case "predictions":
+        return (
+          <section className="card">
+            <header className="card-header">
+              <div>
+                <h2>Points Predictions</h2>
+                <p className="muted">ML-powered predictions for player points.</p>
+              </div>
+              <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+                <select
+                  value={predictionDay}
+                  onChange={(e) =>
+                    setPredictionDay(
+                      e.target.value as "today" | "tomorrow" | "yesterday"
+                    )
+                  }
+                  style={{
+                    borderRadius: "999px",
+                    border: "1px solid #d1d5db",
+                    padding: "0.45rem 0.75rem",
+                    fontSize: "0.9rem",
+                    background: "#ffffff",
+                  }}
+                >
+                  <option value="today">Today</option>
+                  <option value="tomorrow">Tomorrow</option>
+                  <option value="yesterday">Yesterday</option>
+                </select>
+                <button
+                  onClick={handleLoadPredictions}
+                  disabled={predictionsState.loading}
+                >
+                  {predictionsState.loading ? "Loading..." : "Get Predictions"}
+                </button>
+              </div>
+            </header>
+            {predictionsState.error && (
+              <p className="error">Error: {predictionsState.error}</p>
+            )}
+            {predictionsState.data && (
+              <PredictionsGrid predictions={predictionsState.data} />
+            )}
+          </section>
+        );
       default:
         return null;
     }
@@ -483,6 +587,12 @@ function App() {
           onClick={() => setActiveTab("props")}
         >
           Player Props
+        </button>
+        <button
+          className={activeTab === "predictions" ? "tab active" : "tab"}
+          onClick={() => setActiveTab("predictions")}
+        >
+          Predictions
         </button>
       </nav>
 
