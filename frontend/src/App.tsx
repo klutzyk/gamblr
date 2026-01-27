@@ -845,6 +845,9 @@ function App() {
         const normalizedSearch = predictionSearch.trim().toLowerCase();
         const filteredPredictions = activePrediction.state.data
           ? activePrediction.state.data.filter((row) => {
+              if ((row.pred_value ?? 0) < 3) {
+                return false;
+              }
               if (
                 predictionTeam !== "all" &&
                 row.team_abbreviation !== predictionTeam
