@@ -287,6 +287,9 @@ function App() {
   const [predictionDay, setPredictionDay] = useState<
     "today" | "tomorrow" | "yesterday" | "auto"
   >("auto");
+  const [predictionSort, setPredictionSort] = useState<
+    "pred_value_desc" | "pred_value_asc" | "confidence_desc"
+  >("pred_value_desc");
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -775,6 +778,23 @@ function App() {
                   <option value="tomorrow">Tomorrow (ET)</option>
                   <option value="yesterday">Yesterday (ET)</option>
                 </select>
+                <select
+                  className="form-select form-select-sm"
+                  value={predictionSort}
+                  onChange={(e) =>
+                    setPredictionSort(
+                      e.target.value as
+                        | "pred_value_desc"
+                        | "pred_value_asc"
+                        | "confidence_desc"
+                    )
+                  }
+                  style={{ maxWidth: "170px" }}
+                >
+                  <option value="pred_value_desc">Value (High → Low)</option>
+                  <option value="pred_value_asc">Value (Low → High)</option>
+                  <option value="confidence_desc">Confidence (High → Low)</option>
+                </select>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
                   onClick={handleLoadPredictions}
@@ -813,7 +833,15 @@ function App() {
             )}
             {activePrediction.state.data && (
               <PredictionsGrid
-                predictions={activePrediction.state.data}
+                predictions={[...activePrediction.state.data].sort((a, b) => {
+                  if (predictionSort === "pred_value_asc") {
+                    return (a.pred_value ?? 0) - (b.pred_value ?? 0);
+                  }
+                  if (predictionSort === "confidence_desc") {
+                    return (b.confidence ?? 0) - (a.confidence ?? 0);
+                  }
+                  return (b.pred_value ?? 0) - (a.pred_value ?? 0);
+                })}
                 statLabel={activePrediction.label}
                 unitLabel={activePrediction.unit}
               />
