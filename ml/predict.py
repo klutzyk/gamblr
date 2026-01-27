@@ -80,7 +80,22 @@ def _predict_stat(
 
     df_next_players = pd.concat(rows, ignore_index=True)
 
-    df_next_features = compute_prediction_features(df_next_players, df_history)
+    df_team = None
+    try:
+        df_team = pd.read_sql(
+            """
+            SELECT game_id, team_abbreviation, game_date,
+                   points AS team_points, assists AS team_assists, rebounds AS team_rebounds
+            FROM team_game_stats
+            """,
+            engine,
+        )
+        if not df_team.empty:
+            df_team["game_date"] = pd.to_datetime(df_team["game_date"])
+    except Exception:
+        df_team = None
+
+    df_next_features = compute_prediction_features(df_next_players, df_history, df_team)
 
     df_next_features[features] = (
         df_next_features[features].apply(pd.to_numeric, errors="coerce").fillna(0)

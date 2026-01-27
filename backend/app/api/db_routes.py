@@ -5,9 +5,11 @@ from app.services.theodds_client import TheOddsClient
 from app.services.nba_client import NBAClient
 from app.db.store_odds import save_event_odds
 from app.db.store_player_game_stats import save_last_n_games
+from app.db.store_team_game_stats import save_team_game_stats
 from app.db.store_teams import load_teams
 from app.db.store_schedule import load_schedule
 from nba_api.stats.static import players
+from nba_api.stats.static import teams as nba_teams
 import logging
 import asyncio
 import httpx
@@ -142,6 +144,59 @@ async def store_last_n_games_all_players(
         "players_skipped": skipped,
         "players_failed": failed,
         "total_new_games_inserted": total_new_games,
+    }
+
+
+@router.post("/team-games/all")
+async def store_team_games_all_teams(
+    season: str = "2025-26",
+    db: AsyncSession = Depends(get_db),
+):
+    teams = nba_teams.get_teams()
+    inserted = 0
+    skipped = 0
+    failed = 0
+
+    for t in teams:
+        team_id = t["id"]
+        team_name = t["full_name"]
+
+        for attempt in range(3):
+            try:
+                async with throttler:
+                    df = nba_client.fetch_team_game_log(team_id, season)
+                break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for {team_name}: {e}")
+                await asyncio.sleep(0.5)
+        else:
+            logger.error(f"All retries failed for {team_name}")
+            failed += 1
+            continue
+
+        if df.empty:
+            skipped += 1
+            continue
+
+        try:
+            new_games = await save_team_game_stats(team_id=team_id, df=df, db=db)
+            if new_games > 0:
+                inserted += new_games
+            else:
+                skipped += 1
+        except Exception as e:
+            logger.warning(f"Failed saving team games for {team_name}: {e}")
+            failed += 1
+            continue
+
+        await asyncio.sleep(0.05)
+
+    return {
+        "status": "completed",
+        "teams_total": len(teams),
+        "rows_inserted": inserted,
+        "teams_skipped": skipped,
+        "teams_failed": failed,
     }
 
 

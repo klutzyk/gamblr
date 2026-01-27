@@ -38,7 +38,23 @@ def _train_model(
     df_raw["game_date"] = pd.to_datetime(df_raw["game_date"])
 
     df_features = add_player_rolling_features(df_raw)
-    team_game_features = build_team_game_features(df_features)
+
+    df_team = None
+    try:
+        df_team = pd.read_sql(
+            """
+            SELECT game_id, team_abbreviation, game_date,
+                   points AS team_points, assists AS team_assists, rebounds AS team_rebounds
+            FROM team_game_stats
+            """,
+            engine,
+        )
+        if not df_team.empty:
+            df_team["game_date"] = pd.to_datetime(df_team["game_date"])
+    except Exception:
+        df_team = None
+
+    team_game_features = build_team_game_features(df_features, df_team)
     df_features = df_features.merge(
         team_game_features, on=["game_id", "team_abbreviation", "game_date"], how="left"
     )

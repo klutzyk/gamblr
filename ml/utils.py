@@ -63,20 +63,25 @@ def parse_opponent_team(matchup: str) -> Optional[str]:
     return None
 
 
-def build_team_game_features(df_raw: pd.DataFrame) -> pd.DataFrame:
-    team_game = (
-        df_raw.groupby(["game_id", "team_abbreviation", "game_date"], as_index=False)[
-            ["points", "assists", "rebounds"]
-        ]
-        .sum()
-        .rename(
-            columns={
-                "points": "team_points",
-                "assists": "team_assists",
-                "rebounds": "team_rebounds",
-            }
+def build_team_game_features(
+    df_raw: pd.DataFrame, df_team: Optional[pd.DataFrame] = None
+) -> pd.DataFrame:
+    if df_team is not None and not df_team.empty:
+        team_game = df_team.copy()
+    else:
+        team_game = (
+            df_raw.groupby(
+                ["game_id", "team_abbreviation", "game_date"], as_index=False
+            )[["points", "assists", "rebounds"]]
+            .sum()
+            .rename(
+                columns={
+                    "points": "team_points",
+                    "assists": "team_assists",
+                    "rebounds": "team_rebounds",
+                }
+            )
         )
-    )
 
     opp = team_game.merge(
         team_game,
@@ -250,7 +255,9 @@ def compute_history_rolling_features(df_history: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_prediction_features(
-    df_next: pd.DataFrame, df_history: pd.DataFrame
+    df_next: pd.DataFrame,
+    df_history: pd.DataFrame,
+    df_team_game: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Build full feature set for upcoming games.
@@ -322,7 +329,7 @@ def compute_prediction_features(
     df_next["games_played_season"] = df_next["player_id"].map(grouped.size())
     df_next["is_home"] = df_next["matchup"].apply(lambda x: 1 if "@" not in x else 0)
 
-    team_game = build_team_game_features(df_history)
+    team_game = build_team_game_features(df_history, df_team_game)
     team_game = team_game.sort_values(["team_abbreviation", "game_date"])
 
     team_features = team_game.groupby("team_abbreviation").tail(1).set_index(

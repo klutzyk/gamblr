@@ -2,6 +2,7 @@ from nba_api.stats.endpoints import (
     leaguedashplayerstats,
     commonplayerinfo,
     playergamelog,
+    teamgamelog,
 )
 from app.services.cache import cached
 
@@ -43,6 +44,15 @@ class NBAClient:
     def fetch_player_game_log(self, player_id: int, season: str = "2025-26"):
         gamelog = playergamelog.PlayerGameLog(
             player_id=player_id,
+            season=season,
+            timeout=self.timeout,
+        )
+        return gamelog.get_data_frames()[0]
+
+    @cached(ttl_seconds=60 * 15)
+    def fetch_team_game_log(self, team_id: int, season: str = "2025-26"):
+        gamelog = teamgamelog.TeamGameLog(
+            team_id=team_id,
             season=season,
             timeout=self.timeout,
         )
