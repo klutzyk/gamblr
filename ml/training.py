@@ -92,7 +92,6 @@ def _train_model(
             lineup_team, on="team_abbreviation", how="left"
         )
 
-    df_features[features] = df_features[features].fillna(0)
     df_features = df_features.dropna(subset=[target])
 
     unique_dates = sorted(df_features["game_date"].dt.date.unique())
@@ -132,6 +131,10 @@ def _train_model(
         df_features["pred_minutes"] = minutes_model.predict(X_minutes)
     else:
         df_features["pred_minutes"] = df_features["avg_minutes_last5"]
+
+    for col in features:
+        if col not in df_features.columns:
+            df_features[col] = 0
 
     X = df_features[features].fillna(0)
     y = df_features[target]
