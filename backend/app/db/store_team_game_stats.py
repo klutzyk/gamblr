@@ -4,7 +4,12 @@ from datetime import datetime
 from app.models.team_game_stat import TeamGameStat
 
 
-async def save_team_game_stats(team_id: int, df, db: AsyncSession) -> int:
+async def save_team_game_stats(
+    team_id: int,
+    df,
+    db: AsyncSession,
+    team_abbr: str | None = None,
+) -> int:
     inserted = 0
 
     if df is None or df.empty:
@@ -33,10 +38,14 @@ async def save_team_game_stats(team_id: int, df, db: AsyncSession) -> int:
         if not game_date:
             continue
 
+        resolved_abbr = row.get("TEAM_ABBREVIATION") or team_abbr
+        if not resolved_abbr and row.get("MATCHUP"):
+            resolved_abbr = str(row.get("MATCHUP")).split(" ")[0]
+
         db.add(
             TeamGameStat(
                 team_id=team_id,
-                team_abbreviation=row.get("TEAM_ABBREVIATION"),
+                team_abbreviation=resolved_abbr,
                 game_id=str(game_id),
                 game_date=game_date,
                 matchup=row.get("MATCHUP"),

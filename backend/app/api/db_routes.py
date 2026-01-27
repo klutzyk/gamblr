@@ -160,6 +160,7 @@ async def store_team_games_all_teams(
     for t in teams:
         team_id = t["id"]
         team_name = t["full_name"]
+        team_abbr = t.get("abbreviation")
 
         for attempt in range(3):
             try:
@@ -179,7 +180,12 @@ async def store_team_games_all_teams(
             continue
 
         try:
-            new_games = await save_team_game_stats(team_id=team_id, df=df, db=db)
+            new_games = await save_team_game_stats(
+                team_id=team_id,
+                df=df,
+                db=db,
+                team_abbr=team_abbr,
+            )
             if new_games > 0:
                 inserted += new_games
             else:
