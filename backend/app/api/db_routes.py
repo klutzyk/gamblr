@@ -12,6 +12,8 @@ from app.db.store_schedule import load_schedule
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as nba_teams
 from sqlalchemy import select, func
+from datetime import datetime
+from app.models.player_game_stat import PlayerGameStat
 from app.models.team_game_stat import TeamGameStat
 import logging
 import asyncio
@@ -147,6 +149,97 @@ async def store_last_n_games_all_players(
         "players_skipped": skipped,
         "players_failed": failed,
         "total_new_games_inserted": total_new_games,
+    }
+
+
+@router.post("/last-n/update")
+async def update_last_n_games_since(
+    since: str,
+    season: str = "2025-26",
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Update last-n games only for players whose latest stored game is older than `since`.
+    `since` should be YYYY-MM-DD.
+    """
+    try:
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+
+    active_players = players.get_active_players()
+    saved = 0
+    skipped = 0
+    failed = 0
+    total_new_games = 0
+
+    for p in active_players:
+        player_id = p["id"]
+        player_name = p["full_name"]
+
+        result = await db.execute(
+            select(func.max(PlayerGameStat.game_date)).where(
+                PlayerGameStat.player_id == player_id
+            )
+        )
+        last_game_date = result.scalar_one_or_none()
+        if last_game_date and last_game_date >= since_date:
+            skipped += 1
+            continue
+
+        for attempt in range(3):
+            try:
+                async with throttler:
+                    df = nba_client.fetch_player_game_log(player_id, season)
+                break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for {player_name}: {e}")
+                await asyncio.sleep(0.5)
+        else:
+            logger.error(f"All retries failed for {player_name}")
+            failed += 1
+            continue
+
+        if df.empty:
+            skipped += 1
+            continue
+
+        team_abbr = (
+            df.iloc[0]["TEAM_ABBREVIATION"]
+            if "TEAM_ABBREVIATION" in df.columns
+            else None
+        )
+
+        try:
+            new_games = await save_last_n_games(
+                player_id=player_id,
+                player_name=player_name,
+                team_abbr=team_abbr,
+                df=df,
+                db=db,
+            )
+
+            if new_games > 0:
+                saved += 1
+                total_new_games += new_games
+            else:
+                skipped += 1
+
+        except Exception as e:
+            logger.warning(f"Failed saving {player_name}: {e}")
+            failed += 1
+            continue
+
+        await asyncio.sleep(0.05)
+
+    return {
+        "status": "completed",
+        "players_total": len(active_players),
+        "players_saved": saved,
+        "players_skipped": skipped,
+        "players_failed": failed,
+        "total_new_games_inserted": total_new_games,
+        "since": since,
     }
 
 
