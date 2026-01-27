@@ -17,6 +17,8 @@ from ml.training import (
     train_minutes_model,
 )
 from app.db.store_prediction_logs import update_prediction_actuals
+from ml.backtest import walk_forward_backtest
+from app.db.store_prediction_logs import log_predictions
 
 router = APIRouter()
 
@@ -74,6 +76,33 @@ async def evaluate_all():
         "assists": assists,
         "rebounds": rebounds,
         "minutes": minutes,
+    }
+
+
+@router.post("/backtest/walkforward/{stat_type}")
+async def backtest_walkforward(
+    stat_type: str,
+    min_games: int = 15,
+    max_dates: int | None = None,
+):
+    df_preds = await run_in_threadpool(
+        walk_forward_backtest, sync_engine, stat_type, min_games, max_dates
+    )
+    if df_preds.empty:
+        return {"status": "no_data"}
+
+    await run_in_threadpool(
+        log_predictions,
+        sync_engine,
+        df_preds,
+        stat_type,
+        "walkforward",
+        False,
+    )
+    await run_in_threadpool(update_prediction_actuals, sync_engine, stat_type)
+    return {
+        "status": "logged",
+        "rows": int(len(df_preds)),
     }
 
 

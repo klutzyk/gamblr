@@ -3,7 +3,13 @@ from sqlalchemy import text
 import pandas as pd
 
 
-def log_predictions(engine, df_preds, stat_type: str, model_version: str | None):
+def log_predictions(
+    engine,
+    df_preds,
+    stat_type: str,
+    model_version: str | None,
+    include_actuals: bool = False,
+):
     if df_preds is None or df_preds.empty:
         return 0
 
@@ -25,13 +31,42 @@ def log_predictions(engine, df_preds, stat_type: str, model_version: str | None)
         "confidence",
         "model_version",
     ]
+    for col in cols:
+        if col not in df.columns:
+            df[col] = None
+    if include_actuals:
+        cols += ["actual_value", "abs_error"]
 
     with engine.begin() as conn:
         inserted = 0
         for _, row in df[cols].iterrows():
             # upsert by unique constraint (player_id, stat_type, game_id)
-            conn.execute(
-                text(
+            if include_actuals:
+                stmt = text(
+                    """
+                    INSERT INTO prediction_logs
+                    (player_id, stat_type, game_id, game_date, prediction_date,
+                     pred_value, pred_p10, pred_p50, pred_p90, confidence, model_version,
+                     actual_value, abs_error)
+                    VALUES
+                    (:player_id, :stat_type, :game_id, :game_date, :prediction_date,
+                     :pred_value, :pred_p10, :pred_p50, :pred_p90, :confidence, :model_version,
+                     :actual_value, :abs_error)
+                    ON CONFLICT (player_id, stat_type, game_id)
+                    DO UPDATE SET
+                      pred_value = EXCLUDED.pred_value,
+                      pred_p10 = EXCLUDED.pred_p10,
+                      pred_p50 = EXCLUDED.pred_p50,
+                      pred_p90 = EXCLUDED.pred_p90,
+                      confidence = EXCLUDED.confidence,
+                      model_version = EXCLUDED.model_version,
+                      prediction_date = EXCLUDED.prediction_date,
+                      actual_value = EXCLUDED.actual_value,
+                      abs_error = EXCLUDED.abs_error
+                    """
+                )
+            else:
+                stmt = text(
                     """
                     INSERT INTO prediction_logs
                     (player_id, stat_type, game_id, game_date, prediction_date,
@@ -49,7 +84,10 @@ def log_predictions(engine, df_preds, stat_type: str, model_version: str | None)
                       model_version = EXCLUDED.model_version,
                       prediction_date = EXCLUDED.prediction_date
                     """
-                ),
+                )
+
+            conn.execute(
+                stmt,
                 {
                     "player_id": int(row["player_id"]),
                     "stat_type": row["stat_type"],
@@ -62,6 +100,8 @@ def log_predictions(engine, df_preds, stat_type: str, model_version: str | None)
                     "pred_p90": row.get("pred_p90"),
                     "confidence": row.get("confidence"),
                     "model_version": row.get("model_version"),
+                    "actual_value": row.get("actual_value"),
+                    "abs_error": row.get("abs_error"),
                 },
             )
             inserted += 1
