@@ -2,7 +2,7 @@
 import pandas as pd
 import joblib
 from pathlib import Path
-from .utils import compute_prediction_features
+from .utils import POINTS_FEATURES, compute_prediction_features
 from datetime import datetime, timedelta
 
 # ml folder
@@ -83,29 +83,18 @@ def predict_points(
     df_next_features = compute_prediction_features(df_next_players, df_history)
 
     # Features to feed the model
-    FEATURES = [
-        "avg_minutes_last5",
-        "is_home",
-        "avg_points_last5",
-        "avg_assists_last5",
-        "avg_rebounds_last5",
-        "teammate_avg_assists_last5",
-        "opponent_avg_points_allowed_last5",
-        "opponent_avg_blocks_last5",
-        "opponent_avg_steals_last5",
-        "opponent_avg_turnovers_last5",
-    ]
-
     # Ensure all feature columns are numeric for XGBoost
-    df_next_features[FEATURES] = (
-        df_next_features[FEATURES].apply(pd.to_numeric, errors="coerce").fillna(0)
+    df_next_features[POINTS_FEATURES] = (
+        df_next_features[POINTS_FEATURES]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
     )
 
     # Load model
     model = load_latest_model(models_dir)
 
     # Predict points
-    df_next_features["pred_points"] = model.predict(df_next_features[FEATURES])
+    df_next_features["pred_points"] = model.predict(df_next_features[POINTS_FEATURES])
 
     # Attach player names
     df_players = pd.read_sql(
