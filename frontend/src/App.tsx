@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 import logo from "./assets/logo.jpg";
 import {
@@ -290,6 +290,8 @@ function App() {
   const [predictionSort, setPredictionSort] = useState<
     "pred_value_desc" | "pred_value_asc" | "confidence_desc"
   >("pred_value_desc");
+  const [predictionSearch, setPredictionSearch] = useState("");
+  const [predictionTeam, setPredictionTeam] = useState("all");
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -297,10 +299,11 @@ function App() {
     state: ApiState<T>,
     setState: (s: ApiState<T>) => void,
     loader: () => Promise<T>,
-    minIntervalMs: number
+    minIntervalMs: number,
+    force = false
   ) {
     const now = Date.now();
-    if (state.lastFetched && now - state.lastFetched < minIntervalMs) {
+    if (!force && state.lastFetched && now - state.lastFetched < minIntervalMs) {
       // Within cooldown window, just reuse data and skip a new API call
       return;
     }
@@ -386,15 +389,20 @@ function App() {
     },
   };
 
-  const handleLoadPredictions = () => {
+  const handleLoadPredictions = (force = false) => {
     const config = predictionConfig[predictionStat];
     return safeLoad(
       config.state,
       config.setState,
       config.loader,
-      5 * 60 * 1000
+      5 * 60 * 1000,
+      force
     );
   };
+
+  useEffect(() => {
+    handleLoadPredictions(true);
+  }, [predictionDay, predictionStat]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -740,6 +748,36 @@ function App() {
         );
       case "predictions":
         const activePrediction = predictionConfig[predictionStat];
+        const teamOptions = activePrediction.state.data
+          ? Array.from(
+              new Set(
+                activePrediction.state.data
+                  .map((row) => row.team_abbreviation)
+                  .filter((team): team is string => Boolean(team))
+              )
+            ).sort()
+          : [];
+        const normalizedSearch = predictionSearch.trim().toLowerCase();
+        const filteredPredictions = activePrediction.state.data
+          ? activePrediction.state.data.filter((row) => {
+              if (
+                predictionTeam !== "all" &&
+                row.team_abbreviation !== predictionTeam
+              ) {
+                return false;
+              }
+              if (!normalizedSearch) {
+                return true;
+              }
+              const nameMatch = row.full_name
+                ?.toLowerCase()
+                .includes(normalizedSearch);
+              const teamMatch = row.team_abbreviation
+                ?.toLowerCase()
+                .includes(normalizedSearch);
+              return Boolean(nameMatch || teamMatch);
+            })
+          : [];
         return (
           <div className="card card-body border-radius-xl shadow-lg prediction-focus">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
@@ -768,7 +806,7 @@ function App() {
                   value={predictionDay}
                   onChange={(e) =>
                     setPredictionDay(
-                      e.target.value as "today" | "tomorrow" | "yesterday"
+                      e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
                     )
                   }
                   style={{ maxWidth: "150px" }}
@@ -818,6 +856,38 @@ function App() {
                 </button>
               </div>
             </div>
+            <div className="prediction-filters mb-4">
+              <div className="prediction-search">
+                <i className="material-symbols-rounded">search</i>
+                <input
+                  type="search"
+                  placeholder="Search player or team"
+                  value={predictionSearch}
+                  onChange={(e) => setPredictionSearch(e.target.value)}
+                />
+              </div>
+              <div className="prediction-team-chips">
+                <button
+                  className={`team-chip ${
+                    predictionTeam === "all" ? "active" : ""
+                  }`}
+                  onClick={() => setPredictionTeam("all")}
+                >
+                  All teams
+                </button>
+                {teamOptions.map((team) => (
+                  <button
+                    key={team}
+                    className={`team-chip ${
+                      predictionTeam === team ? "active" : ""
+                    }`}
+                    onClick={() => setPredictionTeam(team)}
+                  >
+                    {team}
+                  </button>
+                ))}
+              </div>
+            </div>
             {activePrediction.state.error && (
               <div className="alert alert-danger text-white" role="alert">
                 <strong>Error:</strong> {activePrediction.state.error}
@@ -833,7 +903,7 @@ function App() {
             )}
             {activePrediction.state.data && (
               <PredictionsGrid
-                predictions={[...activePrediction.state.data].sort((a, b) => {
+                predictions={[...filteredPredictions].sort((a, b) => {
                   if (predictionSort === "pred_value_asc") {
                     return (a.pred_value ?? 0) - (b.pred_value ?? 0);
                   }

@@ -319,6 +319,68 @@
   opacity: 0.8;
 }
 
+.prediction-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.prediction-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(12, 20, 18, 0.08);
+}
+
+.prediction-search input {
+  border: none;
+  outline: none;
+  width: 100%;
+  font-size: 0.9rem;
+  background: transparent;
+  color: var(--brand-dark);
+}
+
+.prediction-search .material-symbols-rounded {
+  font-size: 1.1rem;
+  color: var(--brand-muted);
+}
+
+.prediction-team-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.team-chip {
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: rgba(16, 29, 26, 0.04);
+  color: var(--brand-dark);
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
+}
+
+.team-chip:hover {
+  border-color: var(--brand-accent);
+  background: rgba(106, 223, 79, 0.12);
+}
+
+.team-chip.active {
+  background: var(--brand-accent);
+  color: var(--brand-dark);
+  border-color: var(--brand-accent);
+  box-shadow: 0 8px 18px rgba(106, 223, 79, 0.25);
+}
+
 @media (max-width: 991px) {
   .hero-header {
     padding-bottom: 3rem;
