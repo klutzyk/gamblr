@@ -226,6 +226,41 @@
   gap: 1.5rem;
 }
 
+.prediction-focus {
+  background: linear-gradient(135deg, #ffffff 0%, #f7f4eb 100%);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.stat-toggle {
+  display: inline-flex;
+  gap: 0.35rem;
+  padding: 0.35rem;
+  background: rgba(16, 29, 26, 0.06);
+  border-radius: 999px;
+}
+
+.stat-chip {
+  border: none;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--brand-dark);
+  transition: all 0.2s ease;
+}
+
+.stat-chip.active {
+  background: var(--brand-accent);
+  color: var(--brand-dark);
+  box-shadow: 0 8px 20px rgba(106, 223, 79, 0.3);
+}
+
+.prediction-stat-tag .badge {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 @media (max-width: 991px) {
   .hero-header {
     padding-bottom: 3rem;
