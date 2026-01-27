@@ -212,9 +212,19 @@ def _predict_stat(
         engine,
     )
 
+    df_teams = pd.read_sql(
+        "SELECT id AS team_id, abbreviation AS team_abbreviation FROM teams",
+        engine,
+    )
+
     df_next_features = df_next_features.merge(
         df_players,
         on="player_id",
+        how="left",
+    )
+    df_next_features = df_next_features.merge(
+        df_teams,
+        on="team_abbreviation",
         how="left",
     )
 
@@ -222,6 +232,7 @@ def _predict_stat(
         [
             "player_id",
             "full_name",
+            "team_id",
             "team_abbreviation",
             "matchup",
             "game_date",

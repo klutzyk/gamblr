@@ -178,6 +178,38 @@ function PredictionsGrid({
   statLabel: string;
   unitLabel: string;
 }) {
+  const TEAM_ID_BY_ABBR: Record<string, number> = {
+    ATL: 1610612737,
+    BOS: 1610612738,
+    BKN: 1610612751,
+    CHA: 1610612766,
+    CHI: 1610612741,
+    CLE: 1610612739,
+    DAL: 1610612742,
+    DEN: 1610612743,
+    DET: 1610612765,
+    GSW: 1610612744,
+    HOU: 1610612745,
+    IND: 1610612754,
+    LAC: 1610612746,
+    LAL: 1610612747,
+    MEM: 1610612763,
+    MIA: 1610612748,
+    MIL: 1610612749,
+    MIN: 1610612750,
+    NOP: 1610612740,
+    NYK: 1610612752,
+    OKC: 1610612760,
+    ORL: 1610612753,
+    PHI: 1610612755,
+    PHX: 1610612756,
+    POR: 1610612757,
+    SAC: 1610612758,
+    SAS: 1610612759,
+    TOR: 1610612761,
+    UTA: 1610612762,
+    WAS: 1610612764,
+  };
   if (!predictions.length) {
     return (
       <div className="text-center py-5">
@@ -195,6 +227,26 @@ function PredictionsGrid({
     });
   };
 
+  const getInitials = (name: string) =>
+    name
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase();
+
+  const getHeadshotUrl = (
+    playerId: number,
+    teamId?: number,
+    teamAbbr?: string
+  ) => {
+    const resolvedTeamId =
+      teamId ?? (teamAbbr ? TEAM_ID_BY_ABBR[teamAbbr] : undefined);
+    if (!resolvedTeamId) return "";
+    return `https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/${resolvedTeamId}/2025/260x190/${playerId}.png`;
+  };
+
   return (
     <div className="predictions-grid mt-4">
       {predictions.map((pred) => {
@@ -206,14 +258,37 @@ function PredictionsGrid({
           else if (confidenceValue >= 55) confidenceClass = "confidence-mid";
           else confidenceClass = "confidence-low";
         }
+        const headshotUrl = getHeadshotUrl(
+          pred.player_id,
+          pred.team_id,
+          pred.team_abbreviation
+        );
         return (
         <div key={pred.player_id} className="card card-body border-radius-xl shadow-lg">
           <div className="d-flex justify-content-between align-items-start mb-3">
             <div className="flex-grow-1">
-              <h5 className="mb-1">{pred.full_name}</h5>
-              <span className="badge badge-sm bg-gradient-primary mb-2">
-                {pred.team_abbreviation}
-              </span>
+              <div className="d-flex align-items-center gap-2 mb-1">
+                <div className="player-avatar">
+                  {headshotUrl && (
+                    <img
+                      src={headshotUrl}
+                      alt={pred.full_name}
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                  )}
+                  <span className="avatar-fallback">
+                    {getInitials(pred.full_name)}
+                  </span>
+                </div>
+                <div>
+                  <h5 className="mb-1">{pred.full_name}</h5>
+                  <span className="badge badge-sm bg-gradient-primary mb-2">
+                    {pred.team_abbreviation}
+                  </span>
+                </div>
+              </div>
             </div>
             <div className="text-end">
               <h2 className="mb-0 text-gradient text-primary">

@@ -20,6 +20,7 @@ export type PlayerPropsResponse = {
 export type PredictionRow = {
   player_id: number;
   full_name: string;
+  team_id?: number;
   team_abbreviation: string;
   matchup: string;
   game_date: string;
