@@ -197,7 +197,16 @@ function PredictionsGrid({
 
   return (
     <div className="predictions-grid mt-4">
-      {predictions.map((pred) => (
+      {predictions.map((pred) => {
+        const confidenceValue =
+          typeof pred.confidence === "number" ? pred.confidence : null;
+        let confidenceClass = "confidence-neutral";
+        if (confidenceValue !== null) {
+          if (confidenceValue >= 75) confidenceClass = "confidence-high";
+          else if (confidenceValue >= 55) confidenceClass = "confidence-mid";
+          else confidenceClass = "confidence-low";
+        }
+        return (
         <div key={pred.player_id} className="card card-body border-radius-xl shadow-lg">
           <div className="d-flex justify-content-between align-items-start mb-3">
             <div className="flex-grow-1">
@@ -227,7 +236,7 @@ function PredictionsGrid({
             </div>
             {typeof pred.pred_p10 === "number" &&
               typeof pred.pred_p90 === "number" && (
-                <div className="prediction-band mt-3">
+                <div className={`prediction-band mt-3 ${confidenceClass}`}>
                   <div className="prediction-band-row">
                     <span className="label">Confidence band</span>
                     <span className="value">
@@ -242,7 +251,7 @@ function PredictionsGrid({
                   )}
                   <div className="prediction-range">
                     <div
-                      className="prediction-range-fill"
+                      className={`prediction-range-fill ${confidenceClass}`}
                       style={{
                         left: "10%",
                         right: "10%",
@@ -256,7 +265,8 @@ function PredictionsGrid({
               )}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

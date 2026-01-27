@@ -299,6 +299,33 @@
   background: var(--brand-accent);
 }
 
+.prediction-band.confidence-high {
+  background: rgba(106, 223, 79, 0.16);
+  border: 1px solid rgba(106, 223, 79, 0.35);
+}
+
+.prediction-band.confidence-mid {
+  background: rgba(243, 227, 161, 0.2);
+  border: 1px solid rgba(243, 227, 161, 0.5);
+}
+
+.prediction-band.confidence-low {
+  background: rgba(255, 167, 38, 0.18);
+  border: 1px solid rgba(255, 167, 38, 0.45);
+}
+
+.prediction-range-fill.confidence-high {
+  background: #6adf4f;
+}
+
+.prediction-range-fill.confidence-mid {
+  background: #f3e3a1;
+}
+
+.prediction-range-fill.confidence-low {
+  background: #ffa726;
+}
+
 .prediction-marker {
   position: absolute;
   top: -16px;
