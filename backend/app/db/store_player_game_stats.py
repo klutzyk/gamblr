@@ -32,23 +32,41 @@ async def save_last_n_games(
         lambda d: datetime.strptime(d, "%b %d, %Y").date()
     )
 
-    # Keep only missing games
-    existing_ids_result = await db.execute(
-        select(PlayerGameStat.game_id).where(PlayerGameStat.player_id == player_id)
+    # Load existing games for update checks
+    existing_rows_result = await db.execute(
+        select(PlayerGameStat).where(PlayerGameStat.player_id == player_id)
     )
-    existing_game_ids = {row[0] for row in existing_ids_result.all()}
-    if existing_game_ids:
-        df = df[~df["Game_ID"].isin(existing_game_ids)]
+    existing_rows = {row[0].game_id: row[0] for row in existing_rows_result.all()}
 
     if df.empty:
-        return 0  # nothing new to insert
+        return 0  # nothing to process
 
-    # Insert only new games
+    inserted = 0
+    updated = 0
+    # Insert new games or update missing shooting fields
     for _, row in df.iterrows():
+        game_id = row["Game_ID"]
+        existing = existing_rows.get(game_id)
+        if existing:
+            has_updates = False
+            for col, key in [
+                ("fgm", "FGM"),
+                ("fga", "FGA"),
+                ("fg3m", "FG3M"),
+                ("fg3a", "FG3A"),
+            ]:
+                value = row.get(key)
+                if value is not None and getattr(existing, col) is None:
+                    setattr(existing, col, value)
+                    has_updates = True
+            if has_updates:
+                updated += 1
+            continue
+
         db.add(
             PlayerGameStat(
                 player_id=player_id,
-                game_id=row["Game_ID"],
+                game_id=game_id,
                 game_date=row["GAME_DATE"],
                 matchup=row["MATCHUP"],
                 minutes=row["MIN"],
@@ -58,8 +76,13 @@ async def save_last_n_games(
                 steals=row["STL"],
                 blocks=row["BLK"],
                 turnovers=row["TOV"],
+                fgm=row.get("FGM"),
+                fga=row.get("FGA"),
+                fg3m=row.get("FG3M"),
+                fg3a=row.get("FG3A"),
             )
         )
+        inserted += 1
 
     await db.commit()
 
@@ -80,4 +103,4 @@ async def save_last_n_games(
 
         await db.commit()
 
-    return len(df)
+    return inserted + updated

@@ -16,6 +16,7 @@ from .utils import (
     ASSISTS_FEATURES,
     REBOUNDS_FEATURES,
     MINUTES_FEATURES,
+    THREEPT_FEATURES,
     add_player_rolling_features,
     build_team_game_features,
     build_lineup_team_features,
@@ -35,7 +36,8 @@ def _train_model(
 ) -> dict:
     query = """
     SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
-           pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers
+           pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
+           pg.fgm, pg.fga, pg.fg3m, pg.fg3a
     FROM player_game_stats pg
     JOIN players p ON pg.player_id = p.id
     """
@@ -275,6 +277,18 @@ def train_minutes_model(engine=None, database_url: Optional[str] = None) -> dict
         "xgb_minutes_model_",
         use_minutes_model=False,
         use_ensemble=False,
+    )
+
+
+def train_threept_model(engine=None, database_url: Optional[str] = None) -> dict:
+    engine = _get_engine(engine, database_url)
+    return _train_model(
+        engine,
+        "fg3m",
+        THREEPT_FEATURES,
+        "xgb_threes_ensemble_",
+        use_minutes_model=True,
+        use_ensemble=True,
     )
 
 

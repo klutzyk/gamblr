@@ -16,6 +16,7 @@ from .utils import (
     POINTS_FEATURES,
     ASSISTS_FEATURES,
     REBOUNDS_FEATURES,
+    THREEPT_FEATURES,
     add_player_rolling_features,
     build_team_game_features,
     build_lineup_team_features,
@@ -30,7 +31,9 @@ def _get_features_for_stat(stat_type: str):
         return ASSISTS_FEATURES
     if stat_type == "rebounds":
         return REBOUNDS_FEATURES
-    raise ValueError("stat_type must be one of: points, assists, rebounds")
+    if stat_type == "threept":
+        return THREEPT_FEATURES
+    raise ValueError("stat_type must be one of: points, assists, rebounds, threept")
 
 
 def walk_forward_backtest(
@@ -40,11 +43,13 @@ def walk_forward_backtest(
     max_dates: int | None = None,
 ):
     features = _get_features_for_stat(stat_type)
+    target_col = "fg3m" if stat_type == "threept" else stat_type
 
     df_raw = pd.read_sql(
         """
         SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
-               pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers
+               pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
+               pg.fgm, pg.fga, pg.fg3m, pg.fg3a
         FROM player_game_stats pg
         JOIN players p ON pg.player_id = p.id
         """,
@@ -102,7 +107,7 @@ def walk_forward_backtest(
         if col not in df_features.columns:
             df_features[col] = 0
 
-    df_features = df_features.dropna(subset=[stat_type, "game_date"])
+    df_features = df_features.dropna(subset=[target_col, "game_date"])
     df_features = df_features.sort_values("game_date")
 
     df_features = df_features[df_features["games_played_season"] >= min_games]
@@ -124,7 +129,7 @@ def walk_forward_backtest(
             continue
 
         X_train = df_features.loc[train_mask, features].fillna(0)
-        y_train = df_features.loc[train_mask, stat_type]
+        y_train = df_features.loc[train_mask, target_col]
 
         X_test = df_features.loc[test_mask, features].fillna(0)
 
@@ -142,7 +147,7 @@ def walk_forward_backtest(
         model.fit(X_train, y_train, verbose=False)
 
         pred = model.predict(X_test)
-        actual = df_features.loc[test_mask, stat_type].to_numpy()
+        actual = df_features.loc[test_mask, target_col].to_numpy()
         abs_error = np.abs(actual - pred)
         over_mask = pred > actual
         weighted_error = abs_error.copy()

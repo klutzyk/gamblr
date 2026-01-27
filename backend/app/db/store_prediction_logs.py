@@ -120,6 +120,7 @@ def update_prediction_actuals(engine, stat_type: str):
         "assists": "assists",
         "rebounds": "rebounds",
         "minutes": "minutes",
+        "threept": "fg3m",
     }.get(stat_type)
 
     if not stat_column:

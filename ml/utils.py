@@ -91,6 +91,26 @@ MINUTES_FEATURES = [
     "team_lineup_reb_pct",
 ]
 
+THREEPT_FEATURES = [
+    "avg_minutes_last5",
+    "avg_minutes_last10",
+    "pred_minutes",
+    "avg_fg3m_last5",
+    "avg_fg3m_last10",
+    "avg_fg3a_last5",
+    "avg_fg3a_last10",
+    "fg3_pct_last10",
+    "avg_points_last5",
+    "days_since_last_game",
+    "is_back_to_back",
+    "is_home",
+    "games_played_season",
+    "team_points_avg_last5",
+    "team_points_avg_last10",
+    "team_lineup_pace",
+    "team_lineup_net_rating",
+]
+
 
 def parse_opponent_team(matchup: str) -> Optional[str]:
     if " vs. " in matchup:
@@ -200,6 +220,9 @@ def build_team_game_features(
 
 def add_player_rolling_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
+    for col in ["fgm", "fga", "fg3m", "fg3a"]:
+        if col not in df.columns:
+            df[col] = 0
     df = df.sort_values(["player_id", "game_date"])
 
     grouped = df.groupby("player_id")
@@ -243,6 +266,22 @@ def add_player_rolling_features(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     df["avg_turnovers_last5"] = grouped["turnovers"].transform(
         lambda x: x.rolling(5, min_periods=1).mean().shift(1)
+    )
+
+    df["avg_fg3m_last5"] = grouped["fg3m"].transform(
+        lambda x: x.rolling(5, min_periods=1).mean().shift(1)
+    )
+    df["avg_fg3m_last10"] = grouped["fg3m"].transform(
+        lambda x: x.rolling(10, min_periods=1).mean().shift(1)
+    )
+    df["avg_fg3a_last5"] = grouped["fg3a"].transform(
+        lambda x: x.rolling(5, min_periods=1).mean().shift(1)
+    )
+    df["avg_fg3a_last10"] = grouped["fg3a"].transform(
+        lambda x: x.rolling(10, min_periods=1).mean().shift(1)
+    )
+    df["fg3_pct_last10"] = df["avg_fg3m_last10"] / df["avg_fg3a_last10"].replace(
+        0, pd.NA
     )
 
     df["avg_points_per_min_last5"] = df["avg_points_last5"] / df[
@@ -308,6 +347,9 @@ def compute_history_rolling_features(df_history: pd.DataFrame) -> pd.DataFrame:
     """
 
     df = df_history.copy()
+    for col in ["fgm", "fga", "fg3m", "fg3a"]:
+        if col not in df.columns:
+            df[col] = 0
     df = df.sort_values(["player_id", "game_date"])
 
     df["avg_points_last5"] = df.groupby("player_id")["points"].transform(
@@ -326,6 +368,18 @@ def compute_history_rolling_features(df_history: pd.DataFrame) -> pd.DataFrame:
         lambda x: x.rolling(5, min_periods=1).mean()
     )
 
+    df["avg_fg3m_last5"] = df.groupby("player_id")["fg3m"].transform(
+        lambda x: x.rolling(5, min_periods=1).mean()
+    )
+
+    df["avg_fg3a_last5"] = df.groupby("player_id")["fg3a"].transform(
+        lambda x: x.rolling(5, min_periods=1).mean()
+    )
+
+    df["fg3_pct_last5"] = df["avg_fg3m_last5"] / df["avg_fg3a_last5"].replace(
+        0, pd.NA
+    )
+
     return df
 
 
@@ -342,6 +396,9 @@ def compute_prediction_features(
 
     df_next = df_next.copy()
     df_history = df_history.copy()
+    for col in ["fgm", "fga", "fg3m", "fg3a"]:
+        if col not in df_history.columns:
+            df_history[col] = 0
     df_history = df_history.sort_values(["player_id", "game_date"])
 
     grouped = df_history.groupby("player_id")
@@ -386,6 +443,22 @@ def compute_prediction_features(
     df_next["avg_turnovers_last5"] = df_next["player_id"].map(
         grouped["turnovers"].apply(lambda x: x.tail(5).mean())
     )
+
+    df_next["avg_fg3m_last5"] = df_next["player_id"].map(
+        grouped["fg3m"].apply(lambda x: x.tail(5).mean())
+    )
+    df_next["avg_fg3m_last10"] = df_next["player_id"].map(
+        grouped["fg3m"].apply(lambda x: x.tail(10).mean())
+    )
+    df_next["avg_fg3a_last5"] = df_next["player_id"].map(
+        grouped["fg3a"].apply(lambda x: x.tail(5).mean())
+    )
+    df_next["avg_fg3a_last10"] = df_next["player_id"].map(
+        grouped["fg3a"].apply(lambda x: x.tail(10).mean())
+    )
+    df_next["fg3_pct_last10"] = df_next["avg_fg3m_last10"] / df_next[
+        "avg_fg3a_last10"
+    ].replace(0, pd.NA)
 
     df_next["avg_points_per_min_last5"] = df_next["avg_points_last5"] / df_next[
         "avg_minutes_last5"

@@ -18,6 +18,7 @@ from .utils import (
     ASSISTS_FEATURES,
     REBOUNDS_FEATURES,
     MINUTES_FEATURES,
+    THREEPT_FEATURES,
     compute_prediction_features,
 )
 from datetime import datetime, timedelta
@@ -59,7 +60,8 @@ def _predict_stat(
     df_history = pd.read_sql(
         """
         SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
-               pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers
+               pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
+               pg.fgm, pg.fga, pg.fg3m, pg.fg3a
         FROM player_game_stats pg
         JOIN players p ON pg.player_id = p.id
     """,
@@ -297,6 +299,22 @@ def predict_rebounds(
         rolling_path,
     )
 
+
+def predict_threept(
+    engine,
+    day: str = "today",
+    models_dir: Path = MODELS_DIR,
+    rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+):
+    return _predict_stat(
+        engine,
+        day,
+        THREEPT_FEATURES,
+        "xgb_threes_ensemble_",
+        "threept",
+        models_dir,
+        rolling_path,
+    )
 
 def _load_recent_player_errors(
     engine, stat_type: str, player_ids: list, n: int = CONFIDENCE_WINDOW

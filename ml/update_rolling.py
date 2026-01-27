@@ -30,7 +30,8 @@ def update_rolling_stats(engine):
     # Fetch new games
     query = f"""
     SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
-           pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers
+           pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
+           pg.fgm, pg.fga, pg.fg3m, pg.fg3a
     FROM player_game_stats pg
     JOIN players p ON pg.player_id = p.id
     WHERE pg.game_date > '{last_date}'

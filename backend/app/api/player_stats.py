@@ -11,7 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from ml.predict import predict_points, predict_assists, predict_rebounds
+from ml.predict import predict_points, predict_assists, predict_rebounds, predict_threept
 from app.db.store_prediction_logs import log_predictions
 
 router = APIRouter()
@@ -161,6 +161,32 @@ async def predict_rebounds_api(
         sync_engine,
         df_preds,
         "rebounds",
+        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
+    )
+
+    return df_to_dict(df_preds)
+
+
+@router.get("/predictions/threept")
+async def predict_threept_api(
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+):
+    """
+    Predict player made 3-pointers for NBA games.
+    day = today | tomorrow | yesterday
+    """
+    df_preds = await run_in_threadpool(predict_threept, sync_engine, day)
+
+    if df_preds.empty:
+        return {"message": f"No games found for {day}", "data": []}
+
+    df_preds = df_preds.sort_values("pred_value", ascending=False)
+
+    await run_in_threadpool(
+        log_predictions,
+        sync_engine,
+        df_preds,
+        "threept",
         df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
     )
 
