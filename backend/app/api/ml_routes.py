@@ -10,7 +10,12 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from ml.training import train_points_model, train_assists_model, train_rebounds_model
+from ml.training import (
+    train_points_model,
+    train_assists_model,
+    train_rebounds_model,
+    train_minutes_model,
+)
 
 router = APIRouter()
 
@@ -32,4 +37,10 @@ async def train_assists():
 @router.post("/train/rebounds")
 async def train_rebounds():
     results = await run_in_threadpool(train_rebounds_model, sync_engine)
+    return {"status": "trained", **results}
+
+
+@router.post("/train/minutes")
+async def train_minutes():
+    results = await run_in_threadpool(train_minutes_model, sync_engine)
     return {"status": "trained", **results}

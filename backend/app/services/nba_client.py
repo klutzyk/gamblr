@@ -3,6 +3,7 @@ from nba_api.stats.endpoints import (
     commonplayerinfo,
     playergamelog,
     teamgamelog,
+    leaguedashlineups,
 )
 from app.services.cache import cached
 
@@ -57,3 +58,18 @@ class NBAClient:
             timeout=self.timeout,
         )
         return gamelog.get_data_frames()[0]
+
+    @cached(ttl_seconds=60 * 60)
+    def fetch_team_lineups(
+        self,
+        team_id: int,
+        season: str = "2025-26",
+        group_quantity: int = 5,
+    ):
+        lineups = leaguedashlineups.LeagueDashLineups(
+            team_id_nullable=team_id,
+            season=season,
+            group_quantity=group_quantity,
+            timeout=self.timeout,
+        )
+        return lineups.get_data_frames()[0]

@@ -16,6 +16,7 @@ from app.models import (
     game_schedule,
     team,
     team_game_stat,
+    lineup_stat,
 )
 
 
