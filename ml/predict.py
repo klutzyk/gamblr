@@ -2,7 +2,12 @@
 import pandas as pd
 import joblib
 from pathlib import Path
-from .utils import POINTS_FEATURES, compute_prediction_features
+from .utils import (
+    POINTS_FEATURES,
+    ASSISTS_FEATURES,
+    REBOUNDS_FEATURES,
+    compute_prediction_features,
+)
 from datetime import datetime, timedelta
 
 # ml folder
@@ -11,22 +16,21 @@ DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
 
 
-def load_latest_model(models_dir: Path = MODELS_DIR):
-    models = sorted(models_dir.glob("xgb_points_model_*.pkl"))
+def load_latest_model(models_dir: Path, prefix: str):
+    models = sorted(models_dir.glob(f"{prefix}*.pkl"))
     if not models:
-        raise FileNotFoundError("No trained models found.")
+        raise FileNotFoundError(f"No trained models found for prefix {prefix}.")
     return joblib.load(models[-1])
 
 
-def predict_points(
+def _predict_stat(
     engine,
-    day: str = "today",  # "today", "tomorrow", "yesterday"
+    day: str,
+    features: list,
+    model_prefix: str,
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
 ):
-    """
-    Predict points for upcoming NBA games. sds
-    """
     # Load rolling CSV
     df_rolling = pd.read_csv(rolling_path)
     df_rolling["game_date"] = pd.to_datetime(df_rolling["game_date"], dayfirst=True)
@@ -47,7 +51,6 @@ def predict_points(
     df_schedule = pd.read_sql("SELECT * FROM game_schedule", engine)
     df_schedule["game_date"] = pd.to_datetime(df_schedule["game_date"], dayfirst=True)
 
-    # get the target date (taking us datetime as the base because its nba)
     base_date = datetime.now().date()
 
     if day == "today":
@@ -61,41 +64,32 @@ def predict_points(
 
     target_date = pd.to_datetime(target_date)
 
-    # get the games for that  date
     df_next_games = df_schedule[df_schedule["game_date"] == target_date]
 
     if df_next_games.empty:
         print(f"No games found for NBA date: {target_date.date()}")
         return pd.DataFrame()
 
-    # For each upcoming game, get all players from the two teams using rolling stats
     rows = []
     for _, game in df_next_games.iterrows():
         for team_abbr in [game["home_team_abbr"], game["away_team_abbr"]]:
             players = df_rolling[df_rolling["team_abbreviation"] == team_abbr].copy()
-            players["matchup"] = game["matchup"]  # schedule matchup
+            players["matchup"] = game["matchup"]
             players["game_date"] = game["game_date"]
             rows.append(players)
 
     df_next_players = pd.concat(rows, ignore_index=True)
 
-    # Now compute features using historical stats
     df_next_features = compute_prediction_features(df_next_players, df_history)
 
-    # Ensure all feature columns are numeric for XGBoost
-    df_next_features[POINTS_FEATURES] = (
-        df_next_features[POINTS_FEATURES]
-        .apply(pd.to_numeric, errors="coerce")
-        .fillna(0)
+    df_next_features[features] = (
+        df_next_features[features].apply(pd.to_numeric, errors="coerce").fillna(0)
     )
 
-    # Load model
-    model = load_latest_model(models_dir)
+    model = load_latest_model(models_dir, model_prefix)
 
-    # Predict points
-    df_next_features["pred_points"] = model.predict(df_next_features[POINTS_FEATURES])
+    df_next_features["pred_value"] = model.predict(df_next_features[features])
 
-    # Attach player names
     df_players = pd.read_sql(
         "SELECT id AS player_id, full_name FROM players",
         engine,
@@ -107,7 +101,6 @@ def predict_points(
         how="left",
     )
 
-    # Return only relevant columns
     return df_next_features[
         [
             "player_id",
@@ -115,6 +108,54 @@ def predict_points(
             "team_abbreviation",
             "matchup",
             "game_date",
-            "pred_points",
+            "pred_value",
         ]
     ]
+
+
+def predict_points(
+    engine,
+    day: str = "today",
+    models_dir: Path = MODELS_DIR,
+    rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+):
+    return _predict_stat(
+        engine,
+        day,
+        POINTS_FEATURES,
+        "xgb_points_model_",
+        models_dir,
+        rolling_path,
+    )
+
+
+def predict_assists(
+    engine,
+    day: str = "today",
+    models_dir: Path = MODELS_DIR,
+    rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+):
+    return _predict_stat(
+        engine,
+        day,
+        ASSISTS_FEATURES,
+        "xgb_assists_model_",
+        models_dir,
+        rolling_path,
+    )
+
+
+def predict_rebounds(
+    engine,
+    day: str = "today",
+    models_dir: Path = MODELS_DIR,
+    rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+):
+    return _predict_stat(
+        engine,
+        day,
+        REBOUNDS_FEATURES,
+        "xgb_rebounds_model_",
+        models_dir,
+        rolling_path,
+    )
