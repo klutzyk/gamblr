@@ -1,14 +1,22 @@
 /* Base styles to complement Material Kit */
 
 :root {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
-    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
+  font-family: 'Space Grotesk', "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   line-height: 1.6;
   font-weight: 400;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  --brand-dark: #0b1916;
+  --brand-dark-2: #0f211d;
+  --brand-ink: #101d1a;
+  --brand-accent: #6adf4f;
+  --brand-accent-soft: #9be87a;
+  --brand-cream: #f3ecd6;
+  --brand-surface: #ffffff;
+  --brand-border: #e2e6e1;
+  --brand-muted: #8f9a94;
+  --brand-shadow: rgba(16, 25, 22, 0.08);
 }
 
 *,
@@ -22,7 +30,8 @@
 body {
   margin: 0;
   padding: 0;
-  background-color: #f5f7fa;
+  background-color: #f6f5f1;
+  color: var(--brand-ink);
 }
 
 a {
@@ -31,6 +40,7 @@ a {
 }
 
 h1, h2, h3, h4, h5, h6 {
+  font-family: 'Space Grotesk', "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-weight: 600;
   line-height: 1.2;
 }
@@ -40,13 +50,13 @@ p {
 }
 
 /* Ensure Material Kit components work properly */
-button {
+button:not(.btn) {
   border: none;
   background: none;
   cursor: pointer;
 }
 
-button:focus {
+button:not(.btn):focus {
   outline: none;
 }
 

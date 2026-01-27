@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./App.css";
+import logo from "./assets/logo.jpg";
 import {
   getTopScorers,
   getTopAssists,
@@ -32,8 +33,8 @@ type BettingMarket = {
   BettingPeriodType: string; // e.g. "Full Game"
   PlayerName?: string | null;
   TeamKey?: string | null;
-   AnyBetsAvailable?: boolean;
-   Updated?: string;
+  AnyBetsAvailable?: boolean;
+  Updated?: string;
   BettingOutcomes?: BettingOutcome[];
 };
 
@@ -166,7 +167,6 @@ function PlayerTable({ rows }: { rows: PlayerRow[] }) {
     </div>
   );
 }
-
 function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
   if (!predictions.length) {
     return (
@@ -186,33 +186,31 @@ function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
   };
 
   return (
-    <div className="row mt-4">
+    <div className="predictions-grid mt-4">
       {predictions.map((pred) => (
-        <div key={pred.player_id} className="col-lg-4 col-md-6 mb-4">
-          <div className="card card-body border-radius-xl shadow-lg">
-            <div className="d-flex justify-content-between align-items-start mb-3">
-              <div className="flex-grow-1">
-                <h5 className="mb-1">{pred.full_name}</h5>
-                <span className="badge badge-sm bg-gradient-primary mb-2">
-                  {pred.team_abbreviation}
-                </span>
-              </div>
-              <div className="text-end">
-                <h2 className="mb-0 text-gradient text-primary">
-                  {pred.pred_points.toFixed(1)}
-                </h2>
-                <span className="text-xs text-secondary">pts</span>
-              </div>
+        <div key={pred.player_id} className="card card-body border-radius-xl shadow-lg">
+          <div className="d-flex justify-content-between align-items-start mb-3">
+            <div className="flex-grow-1">
+              <h5 className="mb-1">{pred.full_name}</h5>
+              <span className="badge badge-sm bg-gradient-primary mb-2">
+                {pred.team_abbreviation}
+              </span>
             </div>
-            <div className="border-top pt-3">
-              <div className="d-flex align-items-center mb-2">
-                <i className="material-symbols-rounded text-primary me-2">sports_basketball</i>
-                <span className="text-sm font-weight-bold">{pred.matchup}</span>
-              </div>
-              <div className="d-flex align-items-center">
-                <i className="material-symbols-rounded text-secondary me-2">calendar_today</i>
-                <span className="text-sm text-secondary">{formatDate(pred.game_date)}</span>
-              </div>
+            <div className="text-end">
+              <h2 className="mb-0 text-gradient text-primary">
+                {pred.pred_points.toFixed(1)}
+              </h2>
+              <span className="text-xs text-secondary">pts</span>
+            </div>
+          </div>
+          <div className="border-top pt-3">
+            <div className="d-flex align-items-center mb-2">
+              <i className="material-symbols-rounded text-primary me-2">sports_basketball</i>
+              <span className="text-sm font-weight-bold">{pred.matchup}</span>
+            </div>
+            <div className="d-flex align-items-center">
+              <i className="material-symbols-rounded text-secondary me-2">calendar_today</i>
+              <span className="text-sm text-secondary">{formatDate(pred.game_date)}</span>
             </div>
           </div>
         </div>
@@ -722,116 +720,304 @@ function App() {
     }
   };
 
+  const jumpToTab = (tab: TabKey, loader?: () => void) => {
+    setActiveTab(tab);
+    if (loader) loader();
+  };
+
   return (
-    <div className="min-vh-100 bg-gray-100">
-      <div className="container py-5">
-        {/* Header */}
-        <div className="mb-5">
-          <h1 className="text-gradient text-primary mb-2">NBA Betting Dashboard</h1>
-          <p className="lead text-secondary">
-            Professional analytics and insights for NBA player performance and betting markets.
-          </p>
-        </div>
+    <div className="app-shell min-vh-100">
+      <header className="hero-header position-relative overflow-hidden">
+        <div className="hero-glow"></div>
+        <div className="container position-relative">
+          <nav className="navbar navbar-expand-lg navbar-dark py-4 px-0">
+            <div className="d-flex align-items-center gap-2">
+              <img src={logo} alt="Gamblr logo" className="brand-logo me-2" />
+              <div>
+                <h6 className="mb-0 text-white">Gamblr</h6>
+                <span className="text-xs text-white opacity-8">NBA Analytics Hub</span>
+              </div>
+            </div>
+            <div className="ms-auto d-flex align-items-center gap-2">
+              <span className="badge badge-sm bg-gradient-success">Live</span>
+              <button
+                className="btn btn-sm bg-white text-dark mb-0"
+                onClick={() => jumpToTab("predictions", handleLoadPredictions)}
+              >
+                <i className="material-symbols-rounded me-2">auto_graph</i>
+                Run Models
+              </button>
+            </div>
+          </nav>
 
-        {/* Navigation Tabs */}
-        <div className="nav-wrapper position-relative mb-4">
-          <ul className="nav nav-pills nav-fill flex-row p-1" role="tablist">
-            <li className="nav-item">
-              <a
-                className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_scorers" ? "active" : ""}`}
-                onClick={() => setActiveTab("top_scorers")}
-                role="tab"
-                style={{ cursor: "pointer" }}
-              >
-                <i className="material-symbols-rounded me-2">emoji_events</i>
-                Top Scorers
-              </a>
-            </li>
-            <li className="nav-item">
-              <a
-                className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_assists" ? "active" : ""}`}
-                onClick={() => setActiveTab("top_assists")}
-                role="tab"
-                style={{ cursor: "pointer" }}
-              >
-                <i className="material-symbols-rounded me-2">pass</i>
-                Assists
-              </a>
-            </li>
-            <li className="nav-item">
-              <a
-                className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_rebounders" ? "active" : ""}`}
-                onClick={() => setActiveTab("top_rebounders")}
-                role="tab"
-                style={{ cursor: "pointer" }}
-              >
-                <i className="material-symbols-rounded me-2">sports_basketball</i>
-                Rebounds
-              </a>
-            </li>
-            <li className="nav-item">
-              <a
-                className={`nav-link mb-0 px-0 py-1 ${activeTab === "guards" ? "active" : ""}`}
-                onClick={() => setActiveTab("guards")}
-                role="tab"
-                style={{ cursor: "pointer" }}
-              >
-                <i className="material-symbols-rounded me-2">person</i>
-                Guards
-              </a>
-            </li>
-            <li className="nav-item">
-              <a
-                className={`nav-link mb-0 px-0 py-1 ${activeTab === "recent" ? "active" : ""}`}
-                onClick={() => setActiveTab("recent")}
-                role="tab"
-                style={{ cursor: "pointer" }}
-              >
-                <i className="material-symbols-rounded me-2">trending_up</i>
-                Recent
-              </a>
-            </li>
-            <li className="nav-item">
-              <a
-                className={`nav-link mb-0 px-0 py-1 ${activeTab === "props" ? "active" : ""}`}
-                onClick={() => setActiveTab("props")}
-                role="tab"
-                style={{ cursor: "pointer" }}
-              >
-                <i className="material-symbols-rounded me-2">casino</i>
-                Player Props
-              </a>
-            </li>
-            <li className="nav-item">
-              <a
-                className={`nav-link mb-0 px-0 py-1 ${activeTab === "predictions" ? "active" : ""}`}
-                onClick={() => setActiveTab("predictions")}
-                role="tab"
-                style={{ cursor: "pointer" }}
-              >
-                <i className="material-symbols-rounded me-2">psychology</i>
-                Predictions
-              </a>
-            </li>
-          </ul>
-        </div>
-
-        {/* Main Content */}
-        <main>{renderContent()}</main>
-
-        {/* Footer */}
-        <footer className="footer py-5 mt-5">
-          <div className="container">
-            <div className="row">
-              <div className="col-8 mx-auto text-center mt-1">
-                <p className="mb-0 text-secondary">
-                  Powered by FastAPI & React · Built with Material Kit
+          <div className="row align-items-center">
+            <div className="col-lg-7">
+              <div className="hero-copy">
+                <h1 className="display-4 text-white mb-3">
+                  NBA Betting Intelligence, visualized.
+                </h1>
+                <p className="lead text-white opacity-8 mb-4">
+                  Track top performers, uncover market edges, and see machine-learning
+                  projections in a single command center.
                 </p>
+                <div className="d-flex flex-wrap gap-2">
+                  <button
+                    className="btn bg-gradient-primary mb-0"
+                    onClick={() => jumpToTab("top_scorers", handleLoadTopScorers)}
+                  >
+                    <i className="material-symbols-rounded me-2">emoji_events</i>
+                    Explore Leaders
+                  </button>
+                  <button
+                    className="btn btn-outline-white mb-0"
+                    onClick={() => jumpToTab("props")}
+                  >
+                    <i className="material-symbols-rounded me-2">casino</i>
+                    View Props
+                  </button>
+                </div>
+                <div className="hero-tags mt-4">
+                  <span className="badge badge-sm bg-white text-dark">Realtime APIs</span>
+                  <span className="badge badge-sm bg-white text-dark">Sharp UI</span>
+                  <span className="badge badge-sm bg-white text-dark">Pro insights</span>
+                </div>
+              </div>
+            </div>
+            <div className="col-lg-5 mt-4 mt-lg-0">
+              <div className="hero-cards">
+                <div className="card glass-card mb-3">
+                  <div className="card-body">
+                    <div className="d-flex align-items-center justify-content-between mb-3">
+                      <div>
+                        <p className="text-sm text-white opacity-8 mb-1">Confidence Index</p>
+                        <h3 className="text-white mb-0">89.4</h3>
+                      </div>
+                      <span className="icon-shape icon-lg bg-gradient-primary shadow-primary text-white">
+                        <i className="material-symbols-rounded">psychology</i>
+                      </span>
+                    </div>
+                    <p className="text-sm text-white opacity-7 mb-0">
+                      Model outputs tuned to recent form and matchup context.
+                    </p>
+                  </div>
+                </div>
+                <div className="card glass-card">
+                  <div className="card-body">
+                    <div className="d-flex align-items-center justify-content-between mb-3">
+                      <div>
+                        <p className="text-sm text-white opacity-8 mb-1">Markets Tracked</p>
+                        <h3 className="text-white mb-0">1,240+</h3>
+                      </div>
+                      <span className="icon-shape icon-lg bg-gradient-info shadow-info text-white">
+                        <i className="material-symbols-rounded">track_changes</i>
+                      </span>
+                    </div>
+                    <p className="text-sm text-white opacity-7 mb-0">
+                      Player props and game totals refreshed on demand.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </footer>
-      </div>
+        </div>
+      </header>
+
+      <section className="dashboard-section py-5">
+        <div className="container">
+          <div className="row g-4">
+            <div className="col-lg-8">
+              <div className="section-card mb-4">
+                <div className="section-header d-flex flex-wrap align-items-center justify-content-between">
+                  <div>
+                    <h3 className="mb-1">Performance Hub</h3>
+                    <p className="text-sm text-secondary mb-0">
+                      Filtered views of league leaders and market context.
+                    </p>
+                  </div>
+                  <div className="d-flex flex-wrap gap-2">
+                    <button
+                      className="btn btn-sm bg-gradient-primary mb-0"
+                      onClick={() => jumpToTab("recent", handleLoadRecent)}
+                    >
+                      <i className="material-symbols-rounded me-2">trending_up</i>
+                      Recent Form
+                    </button>
+                    <button
+                      className="btn btn-sm btn-outline-dark mb-0"
+                      onClick={() => jumpToTab("guards", handleLoadGuards)}
+                    >
+                      <i className="material-symbols-rounded me-2">person</i>
+                      Guard Lens
+                    </button>
+                  </div>
+                </div>
+                <div className="nav-wrapper position-relative mt-4">
+                  <ul className="nav nav-pills nav-fill flex-row p-1 tab-pills" role="tablist">
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_scorers" ? "active" : ""}`}
+                        onClick={() => setActiveTab("top_scorers")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">emoji_events</i>
+                        Top Scorers
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_assists" ? "active" : ""}`}
+                        onClick={() => setActiveTab("top_assists")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">handshake</i>
+                        Assists
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_rebounders" ? "active" : ""}`}
+                        onClick={() => setActiveTab("top_rebounders")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">sports_basketball</i>
+                        Rebounds
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "guards" ? "active" : ""}`}
+                        onClick={() => setActiveTab("guards")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">person</i>
+                        Guards
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "recent" ? "active" : ""}`}
+                        onClick={() => setActiveTab("recent")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">trending_up</i>
+                        Recent
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "props" ? "active" : ""}`}
+                        onClick={() => setActiveTab("props")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">casino</i>
+                        Player Props
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "predictions" ? "active" : ""}`}
+                        onClick={() => setActiveTab("predictions")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">psychology</i>
+                        Predictions
+                      </a>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <main>{renderContent()}</main>
+            </div>
+            <div className="col-lg-4">
+              <div className="card shadow-lg border-radius-xl mb-4">
+                <div className="card-header pb-0">
+                  <h5 className="mb-0">Quick Actions</h5>
+                </div>
+                <div className="card-body">
+                  <button
+                    className="btn btn-sm bg-gradient-primary w-100 mb-3"
+                    onClick={handleLoadTopScorers}
+                  >
+                    Refresh Top Scorers
+                  </button>
+                  <button
+                    className="btn btn-sm btn-outline-dark w-100 mb-3"
+                    onClick={handleLoadProps}
+                  >
+                    Fetch Player Props
+                  </button>
+                  <button
+                    className="btn btn-sm btn-outline-dark w-100"
+                    onClick={handleLoadPredictions}
+                  >
+                    Update Predictions
+                  </button>
+                </div>
+              </div>
+              <div className="card shadow-lg border-radius-xl mb-4">
+                <div className="card-header pb-0">
+                  <h5 className="mb-0">Model Notes</h5>
+                </div>
+                <div className="card-body">
+                  <p className="text-sm text-secondary mb-3">
+                    Blend matchup pace, recent usage rate, and on/off defensive data.
+                  </p>
+                  <div className="d-flex align-items-center justify-content-between">
+                    <span className="text-sm text-secondary">Next refresh</span>
+                    <span className="badge badge-sm bg-gradient-info">Every 5 min</span>
+                  </div>
+                </div>
+              </div>
+              <div className="card shadow-lg border-radius-xl">
+                <div className="card-header pb-0">
+                  <h5 className="mb-0">Focus Checklist</h5>
+                </div>
+                <div className="card-body">
+                  <div className="d-flex align-items-start mb-3">
+                    <span className="icon-shape icon-xs bg-gradient-success me-2">
+                      <i className="material-symbols-rounded">check</i>
+                    </span>
+                    <p className="text-sm text-secondary mb-0">Compare pace vs. opponent.</p>
+                  </div>
+                  <div className="d-flex align-items-start mb-3">
+                    <span className="icon-shape icon-xs bg-gradient-warning me-2">
+                      <i className="material-symbols-rounded">schedule</i>
+                    </span>
+                    <p className="text-sm text-secondary mb-0">Monitor minutes volatility.</p>
+                  </div>
+                  <div className="d-flex align-items-start">
+                    <span className="icon-shape icon-xs bg-gradient-info me-2">
+                      <i className="material-symbols-rounded">insights</i>
+                    </span>
+                    <p className="text-sm text-secondary mb-0">Track books with best lines.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <footer className="footer py-5 mt-5">
+            <div className="container">
+              <div className="row">
+                <div className="col-8 mx-auto text-center mt-1">
+                  <p className="mb-0 text-secondary">
+                    Powered by FastAPI and React - Built with Material Kit
+                  </p>
+                </div>
+              </div>
+            </div>
+          </footer>
+        </div>
+      </section>
     </div>
   );
 }
