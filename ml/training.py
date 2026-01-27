@@ -2,10 +2,15 @@ import os
 from dotenv import load_dotenv
 import pandas as pd
 from xgboost import XGBRegressor
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 import joblib
 from sqlalchemy import create_engine
 from datetime import datetime
+from utils import (
+    POINTS_FEATURES,
+    add_player_rolling_features,
+    build_team_game_features,
+)
 
 # load env variables
 load_dotenv()
@@ -22,109 +27,60 @@ FROM player_game_stats pg
 JOIN players p ON pg.player_id = p.id
 """
 df_raw = pd.read_sql(query, engine)
+df_raw["game_date"] = pd.to_datetime(df_raw["game_date"])
 
-# copy for feature engineering
-df_features = df_raw.copy()
-
-# feature enginering
-# adding indicator for home/away based on @/vs symbols
-df_features["is_home"] = df_features["matchup"].apply(
-    lambda x: 1 if "@" not in x else 0
+# feature engineering (past-only)
+df_features = add_player_rolling_features(df_raw)
+team_game_features = build_team_game_features(df_features)
+df_features = df_features.merge(
+    team_game_features, on=["game_id", "team_abbreviation", "game_date"], how="left"
 )
 
-# sort by player and game date
-df_features = df_features.sort_values(["player_id", "game_date"])
+df_features[POINTS_FEATURES] = df_features[POINTS_FEATURES].fillna(0)
+df_features = df_features.dropna(subset=["points"])
 
-# calc rolling averages for base stats in last 5 games.
-# getitng rolling averages to get a sense of current form of the player
-df_features["avg_points_last5"] = df_features.groupby("player_id")["points"].transform(
-    lambda x: x.rolling(5, min_periods=1).mean().shift(1)
-)
-df_features["avg_assists_last5"] = df_features.groupby("player_id")[
-    "assists"
-].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1))
-df_features["avg_rebounds_last5"] = df_features.groupby("player_id")[
-    "rebounds"
-].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1))
-
-# teammate influence (average assists of other teammates last 5 games)
-teammate_avg_assists = []
-for idx, row in df_features.iterrows():
-    team = row["team_abbreviation"]
-    game_date = row["game_date"]
-    player_id = row["player_id"]
-    # get teammates last 5 games excluding current player
-    teammates = df_features[
-        (df_features["team_abbreviation"] == team)
-        & (df_features["player_id"] != player_id)
-        & (df_features["game_date"] < game_date)
-    ]
-    last5 = teammates.groupby("player_id").tail(5)
-    avg_assist = last5["assists"].mean() if not last5.empty else 0
-    teammate_avg_assists.append(avg_assist)
-df_features["teammate_avg_assists_last5"] = teammate_avg_assists
-
-# opponent strength (points allowed, blocks, steals, turnovers)
-opponent_avg_points_allowed = []
-opponent_avg_blocks = []
-opponent_avg_steals = []
-opponent_avg_turnovers = []
-
-for idx, row in df_features.iterrows():
-    matchup = row["matchup"]
-    player_team = row["team_abbreviation"]
-    if " vs. " in matchup:
-        opponent_team = matchup.split(" vs. ")[1]
-    else:
-        opponent_team = matchup.split(" @ ")[1]
-
-    opp_games = df_features[
-        (df_features["team_abbreviation"] == opponent_team)
-        & (df_features["game_date"] < row["game_date"])
-    ]
-    last5 = opp_games.tail(5)
-
-    opponent_avg_points_allowed.append(last5["points"].mean() if not last5.empty else 0)
-    opponent_avg_blocks.append(last5["blocks"].mean() if not last5.empty else 0)
-    opponent_avg_steals.append(last5["steals"].mean() if not last5.empty else 0)
-    opponent_avg_turnovers.append(last5["turnovers"].mean() if not last5.empty else 0)
-
-df_features["opponent_avg_points_allowed_last5"] = opponent_avg_points_allowed
-df_features["opponent_avg_blocks_last5"] = opponent_avg_blocks
-df_features["opponent_avg_steals_last5"] = opponent_avg_steals
-df_features["opponent_avg_turnovers_last5"] = opponent_avg_turnovers
-
-# store the rolling average of minutes as well to avoid data leakage during prediction
-# can pass the rolling avg during prediction as real minutes arent known yet
-df_features["avg_minutes_last5"] = df_features.groupby("player_id")[
-    "minutes"
-].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1))
-
-# drop first few games with NaN
-df_features = df_features.dropna()
-
-
-# features to feed model
-features = [
-    "avg_minutes_last5",
-    "is_home",
-    "avg_points_last5",
-    "avg_assists_last5",
-    "avg_rebounds_last5",
-    "teammate_avg_assists_last5",
-    "opponent_avg_points_allowed_last5",
-    "opponent_avg_blocks_last5",
-    "opponent_avg_steals_last5",
-    "opponent_avg_turnovers_last5",
-]
-X = df_features[features]
+X = df_features[POINTS_FEATURES]
 y = df_features["points"]
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+# time-based split by date
+unique_dates = sorted(df_features["game_date"].dt.date.unique())
+split_idx = int(len(unique_dates) * 0.8)
+split_date = unique_dates[split_idx] if unique_dates else None
+
+if split_date is None:
+    raise ValueError("Not enough data to train; no game dates found.")
+
+train_mask = df_features["game_date"].dt.date <= split_date
+X_train, y_train = X[train_mask], y[train_mask]
+X_valid, y_valid = X[~train_mask], y[~train_mask]
 
 # train xgboost model
-model = XGBRegressor(n_estimators=500, learning_rate=0.05, max_depth=5, random_state=42)
-model.fit(X_train, y_train)
+model = XGBRegressor(
+    n_estimators=2000,
+    learning_rate=0.03,
+    max_depth=6,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    min_child_weight=2,
+    reg_alpha=0.0,
+    reg_lambda=1.0,
+    random_state=42,
+)
+
+model.fit(
+    X_train,
+    y_train,
+    eval_set=[(X_valid, y_valid)],
+    eval_metric="mae",
+    verbose=False,
+    early_stopping_rounds=50,
+)
+
+preds = model.predict(X_valid)
+mae = mean_absolute_error(y_valid, preds)
+rmse = mean_squared_error(y_valid, preds, squared=False)
+print(f"Validation MAE: {mae:.2f}")
+print(f"Validation RMSE: {rmse:.2f}")
 
 # save the trained model
 today_str = datetime.now().strftime("%Y%m%d")
