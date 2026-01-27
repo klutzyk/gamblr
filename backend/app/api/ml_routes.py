@@ -44,3 +44,18 @@ async def train_rebounds():
 async def train_minutes():
     results = await run_in_threadpool(train_minutes_model, sync_engine)
     return {"status": "trained", **results}
+
+
+@router.post("/train/all")
+async def train_all():
+    minutes = await run_in_threadpool(train_minutes_model, sync_engine)
+    points = await run_in_threadpool(train_points_model, sync_engine)
+    assists = await run_in_threadpool(train_assists_model, sync_engine)
+    rebounds = await run_in_threadpool(train_rebounds_model, sync_engine)
+    return {
+        "status": "trained",
+        "minutes": minutes,
+        "points": points,
+        "assists": assists,
+        "rebounds": rebounds,
+    }

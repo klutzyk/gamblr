@@ -130,14 +130,24 @@ def _predict_stat(
 
     model = load_latest_model(models_dir, model_prefix)
 
-    if isinstance(model, list):
+    if isinstance(model, dict) and "models" in model:
+        models = model["models"]
         preds_stack = np.column_stack(
-            [m.predict(df_next_features[features]) for m in model]
+            [m.predict(df_next_features[features]) for m in models]
         )
-        df_next_features["pred_p10"] = np.percentile(preds_stack, 10, axis=1)
-        df_next_features["pred_p50"] = np.percentile(preds_stack, 50, axis=1)
-        df_next_features["pred_p90"] = np.percentile(preds_stack, 90, axis=1)
-        df_next_features["pred_value"] = df_next_features["pred_p50"]
+        pred_p50 = np.percentile(preds_stack, 50, axis=1)
+        df_next_features["pred_p50"] = pred_p50
+
+        calibration = model.get("calibration")
+        if calibration and calibration.get("abs_error_q") is not None:
+            q = float(calibration["abs_error_q"])
+            df_next_features["pred_p10"] = np.maximum(pred_p50 - q, 0)
+            df_next_features["pred_p90"] = np.maximum(pred_p50 + q, 0)
+        else:
+            df_next_features["pred_p10"] = np.percentile(preds_stack, 10, axis=1)
+            df_next_features["pred_p90"] = np.percentile(preds_stack, 90, axis=1)
+
+        df_next_features["pred_value"] = pred_p50
     else:
         df_next_features["pred_value"] = model.predict(df_next_features[features])
 

@@ -144,6 +144,7 @@ def _train_model(
     X_train, y_train = X[train_mask], y[train_mask]
     X_valid, y_valid = X[~train_mask], y[~train_mask]
 
+    calibration = None
     if use_ensemble:
         seeds = [42, 43, 44, 45, 46]
         models = []
@@ -169,6 +170,9 @@ def _train_model(
 
         preds_stack = np.column_stack([m.predict(X_valid) for m in models])
         preds = np.median(preds_stack, axis=1)
+        abs_resid = np.abs(y_valid.to_numpy() - preds)
+        q = float(np.quantile(abs_resid, 0.8))
+        calibration = {"abs_error_q": q, "coverage": 0.8}
     else:
         model = XGBRegressor(
             n_estimators=2000,
@@ -197,13 +201,14 @@ def _train_model(
     today_str = datetime.now().strftime("%Y%m%d")
     model_path = MODELS_DIR / f"{model_prefix}{today_str}.pkl"
     if use_ensemble:
-        joblib.dump(models, model_path)
+        joblib.dump({"models": models, "calibration": calibration}, model_path)
     else:
         joblib.dump(model, model_path)
 
     return {
         "model_path": str(model_path),
         "minutes_model_path": str(minutes_model_path) if minutes_model_path else None,
+        "calibration": calibration,
         "mae": float(mae),
         "rmse": float(rmse),
         "rows_total": int(len(df_features)),
