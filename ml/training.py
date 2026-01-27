@@ -95,7 +95,9 @@ def train_points_model(engine=None, database_url: Optional[str] = None):
         )
         opponent_avg_blocks.append(last5["blocks"].mean() if not last5.empty else 0)
         opponent_avg_steals.append(last5["steals"].mean() if not last5.empty else 0)
-        opponent_avg_turnovers.append(last5["turnovers"].mean() if not last5.empty else 0)
+        opponent_avg_turnovers.append(
+            last5["turnovers"].mean() if not last5.empty else 0
+        )
 
     df_features["opponent_avg_points_allowed_last5"] = opponent_avg_points_allowed
     df_features["opponent_avg_blocks_last5"] = opponent_avg_blocks
