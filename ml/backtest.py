@@ -113,6 +113,7 @@ def walk_forward_backtest(
 
     preds_all = []
     errors_by_player: dict[int, list[float]] = {}
+    weighted_by_player: dict[int, list[float]] = {}
     global_errors: list[float] = []
 
     for d in unique_dates:
@@ -155,26 +156,32 @@ def walk_forward_backtest(
         for pid, err in zip(df_features.loc[test_mask, "player_id"], abs_error):
             pid = int(pid)
             hist = errors_by_player.get(pid, [])
+            hist_weighted = weighted_by_player.get(pid, [])
             if not hist:
                 confidences.append(CONFIDENCE_DEFAULT)
                 bands.append(None)
             else:
                 recent = hist[-CONFIDENCE_WINDOW:]
+                recent_weighted = hist_weighted[-CONFIDENCE_WINDOW:]
                 player_mae = float(np.mean(recent))
                 player_q = float(np.quantile(recent, 0.8))
                 band = max(0.5 * player_q, min(2.0 * player_q, player_mae))
+                mean_weighted = float(np.mean(recent_weighted))
                 confidence = int(
-                    CONFIDENCE_MAX * np.exp(-CONFIDENCE_DECAY * float(player_mae))
+                    CONFIDENCE_MAX * np.exp(-CONFIDENCE_DECAY * float(mean_weighted))
                 )
                 confidence = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, confidence))
                 confidences.append(confidence)
                 bands.append(band)
 
         # Update error history after confidence computed
-        for pid, err in zip(df_features.loc[test_mask, "player_id"], weighted_error):
+        for pid, err in zip(df_features.loc[test_mask, "player_id"], abs_error):
             pid = int(pid)
             errors_by_player.setdefault(pid, []).append(float(err))
             global_errors.append(float(err))
+        for pid, err in zip(df_features.loc[test_mask, "player_id"], weighted_error):
+            pid = int(pid)
+            weighted_by_player.setdefault(pid, []).append(float(err))
 
         df_pred = df_features.loc[
             test_mask,

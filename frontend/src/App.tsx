@@ -285,8 +285,8 @@ function App() {
   const [reboundsPredictionsState, setReboundsPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
   const [predictionDay, setPredictionDay] = useState<
-    "today" | "tomorrow" | "yesterday"
-  >("today");
+    "today" | "tomorrow" | "yesterday" | "auto"
+  >("auto");
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -770,9 +770,10 @@ function App() {
                   }
                   style={{ maxWidth: "150px" }}
                 >
-                  <option value="today">Today</option>
-                  <option value="tomorrow">Tomorrow</option>
-                  <option value="yesterday">Yesterday</option>
+                  <option value="auto">Auto (ET)</option>
+                  <option value="today">Today (ET)</option>
+                  <option value="tomorrow">Tomorrow (ET)</option>
+                  <option value="yesterday">Yesterday (ET)</option>
                 </select>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"

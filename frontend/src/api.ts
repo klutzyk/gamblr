@@ -151,7 +151,7 @@ export function getPlayerPropsByGame(
 const PREDICTIONS_TTL = 5 * 60 * 1000;
 
 export function getPointsPredictions(
-  day: "today" | "tomorrow" | "yesterday" = "today"
+  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
 ): Promise<PredictionRow[]> {
   return fetchWithCache<PredictionRow[]>(
     "/players/predictions/points",
@@ -161,7 +161,7 @@ export function getPointsPredictions(
 }
 
 export function getAssistsPredictions(
-  day: "today" | "tomorrow" | "yesterday" = "today"
+  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
 ): Promise<PredictionRow[]> {
   return fetchWithCache<PredictionRow[]>(
     "/players/predictions/assists",
@@ -171,7 +171,7 @@ export function getAssistsPredictions(
 }
 
 export function getReboundsPredictions(
-  day: "today" | "tomorrow" | "yesterday" = "today"
+  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
 ): Promise<PredictionRow[]> {
   return fetchWithCache<PredictionRow[]>(
     "/players/predictions/rebounds",

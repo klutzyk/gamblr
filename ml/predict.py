@@ -22,6 +22,11 @@ from .utils import (
 )
 from datetime import datetime, timedelta
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python < 3.9
+    ZoneInfo = None
+
 # ml folder
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -66,7 +71,10 @@ def _predict_stat(
     df_schedule = pd.read_sql("SELECT * FROM game_schedule", engine)
     df_schedule["game_date"] = pd.to_datetime(df_schedule["game_date"], dayfirst=True)
 
-    base_date = datetime.now().date()
+    if ZoneInfo:
+        base_date = datetime.now(ZoneInfo("America/New_York")).date()
+    else:
+        base_date = datetime.now().date()
 
     if day == "today":
         target_date = base_date - timedelta(days=1)
@@ -74,8 +82,15 @@ def _predict_stat(
         target_date = base_date
     elif day == "yesterday":
         target_date = base_date - timedelta(days=2)
+    elif day == "auto":
+        # If it's afternoon/evening in Australia, switch to NBA "tomorrow" (ET)
+        if ZoneInfo:
+            aus_time = datetime.now(ZoneInfo("Australia/Sydney")).hour
+            target_date = base_date if aus_time >= 17 else base_date - timedelta(days=1)
+        else:
+            target_date = base_date
     else:
-        raise ValueError("day must be one of: today, tomorrow, yesterday")
+        raise ValueError("day must be one of: today, tomorrow, yesterday, auto")
 
     target_date = pd.to_datetime(target_date)
 
@@ -160,13 +175,15 @@ def _predict_stat(
             )
 
             def adjust_q(pid):
-                player_mae = recent_errors.get(pid)
-                if player_mae is None or player_mae <= 0:
+                stats = recent_errors.get(pid)
+                if not stats:
                     return q, CONFIDENCE_DEFAULT
 
-                band = max(0.5 * q, min(2.0 * q, float(player_mae)))
+                mean_abs = stats["mean_abs"]
+                mean_weighted = stats["mean_weighted"]
+                band = max(0.5 * q, min(2.0 * q, float(mean_abs)))
                 confidence = int(
-                    CONFIDENCE_MAX * np.exp(-CONFIDENCE_DECAY * float(player_mae))
+                    CONFIDENCE_MAX * np.exp(-CONFIDENCE_DECAY * float(mean_weighted))
                 )
                 confidence = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, confidence))
                 return band, confidence
@@ -298,4 +315,11 @@ def _load_recent_player_errors(
     df.loc[~over_mask, "weighted_error"] = (
         df.loc[~over_mask, "abs_error"] * -CONFIDENCE_UNDER_BONUS
     )
-    return df.groupby("player_id")["weighted_error"].mean().to_dict()
+    grouped = df.groupby("player_id")
+    return {
+        int(pid): {
+            "mean_abs": float(group["abs_error"].mean()),
+            "mean_weighted": float(group["weighted_error"].mean()),
+        }
+        for pid, group in grouped
+    }

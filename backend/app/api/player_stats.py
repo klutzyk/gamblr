@@ -91,7 +91,7 @@ def recent_performers(season: str = "2025-26", last_n_games: int = 5, top_n: int
 ## Predivtion routes
 @router.get("/predictions/points")
 async def predict_points_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
 ):
     """
     Predict player points for NBA games.
@@ -117,7 +117,7 @@ async def predict_points_api(
 
 @router.get("/predictions/assists")
 async def predict_assists_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
 ):
     """
     Predict player assists for NBA games.
@@ -143,7 +143,7 @@ async def predict_assists_api(
 
 @router.get("/predictions/rebounds")
 async def predict_rebounds_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
 ):
     """
     Predict player rebounds for NBA games.
