@@ -180,3 +180,13 @@ export function getReboundsPredictions(
     PREDICTIONS_TTL
   );
 }
+
+export function getThreeptPredictions(
+  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
+): Promise<PredictionRow[]> {
+  return fetchWithCache<PredictionRow[]>(
+    "/players/predictions/threept",
+    { day },
+    PREDICTIONS_TTL
+  );
+}

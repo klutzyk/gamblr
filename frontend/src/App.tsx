@@ -11,6 +11,7 @@ import {
   getPointsPredictions,
   getAssistsPredictions,
   getReboundsPredictions,
+  getThreeptPredictions,
   type PlayerRow,
   type PlayerPropsResponse,
   type PredictionRow,
@@ -361,13 +362,15 @@ function App() {
     useState<ApiState<PlayerPropsResponse>>(initialState);
   const [gameIdInput, setGameIdInput] = useState("");
   const [predictionStat, setPredictionStat] = useState<
-    "points" | "assists" | "rebounds"
+    "points" | "assists" | "rebounds" | "threept"
   >("points");
   const [pointsPredictionsState, setPointsPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
   const [assistsPredictionsState, setAssistsPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
   const [reboundsPredictionsState, setReboundsPredictionsState] =
+    useState<ApiState<PredictionRow[]>>(initialState);
+  const [threeptPredictionsState, setThreeptPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
   const [predictionDay, setPredictionDay] = useState<
     "today" | "tomorrow" | "yesterday" | "auto"
@@ -471,6 +474,13 @@ function App() {
       state: reboundsPredictionsState,
       setState: setReboundsPredictionsState,
       loader: () => getReboundsPredictions(predictionDay),
+    },
+    threept: {
+      label: "3PT Made",
+      unit: "3PM",
+      state: threeptPredictionsState,
+      setState: setThreeptPredictionsState,
+      loader: () => getThreeptPredictions(predictionDay),
     },
   };
 
@@ -845,7 +855,10 @@ function App() {
         const normalizedSearch = predictionSearch.trim().toLowerCase();
         const filteredPredictions = activePrediction.state.data
           ? activePrediction.state.data.filter((row) => {
-              if ((row.pred_value ?? 0) < 3) {
+              if (
+                predictionStat !== "threept" &&
+                (row.pred_value ?? 0) < 3
+              ) {
                 return false;
               }
               if (
@@ -877,7 +890,7 @@ function App() {
               </div>
               <div className="d-flex flex-wrap gap-2 align-items-center">
                 <div className="stat-toggle">
-                  {(["points", "assists", "rebounds"] as const).map((stat) => (
+                  {(["points", "assists", "rebounds", "threept"] as const).map((stat) => (
                     <button
                       key={stat}
                       className={`stat-chip ${
