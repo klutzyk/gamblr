@@ -6,6 +6,7 @@ from .utils import (
     POINTS_FEATURES,
     ASSISTS_FEATURES,
     REBOUNDS_FEATURES,
+    MINUTES_FEATURES,
     compute_prediction_features,
 )
 from datetime import datetime, timedelta
@@ -95,7 +96,32 @@ def _predict_stat(
     except Exception:
         df_team = None
 
-    df_next_features = compute_prediction_features(df_next_players, df_history, df_team)
+    df_lineups = None
+    try:
+        df_lineups = pd.read_sql(
+            """
+            SELECT ls.team_id, ls.season, ls.lineup_id, ls.minutes, ls.off_rating,
+                   ls.def_rating, ls.net_rating, ls.pace, ls.ast_pct, ls.reb_pct,
+                   t.abbreviation AS team_abbreviation
+            FROM lineup_stats ls
+            JOIN teams t ON ls.team_id = t.id
+            """,
+            engine,
+        )
+    except Exception:
+        df_lineups = None
+
+    df_next_features = compute_prediction_features(
+        df_next_players, df_history, df_team, df_lineups
+    )
+
+    if "pred_minutes" in features:
+        minutes_model = load_latest_model(models_dir, "xgb_minutes_model_")
+        df_next_features["pred_minutes"] = minutes_model.predict(
+            df_next_features[MINUTES_FEATURES]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0)
+        )
 
     df_next_features[features] = (
         df_next_features[features].apply(pd.to_numeric, errors="coerce").fillna(0)

@@ -4,6 +4,7 @@ import pandas as pd
 POINTS_FEATURES = [
     "avg_minutes_last5",
     "avg_minutes_last10",
+    "pred_minutes",
     "avg_points_last5",
     "avg_points_last10",
     "std_points_last10",
@@ -17,11 +18,16 @@ POINTS_FEATURES = [
     "team_points_avg_last5",
     "team_points_avg_last10",
     "opponent_points_allowed_last5",
+    "team_lineup_net_rating",
+    "team_lineup_pace",
+    "team_lineup_ast_pct",
+    "team_lineup_reb_pct",
 ]
 
 ASSISTS_FEATURES = [
     "avg_minutes_last5",
     "avg_minutes_last10",
+    "pred_minutes",
     "avg_assists_last5",
     "avg_assists_last10",
     "std_assists_last10",
@@ -35,11 +41,16 @@ ASSISTS_FEATURES = [
     "team_assists_avg_last5",
     "team_assists_avg_last10",
     "opponent_assists_allowed_last5",
+    "team_lineup_net_rating",
+    "team_lineup_pace",
+    "team_lineup_ast_pct",
+    "team_lineup_reb_pct",
 ]
 
 REBOUNDS_FEATURES = [
     "avg_minutes_last5",
     "avg_minutes_last10",
+    "pred_minutes",
     "avg_rebounds_last5",
     "avg_rebounds_last10",
     "std_rebounds_last10",
@@ -52,6 +63,32 @@ REBOUNDS_FEATURES = [
     "team_rebounds_avg_last5",
     "team_rebounds_avg_last10",
     "opponent_rebounds_allowed_last5",
+    "team_lineup_net_rating",
+    "team_lineup_pace",
+    "team_lineup_ast_pct",
+    "team_lineup_reb_pct",
+]
+
+MINUTES_FEATURES = [
+    "avg_minutes_last5",
+    "avg_minutes_last10",
+    "avg_points_last5",
+    "avg_assists_last5",
+    "avg_rebounds_last5",
+    "days_since_last_game",
+    "is_back_to_back",
+    "is_home",
+    "games_played_season",
+    "team_points_avg_last5",
+    "team_points_avg_last10",
+    "team_assists_avg_last5",
+    "team_assists_avg_last10",
+    "team_rebounds_avg_last5",
+    "team_rebounds_avg_last10",
+    "team_lineup_net_rating",
+    "team_lineup_pace",
+    "team_lineup_ast_pct",
+    "team_lineup_reb_pct",
 ]
 
 
@@ -226,6 +263,44 @@ def add_player_rolling_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def build_lineup_team_features(df_lineups: pd.DataFrame) -> pd.DataFrame:
+    if df_lineups is None or df_lineups.empty:
+        return pd.DataFrame(
+            columns=[
+                "team_abbreviation",
+                "team_lineup_net_rating",
+                "team_lineup_pace",
+                "team_lineup_ast_pct",
+                "team_lineup_reb_pct",
+            ]
+        )
+
+    df = df_lineups.copy()
+    df["minutes"] = pd.to_numeric(df["minutes"], errors="coerce").fillna(0)
+
+    def wavg(group, col):
+        weights = group["minutes"]
+        total = weights.sum()
+        if total == 0:
+            return group[col].mean()
+        return (group[col] * weights).sum() / total
+
+    grouped = df.groupby("team_abbreviation", as_index=False)
+    rows = []
+    for _, g in grouped:
+        rows.append(
+            {
+                "team_abbreviation": g["team_abbreviation"].iloc[0],
+                "team_lineup_net_rating": wavg(g, "net_rating"),
+                "team_lineup_pace": wavg(g, "pace"),
+                "team_lineup_ast_pct": wavg(g, "ast_pct"),
+                "team_lineup_reb_pct": wavg(g, "reb_pct"),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def compute_history_rolling_features(df_history: pd.DataFrame) -> pd.DataFrame:
     """
     Compute rolling averages per player from historical games only.
@@ -258,6 +333,7 @@ def compute_prediction_features(
     df_next: pd.DataFrame,
     df_history: pd.DataFrame,
     df_team_game: Optional[pd.DataFrame] = None,
+    df_lineup_team: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Build full feature set for upcoming games.
@@ -365,5 +441,21 @@ def compute_prediction_features(
     df_next["opponent_rebounds_allowed_last5"] = df_next["opponent_team"].map(
         team_features["opponent_rebounds_allowed_last5"]
     )
+
+    lineup_team = build_lineup_team_features(df_lineup_team)
+    if not lineup_team.empty:
+        lineup_team = lineup_team.set_index("team_abbreviation")
+        df_next["team_lineup_net_rating"] = df_next["team_abbreviation"].map(
+            lineup_team["team_lineup_net_rating"]
+        )
+        df_next["team_lineup_pace"] = df_next["team_abbreviation"].map(
+            lineup_team["team_lineup_pace"]
+        )
+        df_next["team_lineup_ast_pct"] = df_next["team_abbreviation"].map(
+            lineup_team["team_lineup_ast_pct"]
+        )
+        df_next["team_lineup_reb_pct"] = df_next["team_abbreviation"].map(
+            lineup_team["team_lineup_reb_pct"]
+        )
 
     return df_next
