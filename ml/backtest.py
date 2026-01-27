@@ -1,4 +1,12 @@
 import pandas as pd
+import numpy as np
+from app.core.constants import (
+    CONFIDENCE_DEFAULT,
+    CONFIDENCE_MIN,
+    CONFIDENCE_MAX,
+    CONFIDENCE_DECAY,
+    CONFIDENCE_WINDOW,
+)
 from datetime import date
 from xgboost import XGBRegressor
 from .utils import (
@@ -101,6 +109,8 @@ def walk_forward_backtest(
         unique_dates = unique_dates[:max_dates]
 
     preds_all = []
+    errors_by_player: dict[int, list[float]] = {}
+    global_errors: list[float] = []
 
     for d in unique_dates:
         train_mask = df_features["game_date"].dt.date < d
@@ -128,6 +138,36 @@ def walk_forward_backtest(
         model.fit(X_train, y_train, verbose=False)
 
         pred = model.predict(X_test)
+        actual = df_features.loc[test_mask, stat_type].to_numpy()
+        abs_error = np.abs(actual - pred)
+
+        # Compute rolling confidence using prior per-player errors
+        confidences = []
+        bands = []
+        for pid, err in zip(df_features.loc[test_mask, "player_id"], abs_error):
+            pid = int(pid)
+            hist = errors_by_player.get(pid, [])
+            if not hist:
+                confidences.append(CONFIDENCE_DEFAULT)
+                bands.append(None)
+            else:
+                recent = hist[-CONFIDENCE_WINDOW:]
+                player_mae = float(np.mean(recent))
+                player_q = float(np.quantile(recent, 0.8))
+                band = max(0.5 * player_q, min(2.0 * player_q, player_mae))
+                confidence = int(
+                    CONFIDENCE_MAX
+                    * np.exp(-CONFIDENCE_DECAY * float(player_mae))
+                )
+                confidence = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, confidence))
+                confidences.append(confidence)
+                bands.append(band)
+
+        # Update error history after confidence computed
+        for pid, err in zip(df_features.loc[test_mask, "player_id"], abs_error):
+            pid = int(pid)
+            errors_by_player.setdefault(pid, []).append(float(err))
+            global_errors.append(float(err))
 
         df_pred = df_features.loc[test_mask, [
             "player_id",
@@ -136,6 +176,16 @@ def walk_forward_backtest(
         ]].copy()
         df_pred["pred_value"] = pred
         df_pred["pred_p50"] = pred
+        df_pred["pred_p10"] = None
+        df_pred["pred_p90"] = None
+        for idx, band in zip(df_pred.index, bands):
+            if band is None:
+                continue
+            df_pred.at[idx, "pred_p10"] = max(float(df_pred.at[idx, "pred_value"]) - band, 0)
+            df_pred.at[idx, "pred_p90"] = float(df_pred.at[idx, "pred_value"]) + band
+        df_pred["confidence"] = confidences
+        df_pred["actual_value"] = actual
+        df_pred["abs_error"] = abs_error
         df_pred["stat_type"] = stat_type
         df_pred["prediction_date"] = pd.to_datetime(d)
         df_pred["model_version"] = f"walkforward_{stat_type}"

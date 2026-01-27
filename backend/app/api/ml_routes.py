@@ -16,7 +16,7 @@ from ml.training import (
     train_rebounds_model,
     train_minutes_model,
 )
-from app.db.store_prediction_logs import update_prediction_actuals
+from app.db.store_prediction_logs import update_prediction_actuals, delete_walkforward_logs
 from ml.backtest import walk_forward_backtest
 from app.db.store_prediction_logs import log_predictions
 
@@ -84,7 +84,10 @@ async def backtest_walkforward(
     stat_type: str,
     min_games: int = 15,
     max_dates: int | None = None,
+    reset: bool = False,
 ):
+    if reset:
+        await run_in_threadpool(delete_walkforward_logs, sync_engine, stat_type)
     df_preds = await run_in_threadpool(
         walk_forward_backtest, sync_engine, stat_type, min_games, max_dates
     )
@@ -97,7 +100,7 @@ async def backtest_walkforward(
         df_preds,
         stat_type,
         "walkforward",
-        False,
+        True,
     )
     await run_in_threadpool(update_prediction_actuals, sync_engine, stat_type)
     return {

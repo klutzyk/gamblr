@@ -1,6 +1,13 @@
 # ml/predict.py
 import pandas as pd
 import numpy as np
+from app.core.constants import (
+    CONFIDENCE_DEFAULT,
+    CONFIDENCE_MIN,
+    CONFIDENCE_MAX,
+    CONFIDENCE_DECAY,
+    CONFIDENCE_WINDOW,
+)
 import joblib
 from pathlib import Path
 from .utils import (
@@ -145,8 +152,6 @@ def _predict_stat(
         calibration = model.get("calibration")
         if calibration and calibration.get("abs_error_q") is not None:
             q = float(calibration["abs_error_q"])
-            global_mae = float(calibration.get("mae", q)) if calibration else q
-
             recent_errors = _load_recent_player_errors(
                 engine, stat_type, df_next_features["player_id"].tolist()
             )
@@ -154,10 +159,15 @@ def _predict_stat(
             def adjust_q(pid):
                 player_mae = recent_errors.get(pid)
                 if player_mae is None or player_mae <= 0:
-                    return q, None
-                mult = max(0.5, min(2.0, player_mae / global_mae))
-                confidence = max(40, min(100, int(100 * (1 / mult))))
-                return q * mult, confidence
+                    return q, CONFIDENCE_DEFAULT
+
+                band = max(0.5 * q, min(2.0 * q, float(player_mae)))
+                confidence = int(
+                    CONFIDENCE_MAX
+                    * np.exp(-CONFIDENCE_DECAY * float(player_mae))
+                )
+                confidence = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, confidence))
+                return band, confidence
 
             qs, confs = zip(
                 *[
@@ -258,7 +268,9 @@ def predict_rebounds(
     )
 
 
-def _load_recent_player_errors(engine, stat_type: str, player_ids: list, n: int = 5):
+def _load_recent_player_errors(
+    engine, stat_type: str, player_ids: list, n: int = CONFIDENCE_WINDOW
+):
     if not player_ids:
         return {}
 

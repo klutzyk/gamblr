@@ -137,3 +137,18 @@ def update_prediction_actuals(engine, stat_type: str):
             {"stat_type": stat_type},
         )
         return result.rowcount
+
+
+def delete_walkforward_logs(engine, stat_type: str):
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                DELETE FROM prediction_logs
+                WHERE stat_type = :stat_type
+                  AND model_version = 'walkforward'
+                """
+            ),
+            {"stat_type": stat_type},
+        )
+        return result.rowcount
