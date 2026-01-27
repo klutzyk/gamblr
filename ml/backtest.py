@@ -7,7 +7,7 @@ from app.core.constants import (
     CONFIDENCE_DECAY,
     CONFIDENCE_WINDOW,
     CONFIDENCE_OVER_PENALTY,
-    CONFIDENCE_UNDER_PENALTY,
+    # CONFIDENCE_UNDER_PENALTY,
     CONFIDENCE_UNDER_BONUS,
 )
 from datetime import date
@@ -164,8 +164,7 @@ def walk_forward_backtest(
                 player_q = float(np.quantile(recent, 0.8))
                 band = max(0.5 * player_q, min(2.0 * player_q, player_mae))
                 confidence = int(
-                    CONFIDENCE_MAX
-                    * np.exp(-CONFIDENCE_DECAY * float(player_mae))
+                    CONFIDENCE_MAX * np.exp(-CONFIDENCE_DECAY * float(player_mae))
                 )
                 confidence = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, confidence))
                 confidences.append(confidence)
@@ -177,11 +176,14 @@ def walk_forward_backtest(
             errors_by_player.setdefault(pid, []).append(float(err))
             global_errors.append(float(err))
 
-        df_pred = df_features.loc[test_mask, [
-            "player_id",
-            "game_id",
-            "game_date",
-        ]].copy()
+        df_pred = df_features.loc[
+            test_mask,
+            [
+                "player_id",
+                "game_id",
+                "game_date",
+            ],
+        ].copy()
         df_pred["pred_value"] = pred
         df_pred["pred_p50"] = pred
         df_pred["pred_p10"] = None
@@ -189,7 +191,9 @@ def walk_forward_backtest(
         for idx, band in zip(df_pred.index, bands):
             if band is None:
                 continue
-            df_pred.at[idx, "pred_p10"] = max(float(df_pred.at[idx, "pred_value"]) - band, 0)
+            df_pred.at[idx, "pred_p10"] = max(
+                float(df_pred.at[idx, "pred_value"]) - band, 0
+            )
             df_pred.at[idx, "pred_p90"] = float(df_pred.at[idx, "pred_value"]) + band
         df_pred["confidence"] = confidences
         df_pred["actual_value"] = actual

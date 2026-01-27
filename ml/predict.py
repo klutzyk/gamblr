@@ -8,7 +8,7 @@ from app.core.constants import (
     CONFIDENCE_DECAY,
     CONFIDENCE_WINDOW,
     CONFIDENCE_OVER_PENALTY,
-    CONFIDENCE_UNDER_PENALTY,
+    # CONFIDENCE_UNDER_PENALTY,
     CONFIDENCE_UNDER_BONUS,
 )
 import joblib
@@ -166,8 +166,7 @@ def _predict_stat(
 
                 band = max(0.5 * q, min(2.0 * q, float(player_mae)))
                 confidence = int(
-                    CONFIDENCE_MAX
-                    * np.exp(-CONFIDENCE_DECAY * float(player_mae))
+                    CONFIDENCE_MAX * np.exp(-CONFIDENCE_DECAY * float(player_mae))
                 )
                 confidence = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, confidence))
                 return band, confidence
