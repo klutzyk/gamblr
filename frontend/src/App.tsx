@@ -9,9 +9,11 @@ import {
   getRecentPerformers,
   getPlayerPropsByGame,
   getPointsPredictions,
+  getAssistsPredictions,
+  getReboundsPredictions,
   type PlayerRow,
   type PlayerPropsResponse,
-  type PointsPrediction,
+  type PredictionRow,
 } from "./api";
 
 // Types derived from the SportsData BettingMarket / BettingOutcome shape.
@@ -167,7 +169,15 @@ function PlayerTable({ rows }: { rows: PlayerRow[] }) {
     </div>
   );
 }
-function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
+function PredictionsGrid({
+  predictions,
+  statLabel,
+  unitLabel,
+}: {
+  predictions: PredictionRow[];
+  statLabel: string;
+  unitLabel: string;
+}) {
   if (!predictions.length) {
     return (
       <div className="text-center py-5">
@@ -198,9 +208,9 @@ function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
             </div>
             <div className="text-end">
               <h2 className="mb-0 text-gradient text-primary">
-                {pred.pred_points.toFixed(1)}
+                {pred.pred_value.toFixed(1)}
               </h2>
-              <span className="text-xs text-secondary">pts</span>
+              <span className="text-xs text-secondary">{unitLabel}</span>
             </div>
           </div>
           <div className="border-top pt-3">
@@ -212,6 +222,9 @@ function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
               <i className="material-symbols-rounded text-secondary me-2">calendar_today</i>
               <span className="text-sm text-secondary">{formatDate(pred.game_date)}</span>
             </div>
+            <div className="prediction-stat-tag mt-3">
+              <span className="badge badge-sm bg-gradient-info">{statLabel}</span>
+            </div>
           </div>
         </div>
       ))}
@@ -220,7 +233,7 @@ function PredictionsGrid({ predictions }: { predictions: PointsPrediction[] }) {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<TabKey>("top_scorers");
+  const [activeTab, setActiveTab] = useState<TabKey>("predictions");
 
   const [topScorers, setTopScorers] =
     useState<ApiState<PlayerRow[]>>(initialState);
@@ -233,8 +246,15 @@ function App() {
   const [propsState, setPropsState] =
     useState<ApiState<PlayerPropsResponse>>(initialState);
   const [gameIdInput, setGameIdInput] = useState("");
-  const [predictionsState, setPredictionsState] =
-    useState<ApiState<PointsPrediction[]>>(initialState);
+  const [predictionStat, setPredictionStat] = useState<
+    "points" | "assists" | "rebounds"
+  >("points");
+  const [pointsPredictionsState, setPointsPredictionsState] =
+    useState<ApiState<PredictionRow[]>>(initialState);
+  const [assistsPredictionsState, setAssistsPredictionsState] =
+    useState<ApiState<PredictionRow[]>>(initialState);
+  const [reboundsPredictionsState, setReboundsPredictionsState] =
+    useState<ApiState<PredictionRow[]>>(initialState);
   const [predictionDay, setPredictionDay] = useState<
     "today" | "tomorrow" | "yesterday"
   >("today");
@@ -310,13 +330,39 @@ function App() {
     );
   };
 
-  const handleLoadPredictions = () =>
-    safeLoad(
-      predictionsState,
-      setPredictionsState,
-      () => getPointsPredictions(predictionDay),
-      5 * 60 * 1000 // 5 minute cooldown for predictions
+  const predictionConfig = {
+    points: {
+      label: "Points",
+      unit: "pts",
+      state: pointsPredictionsState,
+      setState: setPointsPredictionsState,
+      loader: () => getPointsPredictions(predictionDay),
+    },
+    assists: {
+      label: "Assists",
+      unit: "ast",
+      state: assistsPredictionsState,
+      setState: setAssistsPredictionsState,
+      loader: () => getAssistsPredictions(predictionDay),
+    },
+    rebounds: {
+      label: "Rebounds",
+      unit: "reb",
+      state: reboundsPredictionsState,
+      setState: setReboundsPredictionsState,
+      loader: () => getReboundsPredictions(predictionDay),
+    },
+  };
+
+  const handleLoadPredictions = () => {
+    const config = predictionConfig[predictionStat];
+    return safeLoad(
+      config.state,
+      config.setState,
+      config.loader,
+      5 * 60 * 1000
     );
+  };
 
   const renderContent = () => {
     switch (activeTab) {
@@ -661,14 +707,30 @@ function App() {
           </div>
         );
       case "predictions":
+        const activePrediction = predictionConfig[predictionStat];
         return (
-          <div className="card card-body border-radius-xl shadow-lg">
-            <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap">
+          <div className="card card-body border-radius-xl shadow-lg prediction-focus">
+            <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
               <div>
-                <h4 className="mb-1">Points Predictions</h4>
-                <p className="text-sm text-secondary mb-0">ML-powered predictions for player points.</p>
+                <h4 className="mb-1">Prediction Focus</h4>
+                <p className="text-sm text-secondary mb-0">
+                  Live projections for points, assists, and rebounds.
+                </p>
               </div>
-              <div className="d-flex gap-2 align-items-center flex-wrap">
+              <div className="d-flex flex-wrap gap-2 align-items-center">
+                <div className="stat-toggle">
+                  {(["points", "assists", "rebounds"] as const).map((stat) => (
+                    <button
+                      key={stat}
+                      className={`stat-chip ${
+                        predictionStat === stat ? "active" : ""
+                      }`}
+                      onClick={() => setPredictionStat(stat)}
+                    >
+                      {predictionConfig[stat].label}
+                    </button>
+                  ))}
+                </div>
                 <select
                   className="form-select form-select-sm"
                   value={predictionDay}
@@ -686,23 +748,32 @@ function App() {
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
                   onClick={handleLoadPredictions}
-                  disabled={predictionsState.loading}
+                  disabled={activePrediction.state.loading}
                 >
-                  {predictionsState.loading ? (
-                    <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                  {activePrediction.state.loading ? (
+                    <span
+                      className="spinner-border spinner-border-sm me-2"
+                      role="status"
+                      aria-hidden="true"
+                    ></span>
                   ) : (
-                    <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>psychology</i>
+                    <i
+                      className="material-symbols-rounded me-2"
+                      style={{ fontSize: "16px" }}
+                    >
+                      psychology
+                    </i>
                   )}
                   Get Predictions
                 </button>
               </div>
             </div>
-            {predictionsState.error && (
+            {activePrediction.state.error && (
               <div className="alert alert-danger text-white" role="alert">
-                <strong>Error:</strong> {predictionsState.error}
+                <strong>Error:</strong> {activePrediction.state.error}
               </div>
             )}
-            {predictionsState.loading && !predictionsState.data && (
+            {activePrediction.state.loading && !activePrediction.state.data && (
               <div className="text-center py-5">
                 <div className="spinner-border text-primary" role="status">
                   <span className="visually-hidden">Loading...</span>
@@ -710,8 +781,12 @@ function App() {
                 <p className="text-secondary mt-3">Loading predictions...</p>
               </div>
             )}
-            {predictionsState.data && (
-              <PredictionsGrid predictions={predictionsState.data} />
+            {activePrediction.state.data && (
+              <PredictionsGrid
+                predictions={activePrediction.state.data}
+                statLabel={activePrediction.label}
+                unitLabel={activePrediction.unit}
+              />
             )}
           </div>
         );
@@ -754,19 +829,18 @@ function App() {
             <div className="col-lg-7">
               <div className="hero-copy">
                 <h1 className="display-4 text-white mb-3">
-                  NBA Betting Intelligence, visualized.
+                  Prediction command center for NBA props.
                 </h1>
                 <p className="lead text-white opacity-8 mb-4">
-                  Track top performers, uncover market edges, and see machine-learning
-                  projections in a single command center.
+                  Focused points, assists, and rebounds forecasts with matchup-ready context.
                 </p>
                 <div className="d-flex flex-wrap gap-2">
                   <button
                     className="btn bg-gradient-primary mb-0"
-                    onClick={() => jumpToTab("top_scorers", handleLoadTopScorers)}
+                    onClick={() => jumpToTab("predictions", handleLoadPredictions)}
                   >
                     <i className="material-symbols-rounded me-2">emoji_events</i>
-                    Explore Leaders
+                    View Predictions
                   </button>
                   <button
                     className="btn btn-outline-white mb-0"

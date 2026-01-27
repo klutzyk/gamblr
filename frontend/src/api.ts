@@ -17,13 +17,13 @@ export type PlayerPropsResponse = {
   count: number;
 };
 
-export type PointsPrediction = {
+export type PredictionRow = {
   player_id: number;
   full_name: string;
   team_abbreviation: string;
   matchup: string;
   game_date: string;
-  pred_points: number;
+  pred_value: number;
 };
 
 const API_BASE =
@@ -146,9 +146,29 @@ const PREDICTIONS_TTL = 5 * 60 * 1000;
 
 export function getPointsPredictions(
   day: "today" | "tomorrow" | "yesterday" = "today"
-): Promise<PointsPrediction[]> {
-  return fetchWithCache<PointsPrediction[]>(
+): Promise<PredictionRow[]> {
+  return fetchWithCache<PredictionRow[]>(
     "/players/predictions/points",
+    { day },
+    PREDICTIONS_TTL
+  );
+}
+
+export function getAssistsPredictions(
+  day: "today" | "tomorrow" | "yesterday" = "today"
+): Promise<PredictionRow[]> {
+  return fetchWithCache<PredictionRow[]>(
+    "/players/predictions/assists",
+    { day },
+    PREDICTIONS_TTL
+  );
+}
+
+export function getReboundsPredictions(
+  day: "today" | "tomorrow" | "yesterday" = "today"
+): Promise<PredictionRow[]> {
+  return fetchWithCache<PredictionRow[]>(
+    "/players/predictions/rebounds",
     { day },
     PREDICTIONS_TTL
   );
