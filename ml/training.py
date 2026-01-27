@@ -17,6 +17,7 @@ from .utils import (
     MINUTES_FEATURES,
     add_player_rolling_features,
     build_team_game_features,
+    build_lineup_team_features,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -60,6 +61,36 @@ def _train_model(
     df_features = df_features.merge(
         team_game_features, on=["game_id", "team_abbreviation", "game_date"], how="left"
     )
+
+    df_lineups = None
+    try:
+        df_lineups = pd.read_sql(
+            """
+            SELECT ls.team_id, ls.season, ls.lineup_id, ls.minutes, ls.off_rating,
+                   ls.def_rating, ls.net_rating, ls.pace, ls.ast_pct, ls.reb_pct,
+                   t.abbreviation AS team_abbreviation
+            FROM lineup_stats ls
+            JOIN teams t ON ls.team_id = t.id
+            """,
+            engine,
+        )
+    except Exception:
+        df_lineups = None
+
+    if df_lineups is not None and not df_lineups.empty:
+        df_lineups = df_lineups.rename(
+            columns={
+                "minutes": "minutes",
+                "net_rating": "net_rating",
+                "pace": "pace",
+                "ast_pct": "ast_pct",
+                "reb_pct": "reb_pct",
+            }
+        )
+        lineup_team = build_lineup_team_features(df_lineups)
+        df_features = df_features.merge(
+            lineup_team, on="team_abbreviation", how="left"
+        )
 
     df_features[features] = df_features[features].fillna(0)
     df_features = df_features.dropna(subset=[target])
