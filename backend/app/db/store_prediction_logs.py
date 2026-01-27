@@ -82,7 +82,12 @@ def log_predictions(
                       pred_p90 = EXCLUDED.pred_p90,
                       confidence = EXCLUDED.confidence,
                       model_version = EXCLUDED.model_version,
-                      prediction_date = EXCLUDED.prediction_date
+                      prediction_date = EXCLUDED.prediction_date,
+                      abs_error = CASE
+                        WHEN prediction_logs.actual_value IS NOT NULL
+                          THEN ABS(prediction_logs.actual_value - EXCLUDED.pred_value)
+                        ELSE prediction_logs.abs_error
+                      END
                     """
                 )
 
