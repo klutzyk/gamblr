@@ -9,6 +9,7 @@ from app.core.constants import (
     CONFIDENCE_WINDOW,
     CONFIDENCE_OVER_PENALTY,
     CONFIDENCE_UNDER_PENALTY,
+    CONFIDENCE_UNDER_BONUS,
 )
 import joblib
 from pathlib import Path
@@ -296,6 +297,6 @@ def _load_recent_player_errors(
         df.loc[over_mask, "abs_error"] * CONFIDENCE_OVER_PENALTY
     )
     df.loc[~over_mask, "weighted_error"] = (
-        df.loc[~over_mask, "abs_error"] * CONFIDENCE_UNDER_PENALTY
+        df.loc[~over_mask, "abs_error"] * -CONFIDENCE_UNDER_BONUS
     )
     return df.groupby("player_id")["weighted_error"].mean().to_dict()

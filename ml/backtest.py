@@ -8,6 +8,7 @@ from app.core.constants import (
     CONFIDENCE_WINDOW,
     CONFIDENCE_OVER_PENALTY,
     CONFIDENCE_UNDER_PENALTY,
+    CONFIDENCE_UNDER_BONUS,
 )
 from datetime import date
 from xgboost import XGBRegressor
@@ -145,7 +146,8 @@ def walk_forward_backtest(
         over_mask = pred > actual
         weighted_error = abs_error.copy()
         weighted_error[over_mask] *= CONFIDENCE_OVER_PENALTY
-        weighted_error[~over_mask] *= CONFIDENCE_UNDER_PENALTY
+        # Under-predictions boost confidence by reducing (and flipping) error impact
+        weighted_error[~over_mask] *= -CONFIDENCE_UNDER_BONUS
 
         # Compute rolling confidence using prior per-player errors
         confidences = []
