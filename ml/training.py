@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
+import numpy as np
 
 import joblib
 import pandas as pd
@@ -30,6 +31,7 @@ def _train_model(
     features: list,
     model_prefix: str,
     use_minutes_model: bool = False,
+    use_ensemble: bool = True,
 ) -> dict:
     query = """
     SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
@@ -142,33 +144,62 @@ def _train_model(
     X_train, y_train = X[train_mask], y[train_mask]
     X_valid, y_valid = X[~train_mask], y[~train_mask]
 
-    model = XGBRegressor(
-        n_estimators=2000,
-        learning_rate=0.03,
-        max_depth=6,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        min_child_weight=2,
-        reg_alpha=0.0,
-        reg_lambda=1.0,
-        random_state=42,
-    )
+    if use_ensemble:
+        seeds = [42, 43, 44, 45, 46]
+        models = []
+        for seed in seeds:
+            model = XGBRegressor(
+                n_estimators=2000,
+                learning_rate=0.03,
+                max_depth=6,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                min_child_weight=2,
+                reg_alpha=0.0,
+                reg_lambda=1.0,
+                random_state=seed,
+            )
+            model.fit(
+                X_train,
+                y_train,
+                eval_set=[(X_valid, y_valid)],
+                verbose=False,
+            )
+            models.append(model)
 
-    model.fit(
-        X_train,
-        y_train,
-        eval_set=[(X_valid, y_valid)],
-        verbose=False,
-    )
+        preds_stack = np.column_stack([m.predict(X_valid) for m in models])
+        preds = np.median(preds_stack, axis=1)
+    else:
+        model = XGBRegressor(
+            n_estimators=2000,
+            learning_rate=0.03,
+            max_depth=6,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            min_child_weight=2,
+            reg_alpha=0.0,
+            reg_lambda=1.0,
+            random_state=42,
+        )
 
-    preds = model.predict(X_valid)
+        model.fit(
+            X_train,
+            y_train,
+            eval_set=[(X_valid, y_valid)],
+            verbose=False,
+        )
+
+        preds = model.predict(X_valid)
     mae = mean_absolute_error(y_valid, preds)
     rmse = mean_squared_error(y_valid, preds) ** 0.5
 
     MODELS_DIR.mkdir(exist_ok=True)
     today_str = datetime.now().strftime("%Y%m%d")
     model_path = MODELS_DIR / f"{model_prefix}{today_str}.pkl"
-    joblib.dump(model, model_path)
+    if use_ensemble:
+        joblib.dump(models, model_path)
+    else:
+        joblib.dump(model, model_path)
 
     return {
         "model_path": str(model_path),
@@ -195,14 +226,24 @@ def _get_engine(engine=None, database_url: Optional[str] = None):
 def train_points_model(engine=None, database_url: Optional[str] = None) -> dict:
     engine = _get_engine(engine, database_url)
     return _train_model(
-        engine, "points", POINTS_FEATURES, "xgb_points_model_", use_minutes_model=True
+        engine,
+        "points",
+        POINTS_FEATURES,
+        "xgb_points_ensemble_",
+        use_minutes_model=True,
+        use_ensemble=True,
     )
 
 
 def train_assists_model(engine=None, database_url: Optional[str] = None) -> dict:
     engine = _get_engine(engine, database_url)
     return _train_model(
-        engine, "assists", ASSISTS_FEATURES, "xgb_assists_model_", use_minutes_model=True
+        engine,
+        "assists",
+        ASSISTS_FEATURES,
+        "xgb_assists_ensemble_",
+        use_minutes_model=True,
+        use_ensemble=True,
     )
 
 
@@ -212,8 +253,9 @@ def train_rebounds_model(engine=None, database_url: Optional[str] = None) -> dic
         engine,
         "rebounds",
         REBOUNDS_FEATURES,
-        "xgb_rebounds_model_",
+        "xgb_rebounds_ensemble_",
         use_minutes_model=True,
+        use_ensemble=True,
     )
 
 
@@ -225,6 +267,7 @@ def train_minutes_model(engine=None, database_url: Optional[str] = None) -> dict
         MINUTES_FEATURES,
         "xgb_minutes_model_",
         use_minutes_model=False,
+        use_ensemble=False,
     )
 
 

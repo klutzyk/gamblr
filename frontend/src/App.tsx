@@ -225,6 +225,29 @@ function PredictionsGrid({
             <div className="prediction-stat-tag mt-3">
               <span className="badge badge-sm bg-gradient-info">{statLabel}</span>
             </div>
+            {typeof pred.pred_p10 === "number" &&
+              typeof pred.pred_p90 === "number" && (
+                <div className="prediction-band mt-3">
+                  <div className="prediction-band-row">
+                    <span className="label">Confidence band</span>
+                    <span className="value">
+                      {pred.pred_p10.toFixed(1)} – {pred.pred_p90.toFixed(1)} {unitLabel}
+                    </span>
+                  </div>
+                  <div className="prediction-range">
+                    <div
+                      className="prediction-range-fill"
+                      style={{
+                        left: "10%",
+                        right: "10%",
+                      }}
+                    ></div>
+                    <span className="prediction-marker">
+                      {pred.pred_p50?.toFixed(1) ?? pred.pred_value.toFixed(1)}
+                    </span>
+                  </div>
+                </div>
+              )}
           </div>
         </div>
       ))}

@@ -1,5 +1,6 @@
 # ml/predict.py
 import pandas as pd
+import numpy as np
 import joblib
 from pathlib import Path
 from .utils import (
@@ -129,7 +130,16 @@ def _predict_stat(
 
     model = load_latest_model(models_dir, model_prefix)
 
-    df_next_features["pred_value"] = model.predict(df_next_features[features])
+    if isinstance(model, list):
+        preds_stack = np.column_stack(
+            [m.predict(df_next_features[features]) for m in model]
+        )
+        df_next_features["pred_p10"] = np.percentile(preds_stack, 10, axis=1)
+        df_next_features["pred_p50"] = np.percentile(preds_stack, 50, axis=1)
+        df_next_features["pred_p90"] = np.percentile(preds_stack, 90, axis=1)
+        df_next_features["pred_value"] = df_next_features["pred_p50"]
+    else:
+        df_next_features["pred_value"] = model.predict(df_next_features[features])
 
     df_players = pd.read_sql(
         "SELECT id AS player_id, full_name FROM players",
@@ -150,6 +160,9 @@ def _predict_stat(
             "matchup",
             "game_date",
             "pred_value",
+            "pred_p10",
+            "pred_p50",
+            "pred_p90",
         ]
     ]
 
@@ -164,7 +177,7 @@ def predict_points(
         engine,
         day,
         POINTS_FEATURES,
-        "xgb_points_model_",
+        "xgb_points_ensemble_",
         models_dir,
         rolling_path,
     )
@@ -180,7 +193,7 @@ def predict_assists(
         engine,
         day,
         ASSISTS_FEATURES,
-        "xgb_assists_model_",
+        "xgb_assists_ensemble_",
         models_dir,
         rolling_path,
     )
@@ -196,7 +209,7 @@ def predict_rebounds(
         engine,
         day,
         REBOUNDS_FEATURES,
-        "xgb_rebounds_model_",
+        "xgb_rebounds_ensemble_",
         models_dir,
         rolling_path,
     )

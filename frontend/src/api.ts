@@ -24,6 +24,9 @@ export type PredictionRow = {
   matchup: string;
   game_date: string;
   pred_value: number;
+  pred_p10?: number;
+  pred_p50?: number;
+  pred_p90?: number;
 };
 
 const API_BASE =

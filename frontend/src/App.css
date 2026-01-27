@@ -261,6 +261,54 @@
   letter-spacing: 0.08em;
 }
 
+.prediction-band {
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.8rem;
+  background: rgba(16, 29, 26, 0.06);
+}
+
+.prediction-band-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--brand-dark);
+  margin-bottom: 0.5rem;
+}
+
+.prediction-band-row .label {
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.prediction-band-row .value {
+  font-weight: 700;
+}
+
+.prediction-range {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(16, 29, 26, 0.12);
+}
+
+.prediction-range-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: var(--brand-accent);
+}
+
+.prediction-marker {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--brand-dark);
+}
+
 @media (max-width: 991px) {
   .hero-header {
     padding-bottom: 3rem;
