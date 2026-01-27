@@ -70,6 +70,8 @@ class NBAClient:
             team_id_nullable=team_id,
             season=season,
             group_quantity=group_quantity,
+            measure_type_detailed_defense="Advanced",
+            per_mode_detailed="PerGame",
             timeout=self.timeout,
         )
         return lineups.get_data_frames()[0]
