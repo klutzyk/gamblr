@@ -4,6 +4,7 @@ import pandas as pd
 POINTS_FEATURES = [
     "avg_minutes_last5",
     "avg_minutes_last10",
+    "pred_minutes",
     "avg_points_last5",
     "avg_points_last10",
     "std_points_last10",
@@ -22,6 +23,7 @@ POINTS_FEATURES = [
 ASSISTS_FEATURES = [
     "avg_minutes_last5",
     "avg_minutes_last10",
+    "pred_minutes",
     "avg_assists_last5",
     "avg_assists_last10",
     "std_assists_last10",
@@ -40,6 +42,7 @@ ASSISTS_FEATURES = [
 REBOUNDS_FEATURES = [
     "avg_minutes_last5",
     "avg_minutes_last10",
+    "pred_minutes",
     "avg_rebounds_last5",
     "avg_rebounds_last10",
     "std_rebounds_last10",
@@ -52,6 +55,24 @@ REBOUNDS_FEATURES = [
     "team_rebounds_avg_last5",
     "team_rebounds_avg_last10",
     "opponent_rebounds_allowed_last5",
+]
+
+MINUTES_FEATURES = [
+    "avg_minutes_last5",
+    "avg_minutes_last10",
+    "avg_points_last5",
+    "avg_assists_last5",
+    "avg_rebounds_last5",
+    "days_since_last_game",
+    "is_back_to_back",
+    "is_home",
+    "games_played_season",
+    "team_points_avg_last5",
+    "team_points_avg_last10",
+    "team_assists_avg_last5",
+    "team_assists_avg_last10",
+    "team_rebounds_avg_last5",
+    "team_rebounds_avg_last10",
 ]
 
 

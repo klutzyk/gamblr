@@ -6,6 +6,7 @@ from .utils import (
     POINTS_FEATURES,
     ASSISTS_FEATURES,
     REBOUNDS_FEATURES,
+    MINUTES_FEATURES,
     compute_prediction_features,
 )
 from datetime import datetime, timedelta
@@ -96,6 +97,14 @@ def _predict_stat(
         df_team = None
 
     df_next_features = compute_prediction_features(df_next_players, df_history, df_team)
+
+    if "pred_minutes" in features:
+        minutes_model = load_latest_model(models_dir, "xgb_minutes_model_")
+        df_next_features["pred_minutes"] = minutes_model.predict(
+            df_next_features[MINUTES_FEATURES]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0)
+        )
 
     df_next_features[features] = (
         df_next_features[features].apply(pd.to_numeric, errors="coerce").fillna(0)
