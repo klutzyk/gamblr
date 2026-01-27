@@ -1,7 +1,7 @@
 # Main FastAPI application
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import health, player_stats, player_props, theodds, db_routes
+from app.api import health, player_stats, player_props, theodds, db_routes, ml_routes
 from app.db.base import Base
 from app.db.session import engine
 
@@ -36,6 +36,7 @@ app.include_router(player_props.router, prefix="/player-props", tags=["Player Pr
 app.include_router(theodds.router, prefix="/odds", tags=["Odds API"])
 app.include_router(db_routes.router, prefix="/db", tags=["DB Storage"])
 app.include_router(db_routes.router, prefix="/db", tags=["DB Storage"])
+app.include_router(ml_routes.router, prefix="/ml", tags=["ML"])
 # @app.on_event("startup")
 # async def startup():
 #     async with engine.begin() as conn:
