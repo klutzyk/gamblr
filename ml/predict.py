@@ -18,11 +18,13 @@ DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
 
 
-def load_latest_model(models_dir: Path, prefix: str):
+def load_latest_model(models_dir: Path, prefix: str, return_path: bool = False):
     models = sorted(models_dir.glob(f"{prefix}*.pkl"))
     if not models:
         raise FileNotFoundError(f"No trained models found for prefix {prefix}.")
-    return joblib.load(models[-1])
+    path = models[-1]
+    model = joblib.load(path)
+    return (model, path) if return_path else model
 
 
 def _predict_stat(
@@ -30,6 +32,7 @@ def _predict_stat(
     day: str,
     features: list,
     model_prefix: str,
+    stat_type: str,
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
 ):
@@ -78,6 +81,7 @@ def _predict_stat(
             players = df_rolling[df_rolling["team_abbreviation"] == team_abbr].copy()
             players["matchup"] = game["matchup"]
             players["game_date"] = game["game_date"]
+            players["game_id"] = game.get("game_id")
             rows.append(players)
 
     df_next_players = pd.concat(rows, ignore_index=True)
@@ -128,7 +132,7 @@ def _predict_stat(
         df_next_features[features].apply(pd.to_numeric, errors="coerce").fillna(0)
     )
 
-    model = load_latest_model(models_dir, model_prefix)
+    model, model_path = load_latest_model(models_dir, model_prefix, return_path=True)
 
     if isinstance(model, dict) and "models" in model:
         models = model["models"]
@@ -141,15 +145,38 @@ def _predict_stat(
         calibration = model.get("calibration")
         if calibration and calibration.get("abs_error_q") is not None:
             q = float(calibration["abs_error_q"])
-            df_next_features["pred_p10"] = np.maximum(pred_p50 - q, 0)
-            df_next_features["pred_p90"] = np.maximum(pred_p50 + q, 0)
+            global_mae = float(calibration.get("mae", q)) if calibration else q
+
+            recent_errors = _load_recent_player_errors(
+                engine, stat_type, df_next_features["player_id"].tolist()
+            )
+
+            def adjust_q(pid):
+                player_mae = recent_errors.get(pid)
+                if player_mae is None or player_mae <= 0:
+                    return q, None
+                mult = max(0.5, min(2.0, player_mae / global_mae))
+                confidence = max(40, min(100, int(100 * (1 / mult))))
+                return q * mult, confidence
+
+            qs, confs = zip(
+                *[
+                    adjust_q(int(pid))
+                    for pid in df_next_features["player_id"].fillna(0).tolist()
+                ]
+            )
+            df_next_features["pred_p10"] = np.maximum(pred_p50 - np.array(qs), 0)
+            df_next_features["pred_p90"] = np.maximum(pred_p50 + np.array(qs), 0)
+            df_next_features["confidence"] = confs
         else:
             df_next_features["pred_p10"] = np.percentile(preds_stack, 10, axis=1)
             df_next_features["pred_p90"] = np.percentile(preds_stack, 90, axis=1)
 
         df_next_features["pred_value"] = pred_p50
+        df_next_features["model_version"] = model_path.name
     else:
         df_next_features["pred_value"] = model.predict(df_next_features[features])
+        df_next_features["model_version"] = model_path.name
 
     df_players = pd.read_sql(
         "SELECT id AS player_id, full_name FROM players",
@@ -169,10 +196,13 @@ def _predict_stat(
             "team_abbreviation",
             "matchup",
             "game_date",
+            "game_id",
             "pred_value",
             "pred_p10",
             "pred_p50",
             "pred_p90",
+            "confidence",
+            "model_version",
         ]
     ]
 
@@ -188,6 +218,7 @@ def predict_points(
         day,
         POINTS_FEATURES,
         "xgb_points_ensemble_",
+        "points",
         models_dir,
         rolling_path,
     )
@@ -204,6 +235,7 @@ def predict_assists(
         day,
         ASSISTS_FEATURES,
         "xgb_assists_ensemble_",
+        "assists",
         models_dir,
         rolling_path,
     )
@@ -220,6 +252,28 @@ def predict_rebounds(
         day,
         REBOUNDS_FEATURES,
         "xgb_rebounds_ensemble_",
+        "rebounds",
         models_dir,
         rolling_path,
     )
+
+
+def _load_recent_player_errors(engine, stat_type: str, player_ids: list, n: int = 5):
+    if not player_ids:
+        return {}
+
+    ids = ",".join(str(int(pid)) for pid in set(player_ids))
+    query = f"""
+    SELECT player_id, abs_error, game_date
+    FROM prediction_logs
+    WHERE stat_type = '{stat_type}'
+      AND actual_value IS NOT NULL
+      AND player_id IN ({ids})
+    ORDER BY game_date DESC
+    """
+    df = pd.read_sql(query, engine)
+    if df.empty:
+        return {}
+
+    df = df.groupby("player_id").head(n)
+    return df.groupby("player_id")["abs_error"].mean().to_dict()

@@ -23,10 +23,13 @@ export type PredictionRow = {
   team_abbreviation: string;
   matchup: string;
   game_date: string;
+  game_id?: string;
   pred_value: number;
   pred_p10?: number;
   pred_p50?: number;
   pred_p90?: number;
+  confidence?: number;
+  model_version?: string;
 };
 
 const API_BASE =

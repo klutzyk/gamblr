@@ -196,6 +196,8 @@ def _train_model(
         preds = model.predict(X_valid)
     mae = mean_absolute_error(y_valid, preds)
     rmse = mean_squared_error(y_valid, preds) ** 0.5
+    if calibration is not None:
+        calibration["mae"] = float(mae)
 
     MODELS_DIR.mkdir(exist_ok=True)
     today_str = datetime.now().strftime("%Y%m%d")

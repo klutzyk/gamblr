@@ -6,3 +6,4 @@ from .player import Player
 from .player_game_stat import PlayerGameStat
 from .team_game_stat import TeamGameStat
 from .lineup_stat import LineupStat
+from .prediction_log import PredictionLog

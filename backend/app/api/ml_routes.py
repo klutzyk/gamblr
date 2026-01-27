@@ -16,6 +16,7 @@ from ml.training import (
     train_rebounds_model,
     train_minutes_model,
 )
+from app.db.store_prediction_logs import update_prediction_actuals
 
 router = APIRouter()
 
@@ -59,3 +60,24 @@ async def train_all():
         "assists": assists,
         "rebounds": rebounds,
     }
+
+
+@router.post("/evaluate/all")
+async def evaluate_all():
+    points = await run_in_threadpool(update_prediction_actuals, sync_engine, "points")
+    assists = await run_in_threadpool(update_prediction_actuals, sync_engine, "assists")
+    rebounds = await run_in_threadpool(update_prediction_actuals, sync_engine, "rebounds")
+    minutes = await run_in_threadpool(update_prediction_actuals, sync_engine, "minutes")
+    return {
+        "status": "updated",
+        "points": points,
+        "assists": assists,
+        "rebounds": rebounds,
+        "minutes": minutes,
+    }
+
+
+@router.post("/evaluate/{stat_type}")
+async def evaluate_stat(stat_type: str):
+    updated = await run_in_threadpool(update_prediction_actuals, sync_engine, stat_type)
+    return {"status": "updated", "stat_type": stat_type, "rows_updated": updated}

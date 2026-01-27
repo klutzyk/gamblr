@@ -234,6 +234,12 @@ function PredictionsGrid({
                       {pred.pred_p10.toFixed(1)} – {pred.pred_p90.toFixed(1)} {unitLabel}
                     </span>
                   </div>
+                  {typeof pred.confidence === "number" && (
+                    <div className="prediction-confidence">
+                      <span>Confidence</span>
+                      <strong>{pred.confidence}%</strong>
+                    </div>
+                  )}
                   <div className="prediction-range">
                     <div
                       className="prediction-range-fill"

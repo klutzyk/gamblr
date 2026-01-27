@@ -12,6 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from ml.predict import predict_points, predict_assists, predict_rebounds
+from app.db.store_prediction_logs import log_predictions
 
 router = APIRouter()
 client = NBAClient(timeout=15)
@@ -103,6 +104,14 @@ async def predict_points_api(
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
+    await run_in_threadpool(
+        log_predictions,
+        sync_engine,
+        df_preds,
+        "points",
+        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
+    )
+
     return df_to_dict(df_preds)
 
 
@@ -121,6 +130,14 @@ async def predict_assists_api(
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
+    await run_in_threadpool(
+        log_predictions,
+        sync_engine,
+        df_preds,
+        "assists",
+        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
+    )
+
     return df_to_dict(df_preds)
 
 
@@ -138,5 +155,13 @@ async def predict_rebounds_api(
         return {"message": f"No games found for {day}", "data": []}
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
+
+    await run_in_threadpool(
+        log_predictions,
+        sync_engine,
+        df_preds,
+        "rebounds",
+        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
+    )
 
     return df_to_dict(df_preds)
