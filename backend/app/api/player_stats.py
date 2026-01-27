@@ -11,7 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from ml.predict import predict_points
+from ml.predict import predict_points, predict_assists, predict_rebounds
 
 router = APIRouter()
 client = NBAClient(timeout=15)
@@ -96,13 +96,47 @@ async def predict_points_api(
     Predict player points for NBA games.
     day = today | tomorrow | yesterday
     """
-    # Run blocking ML prediction safely in threadpool
     df_preds = await run_in_threadpool(predict_points, sync_engine, day)
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
-    # Optional: sort by predicted points descending
-    df_preds = df_preds.sort_values("pred_points", ascending=False)
+    df_preds = df_preds.sort_values("pred_value", ascending=False)
+
+    return df_to_dict(df_preds)
+
+
+@router.get("/predictions/assists")
+async def predict_assists_api(
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday"]),
+):
+    """
+    Predict player assists for NBA games.
+    day = today | tomorrow | yesterday
+    """
+    df_preds = await run_in_threadpool(predict_assists, sync_engine, day)
+
+    if df_preds.empty:
+        return {"message": f"No games found for {day}", "data": []}
+
+    df_preds = df_preds.sort_values("pred_value", ascending=False)
+
+    return df_to_dict(df_preds)
+
+
+@router.get("/predictions/rebounds")
+async def predict_rebounds_api(
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday"]),
+):
+    """
+    Predict player rebounds for NBA games.
+    day = today | tomorrow | yesterday
+    """
+    df_preds = await run_in_threadpool(predict_rebounds, sync_engine, day)
+
+    if df_preds.empty:
+        return {"message": f"No games found for {day}", "data": []}
+
+    df_preds = df_preds.sort_values("pred_value", ascending=False)
 
     return df_to_dict(df_preds)
