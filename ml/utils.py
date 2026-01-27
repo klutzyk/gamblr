@@ -49,9 +49,7 @@ def build_team_game_features(df_raw: pd.DataFrame) -> pd.DataFrame:
             "game_date_team": "game_date",
             "team_points_opp": "opponent_points",
         }
-    )[
-        ["game_id", "team_abbreviation", "game_date", "opponent_points"]
-    ]
+    )[["game_id", "team_abbreviation", "game_date", "opponent_points"]]
 
     team_game = team_game.merge(
         opp, on=["game_id", "team_abbreviation", "game_date"], how="left"
@@ -64,9 +62,9 @@ def build_team_game_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     team_game["team_points_avg_last10"] = team_game.groupby("team_abbreviation")[
         "team_points"
     ].transform(lambda x: x.rolling(10, min_periods=1).mean().shift(1))
-    team_game["opponent_points_allowed_last5"] = team_game.groupby("team_abbreviation")[
-        "opponent_points"
-    ].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1))
+    team_game["opponent_points_allowed_last5"] = team_game.groupby(
+        "team_abbreviation"
+    )["opponent_points"].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1))
 
     return team_game[
         [
@@ -216,9 +214,7 @@ def compute_prediction_features(
             "game_date_team": "game_date",
             "team_points_opp": "opponent_points",
         }
-    )[
-        ["game_id", "team_abbreviation", "game_date", "opponent_points"]
-    ]
+    )[["game_id", "team_abbreviation", "game_date", "opponent_points"]]
 
     team_game = team_game.merge(
         opp, on=["game_id", "team_abbreviation", "game_date"], how="left"

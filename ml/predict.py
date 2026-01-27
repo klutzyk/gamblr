@@ -82,7 +82,6 @@ def predict_points(
     # Now compute features using historical stats
     df_next_features = compute_prediction_features(df_next_players, df_history)
 
-    # Features to feed the model
     # Ensure all feature columns are numeric for XGBoost
     df_next_features[POINTS_FEATURES] = (
         df_next_features[POINTS_FEATURES]
