@@ -7,6 +7,8 @@ from app.core.constants import (
     CONFIDENCE_MAX,
     CONFIDENCE_DECAY,
     CONFIDENCE_WINDOW,
+    CONFIDENCE_OVER_PENALTY,
+    CONFIDENCE_UNDER_PENALTY,
 )
 import joblib
 from pathlib import Path
@@ -276,7 +278,7 @@ def _load_recent_player_errors(
 
     ids = ",".join(str(int(pid)) for pid in set(player_ids))
     query = f"""
-    SELECT player_id, abs_error, game_date
+    SELECT player_id, pred_value, actual_value, abs_error, game_date
     FROM prediction_logs
     WHERE stat_type = '{stat_type}'
       AND actual_value IS NOT NULL
@@ -288,4 +290,12 @@ def _load_recent_player_errors(
         return {}
 
     df = df.groupby("player_id").head(n)
-    return df.groupby("player_id")["abs_error"].mean().to_dict()
+    over_mask = df["pred_value"] > df["actual_value"]
+    df["weighted_error"] = df["abs_error"]
+    df.loc[over_mask, "weighted_error"] = (
+        df.loc[over_mask, "abs_error"] * CONFIDENCE_OVER_PENALTY
+    )
+    df.loc[~over_mask, "weighted_error"] = (
+        df.loc[~over_mask, "abs_error"] * CONFIDENCE_UNDER_PENALTY
+    )
+    return df.groupby("player_id")["weighted_error"].mean().to_dict()

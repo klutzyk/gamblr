@@ -6,6 +6,8 @@ from app.core.constants import (
     CONFIDENCE_MAX,
     CONFIDENCE_DECAY,
     CONFIDENCE_WINDOW,
+    CONFIDENCE_OVER_PENALTY,
+    CONFIDENCE_UNDER_PENALTY,
 )
 from datetime import date
 from xgboost import XGBRegressor
@@ -106,7 +108,7 @@ def walk_forward_backtest(
 
     unique_dates = df_features["game_date"].dt.date.unique().tolist()
     if max_dates:
-        unique_dates = unique_dates[:max_dates]
+        unique_dates = unique_dates[-max_dates:]
 
     preds_all = []
     errors_by_player: dict[int, list[float]] = {}
@@ -140,6 +142,10 @@ def walk_forward_backtest(
         pred = model.predict(X_test)
         actual = df_features.loc[test_mask, stat_type].to_numpy()
         abs_error = np.abs(actual - pred)
+        over_mask = pred > actual
+        weighted_error = abs_error.copy()
+        weighted_error[over_mask] *= CONFIDENCE_OVER_PENALTY
+        weighted_error[~over_mask] *= CONFIDENCE_UNDER_PENALTY
 
         # Compute rolling confidence using prior per-player errors
         confidences = []
@@ -164,7 +170,7 @@ def walk_forward_backtest(
                 bands.append(band)
 
         # Update error history after confidence computed
-        for pid, err in zip(df_features.loc[test_mask, "player_id"], abs_error):
+        for pid, err in zip(df_features.loc[test_mask, "player_id"], weighted_error):
             pid = int(pid)
             errors_by_player.setdefault(pid, []).append(float(err))
             global_errors.append(float(err))
