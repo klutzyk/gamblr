@@ -18,5 +18,9 @@ class TeamGameStat(Base):
     assists = Column(Float)
     rebounds = Column(Float)
     turnovers = Column(Float)
+    fgm = Column(Float)
+    fga = Column(Float)
+    fg3m = Column(Float)
+    fg3a = Column(Float)
 
     __table_args__ = (UniqueConstraint("team_id", "game_id", name="uq_team_game"),)

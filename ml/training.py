@@ -51,7 +51,8 @@ def _train_model(
         df_team = pd.read_sql(
             """
             SELECT game_id, team_abbreviation, game_date,
-                   points AS team_points, assists AS team_assists, rebounds AS team_rebounds
+                   points AS team_points, assists AS team_assists, rebounds AS team_rebounds,
+                   fgm, fga, fg3m, fg3a
             FROM team_game_stats
             """,
             engine,
