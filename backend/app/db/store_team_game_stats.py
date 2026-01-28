@@ -22,20 +22,35 @@ async def save_team_game_stats(
         )
         df = df[df["GAME_DATE"] > last_game_date]
 
+    # Map existing rows for in-place updates when new columns are added.
+    existing_rows = {}
+    if last_game_date is None:
+        existing_result = await db.execute(
+            select(TeamGameStat).where(TeamGameStat.team_id == team_id)
+        )
+        existing_rows = {row[0].game_id: row[0] for row in existing_result.all()}
+
     for _, row in df.iterrows():
         game_id = row.get("Game_ID") or row.get("GAME_ID")
         if not game_id:
             continue
 
-        if last_game_date is None:
-            existing = await db.execute(
-                select(TeamGameStat).where(
-                    TeamGameStat.team_id == team_id,
-                    TeamGameStat.game_id == str(game_id),
-                )
-            )
-            if existing.scalar_one_or_none():
-                continue
+        existing = existing_rows.get(str(game_id))
+        if existing:
+            has_updates = False
+            for col, key in [
+                ("fgm", "FGM"),
+                ("fga", "FGA"),
+                ("fg3m", "FG3M"),
+                ("fg3a", "FG3A"),
+            ]:
+                value = row.get(key)
+                if value is not None and getattr(existing, col) is None:
+                    setattr(existing, col, value)
+                    has_updates = True
+            if has_updates:
+                inserted += 1
+            continue
 
         game_date = row.get("GAME_DATE")
         if isinstance(game_date, str):
@@ -58,6 +73,10 @@ async def save_team_game_stats(
                 assists=row.get("AST"),
                 rebounds=row.get("REB"),
                 turnovers=row.get("TOV"),
+                fgm=row.get("FGM"),
+                fga=row.get("FGA"),
+                fg3m=row.get("FG3M"),
+                fg3a=row.get("FG3A"),
             )
         )
         inserted += 1

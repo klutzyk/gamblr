@@ -15,6 +15,8 @@ from sqlalchemy import select, func
 from datetime import datetime
 from app.models.player_game_stat import PlayerGameStat
 from app.models.team_game_stat import TeamGameStat
+from app.models.player import Player
+from app.models.game_schedule import GameSchedule
 import logging
 import asyncio
 import httpx
@@ -167,7 +169,29 @@ async def update_last_n_games_since(
     except ValueError:
         raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
 
-    active_players = players.get_active_players()
+    schedule_result = await db.execute(
+        select(
+            GameSchedule.home_team_abbr,
+            GameSchedule.away_team_abbr,
+        ).where(GameSchedule.game_date > since_date)
+    )
+    teams_with_games = set()
+    for home_abbr, away_abbr in schedule_result.all():
+        if home_abbr:
+            teams_with_games.add(home_abbr)
+        if away_abbr:
+            teams_with_games.add(away_abbr)
+
+    if teams_with_games:
+        players_result = await db.execute(
+            select(Player).where(Player.team_abbreviation.in_(teams_with_games))
+        )
+        active_players = [
+            {"id": p.id, "full_name": p.full_name}
+            for p in players_result.scalars().all()
+        ]
+    else:
+        active_players = players.get_active_players()
     saved = 0
     skipped = 0
     failed = 0
@@ -240,6 +264,170 @@ async def update_last_n_games_since(
         "players_failed": failed,
         "total_new_games_inserted": total_new_games,
         "since": since,
+    }
+
+
+@router.post("/last-n/backfill-shooting")
+async def backfill_shooting_stats(
+    season: str = "2025-26",
+    db: AsyncSession = Depends(get_db),
+    limit: int | None = None,
+):
+    """
+    One-off backfill for players whose player_game_stats rows are missing shooting fields.
+    Only refetches those players and updates missing columns (no full reinsert).
+    """
+    result = await db.execute(
+        select(PlayerGameStat.player_id)
+        .where(
+            (PlayerGameStat.fg3m.is_(None))
+            | (PlayerGameStat.fg3a.is_(None))
+            | (PlayerGameStat.fgm.is_(None))
+            | (PlayerGameStat.fga.is_(None))
+        )
+        .distinct()
+    )
+    player_ids = [row[0] for row in result.all()]
+    if limit:
+        player_ids = player_ids[:limit]
+
+    saved = 0
+    skipped = 0
+    failed = 0
+    total_updates = 0
+
+    for player_id in player_ids:
+        player = await db.get(Player, player_id)
+        player_name = player.full_name if player else str(player_id)
+        team_abbr = player.team_abbreviation if player else None
+
+        for attempt in range(3):
+            try:
+                async with throttler:
+                    df = nba_client.fetch_player_game_log(player_id, season)
+                break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for {player_name}: {e}")
+                await asyncio.sleep(0.5)
+        else:
+            logger.error(f"All retries failed for {player_name}")
+            failed += 1
+            continue
+
+        if df.empty:
+            skipped += 1
+            continue
+
+        try:
+            updates = await save_last_n_games(
+                player_id=player_id,
+                player_name=player_name,
+                team_abbr=team_abbr,
+                df=df,
+                db=db,
+            )
+            if updates > 0:
+                saved += 1
+                total_updates += updates
+            else:
+                skipped += 1
+        except Exception as e:
+            logger.warning(f"Failed backfill for {player_name}: {e}")
+            failed += 1
+            continue
+
+        await asyncio.sleep(0.05)
+
+    return {
+        "status": "completed",
+        "players_targeted": len(player_ids),
+        "players_saved": saved,
+        "players_skipped": skipped,
+        "players_failed": failed,
+        "total_rows_updated": total_updates,
+    }
+
+
+@router.post("/team-games/backfill-shooting")
+async def backfill_team_shooting_stats(
+    season: str = "2025-26",
+    db: AsyncSession = Depends(get_db),
+    limit: int | None = None,
+):
+    """
+    One-off backfill for teams whose team_game_stats rows are missing shooting fields.
+    Only refetches those teams and updates missing columns.
+    """
+    result = await db.execute(
+        select(TeamGameStat.team_id)
+        .where(
+            (TeamGameStat.fg3m.is_(None))
+            | (TeamGameStat.fg3a.is_(None))
+            | (TeamGameStat.fgm.is_(None))
+            | (TeamGameStat.fga.is_(None))
+        )
+        .distinct()
+    )
+    team_ids = [row[0] for row in result.all()]
+    if limit:
+        team_ids = team_ids[:limit]
+
+    saved = 0
+    skipped = 0
+    failed = 0
+    total_updates = 0
+
+    teams_list = nba_teams.get_teams()
+    team_meta = {t["id"]: t for t in teams_list}
+
+    for team_id in team_ids:
+        team = team_meta.get(team_id, {})
+        team_name = team.get("full_name", str(team_id))
+        team_abbr = team.get("abbreviation")
+
+        for attempt in range(3):
+            try:
+                async with throttler:
+                    df = nba_client.fetch_team_game_log(team_id, season)
+                break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for {team_name}: {e}")
+                await asyncio.sleep(0.5)
+        else:
+            logger.error(f"All retries failed for {team_name}")
+            failed += 1
+            continue
+
+        if df.empty:
+            skipped += 1
+            continue
+
+        try:
+            updates = await save_team_game_stats(
+                team_id=team_id,
+                df=df,
+                db=db,
+                team_abbr=team_abbr,
+            )
+            if updates > 0:
+                saved += 1
+                total_updates += updates
+            else:
+                skipped += 1
+        except Exception as e:
+            logger.warning(f"Failed backfill for {team_name}: {e}")
+            failed += 1
+            continue
+
+        await asyncio.sleep(0.05)
+
+    return {
+        "status": "completed",
+        "teams_targeted": len(team_ids),
+        "teams_saved": saved,
+        "teams_skipped": skipped,
+        "teams_failed": failed,
+        "total_rows_updated": total_updates,
     }
 
 
