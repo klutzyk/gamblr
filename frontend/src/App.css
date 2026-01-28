@@ -412,6 +412,50 @@
   gap: 0.45rem;
 }
 
+.prediction-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.85rem;
+  background: rgba(16, 29, 26, 0.05);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  max-width: fit-content;
+}
+
+.prediction-line .label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--brand-dark);
+  opacity: 0.8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.prediction-line .form-select {
+  border: none;
+  background: transparent;
+  padding: 0.25rem 1.5rem 0.25rem 0.5rem;
+}
+
+.prediction-select-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: rgba(16, 29, 26, 0.06);
+}
+
+.prediction-select-group .form-select {
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.35rem 1.8rem 0.35rem 0.7rem;
+}
+
 .team-chip {
   border: 1px solid rgba(15, 23, 42, 0.1);
   background: rgba(16, 29, 26, 0.04);

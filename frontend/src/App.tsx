@@ -380,6 +380,7 @@ function App() {
   >("pred_value_desc");
   const [predictionSearch, setPredictionSearch] = useState("");
   const [predictionTeam, setPredictionTeam] = useState("all");
+  const [predictionLine, setPredictionLine] = useState<number | "all">("all");
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -498,6 +499,16 @@ function App() {
   useEffect(() => {
     handleLoadPredictions(true);
   }, [predictionDay, predictionStat]);
+
+  useEffect(() => {
+    const defaults: Record<typeof predictionStat, number> = {
+      points: 5,
+      assists: 2,
+      rebounds: 2,
+      threept: 1,
+    };
+    setPredictionLine(defaults[predictionStat]);
+  }, [predictionStat]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -843,6 +854,12 @@ function App() {
         );
       case "predictions":
         const activePrediction = predictionConfig[predictionStat];
+        const lineOptions: Record<typeof predictionStat, number[]> = {
+          points: [5, 10, 15, 20, 25, 30],
+          assists: [2, 3, 4, 6, 7, 10],
+          rebounds: [2, 3, 4, 6, 7, 10],
+          threept: [1, 2, 3, 4, 5],
+        };
         const teamOptions = activePrediction.state.data
           ? Array.from(
               new Set(
@@ -856,8 +873,8 @@ function App() {
         const filteredPredictions = activePrediction.state.data
           ? activePrediction.state.data.filter((row) => {
               if (
-                predictionStat !== "threept" &&
-                (row.pred_value ?? 0) < 3
+                predictionLine !== "all" &&
+                (row.pred_value ?? 0) < predictionLine
               ) {
                 return false;
               }
@@ -884,9 +901,6 @@ function App() {
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
               <div>
                 <h4 className="mb-1">Prediction Focus</h4>
-                <p className="text-sm text-secondary mb-0">
-                  Live projections for points, assists, and rebounds.
-                </p>
               </div>
               <div className="d-flex flex-wrap gap-2 align-items-center">
                 <div className="stat-toggle">
@@ -902,38 +916,56 @@ function App() {
                     </button>
                   ))}
                 </div>
-                <select
-                  className="form-select form-select-sm"
-                  value={predictionDay}
-                  onChange={(e) =>
-                    setPredictionDay(
-                      e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
-                    )
-                  }
-                  style={{ maxWidth: "150px" }}
-                >
-                  <option value="auto">Auto (ET)</option>
-                  <option value="today">Today (ET)</option>
-                  <option value="tomorrow">Tomorrow (ET)</option>
-                  <option value="yesterday">Yesterday (ET)</option>
-                </select>
-                <select
-                  className="form-select form-select-sm"
-                  value={predictionSort}
-                  onChange={(e) =>
-                    setPredictionSort(
-                      e.target.value as
-                        | "pred_value_desc"
-                        | "pred_value_asc"
-                        | "confidence_desc"
-                    )
-                  }
-                  style={{ maxWidth: "170px" }}
-                >
-                  <option value="pred_value_desc">Value (High → Low)</option>
-                  <option value="pred_value_asc">Value (Low → High)</option>
-                  <option value="confidence_desc">Confidence (High → Low)</option>
-                </select>
+                <div className="prediction-select-group">
+                  <select
+                    className="form-select form-select-sm"
+                    value={predictionDay}
+                    onChange={(e) =>
+                      setPredictionDay(
+                        e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                      )
+                    }
+                  >
+                    <option value="auto">Auto (ET)</option>
+                    <option value="today">Today (ET)</option>
+                    <option value="tomorrow">Tomorrow (ET)</option>
+                    <option value="yesterday">Yesterday (ET)</option>
+                  </select>
+                  <select
+                    className="form-select form-select-sm"
+                    value={predictionLine}
+                    onChange={(e) => {
+                      const value =
+                        e.target.value === "all"
+                          ? "all"
+                          : Number(e.target.value);
+                      setPredictionLine(value);
+                    }}
+                  >
+                    <option value="all">All lines</option>
+                    {lineOptions[predictionStat].map((line) => (
+                      <option key={line} value={line}>
+                        {line}+
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="form-select form-select-sm"
+                    value={predictionSort}
+                    onChange={(e) =>
+                      setPredictionSort(
+                        e.target.value as
+                          | "pred_value_desc"
+                          | "pred_value_asc"
+                          | "confidence_desc"
+                      )
+                    }
+                  >
+                    <option value="pred_value_desc">Value (High &gt;&gt; Low)</option>
+                    <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
+                    <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
+                  </select>
+                </div>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
                   onClick={handleLoadPredictions}
