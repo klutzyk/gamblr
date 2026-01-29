@@ -9,6 +9,7 @@ from app.db.store_team_game_stats import save_team_game_stats
 from app.db.store_lineup_stats import save_lineup_stats
 from app.db.store_teams import load_teams
 from app.db.store_schedule import load_schedule
+from app.db.under_risk import compute_under_risk
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as nba_teams
 from sqlalchemy import select, func
@@ -169,28 +170,53 @@ async def update_last_n_games_since(
     except ValueError:
         raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
 
+    today = datetime.utcnow().date()
     schedule_result = await db.execute(
-        select(
-            GameSchedule.home_team_abbr,
-            GameSchedule.away_team_abbr,
-        ).where(GameSchedule.game_date > since_date)
-    )
-    teams_with_games = set()
-    for home_abbr, away_abbr in schedule_result.all():
-        if home_abbr:
-            teams_with_games.add(home_abbr)
-        if away_abbr:
-            teams_with_games.add(away_abbr)
-
-    if teams_with_games:
-        players_result = await db.execute(
-            select(Player).where(Player.team_abbreviation.in_(teams_with_games))
+        select(GameSchedule.game_id, GameSchedule.game_date).where(
+            GameSchedule.game_date > since_date,
+            GameSchedule.game_date <= today,
         )
+    )
+    game_rows = schedule_result.all()
+    player_map = {}
+
+    if game_rows:
+        for game_id, _game_date in game_rows:
+            if not game_id:
+                continue
+            for attempt in range(3):
+                try:
+                    async with throttler:
+                        game_players = nba_client.fetch_game_players(game_id)
+                    break
+                except Exception as e:
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed for game {game_id}: {e}"
+                    )
+                    await asyncio.sleep(0.5)
+            else:
+                logger.error(f"All retries failed for game {game_id}")
+                continue
+
+            for p in game_players:
+                pid = p.get("PLAYER_ID")
+                name = p.get("PLAYER_NAME")
+                if pid:
+                    player_map[int(pid)] = name or player_map.get(int(pid)) or str(pid)
+
+    if player_map:
         active_players = [
-            {"id": p.id, "full_name": p.full_name}
-            for p in players_result.scalars().all()
+            {"id": pid, "full_name": name} for pid, name in player_map.items()
         ]
+        logger.info(
+            f"update_last_n_games_since: {len(game_rows)} games, "
+            f"{len(active_players)} players since {since_date}"
+        )
     else:
+        logger.warning(
+            "update_last_n_games_since: no recent games found in schedule; "
+            "falling back to active players list"
+        )
         active_players = players.get_active_players()
     saved = 0
     skipped = 0
@@ -682,3 +708,46 @@ async def load_season_schedule(
     except Exception as e:
         logger.error(f"Error loading schedule for season {season}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/under-risk/recalc")
+async def recalc_under_risk(
+    stat_type: str,
+    window_n: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Recalculate under-risk for a stat_type using prediction_logs + actuals.
+    """
+    try:
+        return await compute_under_risk(db, stat_type, window_n)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error computing under-risk for {stat_type}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/under-risk/recalc-all")
+async def recalc_under_risk_all(
+    window_n: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Recalculate under-risk for all supported stat types.
+    """
+    stat_types = ["points", "assists", "rebounds", "threept"]
+    results = {}
+
+    for stat_type in stat_types:
+        try:
+            results[stat_type] = await compute_under_risk(db, stat_type, window_n)
+        except Exception as e:
+            logger.error(f"Error computing under-risk for {stat_type}: {e}")
+            results[stat_type] = {"status": "error", "detail": str(e)}
+
+    return {
+        "status": "completed",
+        "window_n": window_n,
+        "results": results,
+    }
