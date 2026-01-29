@@ -92,7 +92,13 @@ def fetch_last_under(engine, stat_type: str, player_ids: list[int]):
             WHERE is_under = 1
         )
         SELECT lu.player_id, lu.game_date, lu.actual_value, lu.rn AS last_under_rn,
-               pgs.matchup, pgs.minutes
+               pgs.matchup, pgs.minutes,
+               (
+                 SELECT COUNT(*)
+                 FROM player_game_stats pgs2
+                 WHERE pgs2.player_id = lu.player_id
+                   AND pgs2.game_date > lu.game_date
+               ) AS games_after
         FROM last_under lu
         LEFT JOIN player_game_stats pgs
           ON pgs.player_id = lu.player_id AND pgs.game_id = lu.game_id
@@ -107,13 +113,90 @@ def fetch_last_under(engine, stat_type: str, player_ids: list[int]):
     for r in rows:
         player_id = int(r[0])
         last_under_rn = int(r[3]) if r[3] is not None else None
+        games_after = int(r[6]) if r[6] is not None else None
         result[player_id] = {
             "last_under_date": r[1],
             "last_under_value": r[2],
-            "last_under_games_ago": (last_under_rn - 1) if last_under_rn else None,
+            "last_under_games_ago": (
+                games_after if games_after is not None else (last_under_rn - 1)
+            ),
             "last_under_matchup": r[4],
             "last_under_minutes": r[5],
         }
+    return result
+
+
+def fetch_player_games_for_stat(engine, stat_type: str, player_ids: list[int]):
+    stat_column = {
+        "points": "points",
+        "assists": "assists",
+        "rebounds": "rebounds",
+        "threept": "fg3m",
+    }.get(stat_type)
+    if not stat_column or not player_ids:
+        return pd.DataFrame()
+
+    ids = ",".join(str(int(pid)) for pid in set(player_ids))
+    query = f"""
+    SELECT player_id, game_date, matchup, minutes, {stat_column} AS stat_value
+    FROM player_game_stats
+    WHERE player_id IN ({ids})
+      AND game_date IS NOT NULL
+      AND {stat_column} IS NOT NULL
+    """
+    return pd.read_sql(query, engine)
+
+
+def compute_last_under_by_threshold(
+    engine,
+    df_preds: pd.DataFrame,
+    stat_type: str,
+):
+    if df_preds.empty:
+        return {}
+
+    if stat_type == "points":
+        thresholds = df_preds.apply(
+            lambda r: (r["pred_p10"] + r["pred_value"]) / 2.0
+            if pd.notnull(r.get("pred_p10")) and pd.notnull(r.get("pred_value"))
+            else np.nan,
+            axis=1,
+        )
+    else:
+        thresholds = df_preds["pred_p10"]
+
+    player_ids = df_preds["player_id"].tolist()
+    games = fetch_player_games_for_stat(engine, stat_type, player_ids)
+    if games.empty:
+        return {}
+
+    games["game_date"] = pd.to_datetime(games["game_date"])
+    games = games.sort_values(["player_id", "game_date"], ascending=[True, False])
+
+    threshold_map = {
+        int(pid): float(thresholds.iloc[idx])
+        for idx, pid in enumerate(df_preds["player_id"].tolist())
+        if pd.notnull(thresholds.iloc[idx])
+    }
+
+    result = {}
+    for pid, group in games.groupby("player_id"):
+        threshold = threshold_map.get(int(pid))
+        if threshold is None:
+            continue
+        group = group.reset_index(drop=True)
+        under_rows = group[group["stat_value"] < threshold]
+        if under_rows.empty:
+            continue
+        row = under_rows.iloc[0]
+        result[int(pid)] = {
+            "last_under_date": row["game_date"].date(),
+            "last_under_value": row["stat_value"],
+            "last_under_games_ago": int(under_rows.index[0]),
+            "last_under_matchup": row["matchup"],
+            "last_under_minutes": row["minutes"],
+        }
+
     return result
 
 
@@ -284,9 +367,7 @@ async def predict_points_api(
     under_risk = fetch_under_risk(
         sync_engine, "points", df_preds["player_id"].tolist()
     )
-    last_under = fetch_last_under(
-        sync_engine, "points", df_preds["player_id"].tolist()
-    )
+    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "points")
     good_ids = fetch_good_player_ids(sync_engine, "points")
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
@@ -340,9 +421,7 @@ async def predict_assists_api(
     under_risk = fetch_under_risk(
         sync_engine, "assists", df_preds["player_id"].tolist()
     )
-    last_under = fetch_last_under(
-        sync_engine, "assists", df_preds["player_id"].tolist()
-    )
+    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "assists")
     good_ids = fetch_good_player_ids(sync_engine, "assists")
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
@@ -396,9 +475,7 @@ async def predict_rebounds_api(
     under_risk = fetch_under_risk(
         sync_engine, "rebounds", df_preds["player_id"].tolist()
     )
-    last_under = fetch_last_under(
-        sync_engine, "rebounds", df_preds["player_id"].tolist()
-    )
+    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "rebounds")
     good_ids = fetch_good_player_ids(sync_engine, "rebounds")
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
@@ -452,9 +529,7 @@ async def predict_threept_api(
     under_risk = fetch_under_risk(
         sync_engine, "threept", df_preds["player_id"].tolist()
     )
-    last_under = fetch_last_under(
-        sync_engine, "threept", df_preds["player_id"].tolist()
-    )
+    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "threept")
     good_ids = fetch_good_player_ids(sync_engine, "threept")
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
