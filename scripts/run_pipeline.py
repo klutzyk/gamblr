@@ -44,7 +44,8 @@ def main():
     print("Gamblr pipeline runner")
     base_url = prompt("API base URL", "http://127.0.0.1:8000")
     since_date = prompt("Ingest since date (YYYY-MM-DD, empty to skip)", "")
-    backfill_shooting = prompt_yes_no("Backfill missing shooting stats", True)
+    update_actuals = prompt_yes_no("Update prediction actuals (/ml/evaluate/all)", True)
+    recalc_under_risk = prompt_yes_no("Recalculate under-risk metrics", True)
     run_backtests = prompt_yes_no("Run backtests (assists/rebounds/threept)", False)
 
     if since_date:
@@ -62,11 +63,9 @@ def main():
         else:
             print("Skipping ingest step.")
 
-        if backfill_shooting:
-            print("Backfilling player shooting stats (missing columns)...")
-            call_api(client, "POST", "/db/last-n/backfill-shooting")
-            print("Backfilling team shooting stats (missing columns)...")
-            call_api(client, "POST", "/db/team-games/backfill-shooting")
+        if update_actuals:
+            print("Updating prediction actuals...")
+            call_api(client, "POST", "/ml/evaluate/all")
 
     print("Updating rolling features CSV...")
     engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
@@ -77,9 +76,13 @@ def main():
         print("Training models...")
         call_api(client, "POST", "/ml/train/all")
 
+        if recalc_under_risk:
+            print("Recalculating under-risk metrics...")
+            call_api(client, "POST", "/db/under-risk/recalc-all")
+
         if run_backtests:
             print("Running backtests...")
-            for stat in ("assists", "rebounds", "threept"):
+            for stat in ("points", "assists", "rebounds", "threept"):
                 call_api(
                     client,
                     "POST",
