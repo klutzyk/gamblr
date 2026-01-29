@@ -82,7 +82,7 @@ def main():
 
         if run_backtests:
             print("Running backtests...")
-            for stat in ("assists", "rebounds", "threept"):
+            for stat in ("points", "assists", "rebounds", "threept"):
                 call_api(
                     client,
                     "POST",

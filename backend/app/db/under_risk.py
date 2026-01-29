@@ -7,7 +7,7 @@ STAT_TYPES = {"points", "assists", "rebounds", "threept"}
 
 
 def _threshold_type_for_stat(stat_type: str) -> str:
-    return "pred_value" if stat_type == "points" else "pred_p10"
+    return "midpoint" if stat_type == "points" else "pred_p10"
 
 
 async def compute_under_risk(
@@ -31,7 +31,7 @@ async def compute_under_risk(
                   AND actual_value IS NOT NULL
                   AND game_date IS NOT NULL
                   AND (
-                        (:threshold_type = 'pred_value' AND pred_value IS NOT NULL)
+                        (:threshold_type = 'midpoint' AND pred_value IS NOT NULL AND pred_p10 IS NOT NULL)
                      OR (:threshold_type = 'pred_p10' AND pred_p10 IS NOT NULL)
                   )
             ),
@@ -46,7 +46,7 @@ async def compute_under_risk(
                        CASE
                            WHEN actual_value < (
                                CASE
-                                   WHEN :threshold_type = 'pred_value' THEN pred_value
+                                   WHEN :threshold_type = 'midpoint' THEN (pred_p10 + pred_value) / 2.0
                                    ELSE pred_p10
                                END
                            ) THEN 1
