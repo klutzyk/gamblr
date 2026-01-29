@@ -4,6 +4,7 @@ from nba_api.stats.endpoints import (
     playergamelog,
     teamgamelog,
     leaguedashlineups,
+    boxscoretraditionalv2,
 )
 from app.services.cache import cached
 
@@ -75,3 +76,17 @@ class NBAClient:
             timeout=self.timeout,
         )
         return lineups.get_data_frames()[0]
+
+    @cached(ttl_seconds=60 * 15)
+    def fetch_game_players(self, game_id: str):
+        box = boxscoretraditionalv2.BoxScoreTraditionalV2(
+            game_id=game_id,
+            timeout=self.timeout,
+        )
+        df = box.get_data_frames()[0]
+        if df.empty:
+            return []
+        cols = [c for c in ["PLAYER_ID", "PLAYER_NAME"] if c in df.columns]
+        if not cols:
+            return []
+        return df[cols].dropna().to_dict(orient="records")

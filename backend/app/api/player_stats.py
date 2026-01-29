@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query
 from ..services.nba_client import NBAClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from app.core.config import settings
 from fastapi.concurrency import run_in_threadpool
 import sys
@@ -22,6 +22,23 @@ sync_engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
 # Helper function to convert DataFrame to list of dicts for API response
 def df_to_dict(df):
     return df.to_dict(orient="records")
+
+
+def fetch_under_risk(engine, stat_type: str, player_ids: list[int]):
+    if not player_ids:
+        return {}
+    ids = ",".join(str(int(pid)) for pid in set(player_ids))
+    query = text(
+        f"""
+        SELECT player_id, under_rate, sample_size
+        FROM player_under_risk
+        WHERE stat_type = :stat_type
+          AND player_id IN ({ids})
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"stat_type": stat_type}).fetchall()
+    return {int(r[0]): {"under_rate": r[1], "sample_size": r[2]} for r in rows}
 
 
 @router.get("/top_scorers")
@@ -102,6 +119,16 @@ async def predict_points_api(
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
+    under_risk = fetch_under_risk(
+        sync_engine, "points", df_preds["player_id"].tolist()
+    )
+    df_preds["under_risk"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
+    )
+    df_preds["under_risk_n"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
+
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
     await run_in_threadpool(
@@ -127,6 +154,16 @@ async def predict_assists_api(
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
+
+    under_risk = fetch_under_risk(
+        sync_engine, "assists", df_preds["player_id"].tolist()
+    )
+    df_preds["under_risk"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
+    )
+    df_preds["under_risk_n"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
@@ -154,6 +191,16 @@ async def predict_rebounds_api(
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
+    under_risk = fetch_under_risk(
+        sync_engine, "rebounds", df_preds["player_id"].tolist()
+    )
+    df_preds["under_risk"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
+    )
+    df_preds["under_risk_n"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
+
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
     await run_in_threadpool(
@@ -179,6 +226,16 @@ async def predict_threept_api(
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
+
+    under_risk = fetch_under_risk(
+        sync_engine, "threept", df_preds["player_id"].tolist()
+    )
+    df_preds["under_risk"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
+    )
+    df_preds["under_risk_n"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
