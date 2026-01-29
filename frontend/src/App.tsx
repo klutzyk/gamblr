@@ -174,10 +174,12 @@ function PredictionsGrid({
   predictions,
   statLabel,
   unitLabel,
+  statKey,
 }: {
   predictions: PredictionRow[];
   statLabel: string;
   unitLabel: string;
+  statKey: "points" | "assists" | "rebounds" | "threept";
 }) {
   const TEAM_ID_BY_ABBR: Record<string, number> = {
     ATL: 1610612737,
@@ -259,6 +261,50 @@ function PredictionsGrid({
           else if (confidenceValue >= 55) confidenceClass = "confidence-mid";
           else confidenceClass = "confidence-low";
         }
+        const underRiskValue =
+          typeof pred.under_risk === "number" ? pred.under_risk : null;
+        let underRiskClass = "risk-unknown";
+        if (underRiskValue !== null) {
+          if (underRiskValue >= 0.6) underRiskClass = "risk-high";
+          else if (underRiskValue >= 0.35) underRiskClass = "risk-mid";
+          else underRiskClass = "risk-low";
+        }
+        const underRiskPct =
+          underRiskValue !== null ? `${(underRiskValue * 100).toFixed(0)}%` : "n/a";
+        const underThresholdValue =
+          statKey === "points"
+            ? typeof pred.pred_p10 === "number" && typeof pred.pred_value === "number"
+              ? (pred.pred_p10 + pred.pred_value) / 2
+              : pred.pred_value
+            : typeof pred.pred_p10 === "number"
+              ? pred.pred_p10
+              : null;
+        const underThresholdText =
+          typeof underThresholdValue === "number"
+            ? `${underThresholdValue.toFixed(1)} ${unitLabel}`
+            : "n/a";
+        const lastUnderText =
+          typeof pred.last_under_value === "number"
+            ? `${pred.last_under_value.toFixed(1)} ${unitLabel}`
+            : "n/a";
+        const lastUnderMeta =
+          typeof pred.last_under_games_ago === "number"
+            ? `${pred.last_under_games_ago}g ago`
+            : null;
+        const lastUnderMatchup =
+          typeof pred.last_under_matchup === "string" && pred.last_under_matchup.length
+            ? pred.last_under_matchup
+            : null;
+        const lastUnderMinutes =
+          typeof pred.last_under_minutes === "number"
+            ? `${pred.last_under_minutes.toFixed(0)} min`
+            : null;
+        const lastUnderBits = [
+          lastUnderMeta,
+          lastUnderMatchup,
+          lastUnderText !== "n/a" ? lastUnderText : null,
+          lastUnderMinutes,
+        ].filter(Boolean);
         const headshotUrl = getHeadshotUrl(
           pred.player_id,
           pred.team_id,
@@ -339,6 +385,32 @@ function PredictionsGrid({
                   </div>
                 </div>
               )}
+            <div className={`under-risk-card mt-3 ${underRiskClass}`}>
+              <div className="under-risk-row">
+                <span className="label">
+                  Under <strong className="under-risk-x">{underThresholdText}</strong> next game
+                </span>
+                <span className="value">{underRiskPct}</span>
+              </div>
+              {lastUnderMeta && (
+                <div className="under-risk-meta">
+                  <span className="under-risk-last">
+                    Last under: {lastUnderBits.join(" • ")}
+                  </span>
+                </div>
+              )}
+              <div className="under-risk-bar">
+                <div
+                  className="under-risk-fill"
+                  style={{
+                    width:
+                      underRiskValue !== null
+                        ? `${Math.min(100, Math.max(0, underRiskValue * 100))}%`
+                        : "0%",
+                  }}
+                ></div>
+              </div>
+            </div>
           </div>
         </div>
         );
@@ -1035,19 +1107,20 @@ function App() {
               </div>
             )}
             {activePrediction.state.data && (
-              <PredictionsGrid
-                predictions={[...filteredPredictions].sort((a, b) => {
-                  if (predictionSort === "pred_value_asc") {
-                    return (a.pred_value ?? 0) - (b.pred_value ?? 0);
-                  }
-                  if (predictionSort === "confidence_desc") {
-                    return (b.confidence ?? 0) - (a.confidence ?? 0);
-                  }
-                  return (b.pred_value ?? 0) - (a.pred_value ?? 0);
-                })}
-                statLabel={activePrediction.label}
-                unitLabel={activePrediction.unit}
-              />
+            <PredictionsGrid
+              predictions={[...filteredPredictions].sort((a, b) => {
+                if (predictionSort === "pred_value_asc") {
+                  return (a.pred_value ?? 0) - (b.pred_value ?? 0);
+                }
+                if (predictionSort === "confidence_desc") {
+                  return (b.confidence ?? 0) - (a.confidence ?? 0);
+                }
+                return (b.pred_value ?? 0) - (a.pred_value ?? 0);
+              })}
+              statLabel={activePrediction.label}
+              unitLabel={activePrediction.unit}
+              statKey={predictionStat}
+            />
             )}
           </div>
         );

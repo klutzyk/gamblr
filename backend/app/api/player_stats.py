@@ -52,6 +52,71 @@ def fetch_under_risk(engine, stat_type: str, player_ids: list[int]):
     return {int(r[0]): {"under_rate": r[1], "sample_size": r[2]} for r in rows}
 
 
+def fetch_last_under(engine, stat_type: str, player_ids: list[int]):
+    if not player_ids:
+        return {}
+    threshold_type = "midpoint" if stat_type == "points" else "pred_p10"
+    ids = ",".join(str(int(pid)) for pid in set(player_ids))
+    query = text(
+        f"""
+        WITH ranked AS (
+            SELECT player_id, game_date, actual_value, pred_value, pred_p10, game_id,
+                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC) AS rn
+            FROM prediction_logs
+            WHERE stat_type = :stat_type
+              AND actual_value IS NOT NULL
+              AND game_date IS NOT NULL
+              AND (
+                    (:threshold_type = 'midpoint' AND pred_value IS NOT NULL AND pred_p10 IS NOT NULL)
+                 OR (:threshold_type = 'pred_p10' AND pred_p10 IS NOT NULL)
+              )
+              AND player_id IN ({ids})
+        ),
+        undered AS (
+            SELECT player_id, game_date, actual_value, rn, game_id,
+                   CASE
+                       WHEN actual_value < (
+                           CASE
+                               WHEN :threshold_type = 'midpoint' THEN (pred_p10 + pred_value) / 2.0
+                               ELSE pred_p10
+                           END
+                       ) THEN 1
+                       ELSE 0
+                   END AS is_under
+            FROM ranked
+        ),
+        last_under AS (
+            SELECT player_id, game_date, actual_value, rn, game_id,
+                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY rn ASC) AS rn_under
+            FROM undered
+            WHERE is_under = 1
+        )
+        SELECT lu.player_id, lu.game_date, lu.actual_value, lu.rn AS last_under_rn,
+               pgs.matchup, pgs.minutes
+        FROM last_under lu
+        LEFT JOIN player_game_stats pgs
+          ON pgs.player_id = lu.player_id AND pgs.game_id = lu.game_id
+        WHERE rn_under = 1
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(
+            query, {"stat_type": stat_type, "threshold_type": threshold_type}
+        ).fetchall()
+    result = {}
+    for r in rows:
+        player_id = int(r[0])
+        last_under_rn = int(r[3]) if r[3] is not None else None
+        result[player_id] = {
+            "last_under_date": r[1],
+            "last_under_value": r[2],
+            "last_under_games_ago": (last_under_rn - 1) if last_under_rn else None,
+            "last_under_matchup": r[4],
+            "last_under_minutes": r[5],
+        }
+    return result
+
+
 @router.get("/top_scorers")
 def top_scorers(season: str = "2025-26", top_n: int = 10):
     df = client.fetch_player_stats(
@@ -133,11 +198,29 @@ async def predict_points_api(
     under_risk = fetch_under_risk(
         sync_engine, "points", df_preds["player_id"].tolist()
     )
+    last_under = fetch_last_under(
+        sync_engine, "points", df_preds["player_id"].tolist()
+    )
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
     )
     df_preds["under_risk_n"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
+    df_preds["last_under_date"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
+    )
+    df_preds["last_under_value"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
+    )
+    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
+    )
+    df_preds["last_under_matchup"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
+    )
+    df_preds["last_under_minutes"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
     )
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
@@ -169,11 +252,29 @@ async def predict_assists_api(
     under_risk = fetch_under_risk(
         sync_engine, "assists", df_preds["player_id"].tolist()
     )
+    last_under = fetch_last_under(
+        sync_engine, "assists", df_preds["player_id"].tolist()
+    )
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
     )
     df_preds["under_risk_n"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
+    df_preds["last_under_date"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
+    )
+    df_preds["last_under_value"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
+    )
+    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
+    )
+    df_preds["last_under_matchup"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
+    )
+    df_preds["last_under_minutes"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
     )
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
@@ -205,11 +306,29 @@ async def predict_rebounds_api(
     under_risk = fetch_under_risk(
         sync_engine, "rebounds", df_preds["player_id"].tolist()
     )
+    last_under = fetch_last_under(
+        sync_engine, "rebounds", df_preds["player_id"].tolist()
+    )
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
     )
     df_preds["under_risk_n"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
+    df_preds["last_under_date"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
+    )
+    df_preds["last_under_value"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
+    )
+    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
+    )
+    df_preds["last_under_matchup"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
+    )
+    df_preds["last_under_minutes"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
     )
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
@@ -241,11 +360,29 @@ async def predict_threept_api(
     under_risk = fetch_under_risk(
         sync_engine, "threept", df_preds["player_id"].tolist()
     )
+    last_under = fetch_last_under(
+        sync_engine, "threept", df_preds["player_id"].tolist()
+    )
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
     )
     df_preds["under_risk_n"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
+    df_preds["last_under_date"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
+    )
+    df_preds["last_under_value"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
+    )
+    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
+    )
+    df_preds["last_under_matchup"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
+    )
+    df_preds["last_under_minutes"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
     )
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
