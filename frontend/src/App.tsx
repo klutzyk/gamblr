@@ -174,10 +174,12 @@ function PredictionsGrid({
   predictions,
   statLabel,
   unitLabel,
+  statKey,
 }: {
   predictions: PredictionRow[];
   statLabel: string;
   unitLabel: string;
+  statKey: "points" | "assists" | "rebounds" | "threept";
 }) {
   const TEAM_ID_BY_ABBR: Record<string, number> = {
     ATL: 1610612737,
@@ -259,6 +261,50 @@ function PredictionsGrid({
           else if (confidenceValue >= 55) confidenceClass = "confidence-mid";
           else confidenceClass = "confidence-low";
         }
+        const underRiskValue =
+          typeof pred.under_risk === "number" ? pred.under_risk : null;
+        let underRiskClass = "risk-unknown";
+        if (underRiskValue !== null) {
+          if (underRiskValue >= 0.6) underRiskClass = "risk-high";
+          else if (underRiskValue >= 0.35) underRiskClass = "risk-mid";
+          else underRiskClass = "risk-low";
+        }
+        const underRiskPct =
+          underRiskValue !== null ? `${(underRiskValue * 100).toFixed(0)}%` : "n/a";
+        const underThresholdValue =
+          statKey === "points"
+            ? typeof pred.pred_p10 === "number" && typeof pred.pred_value === "number"
+              ? (pred.pred_p10 + pred.pred_value) / 2
+              : pred.pred_value
+            : typeof pred.pred_p10 === "number"
+              ? pred.pred_p10
+              : null;
+        const underThresholdText =
+          typeof underThresholdValue === "number"
+            ? `${underThresholdValue.toFixed(1)} ${unitLabel}`
+            : "n/a";
+        const lastUnderText =
+          typeof pred.last_under_value === "number"
+            ? `${pred.last_under_value.toFixed(1)} ${unitLabel}`
+            : "n/a";
+        const lastUnderMeta =
+          typeof pred.last_under_games_ago === "number"
+            ? `${pred.last_under_games_ago}g ago`
+            : null;
+        const lastUnderMatchup =
+          typeof pred.last_under_matchup === "string" && pred.last_under_matchup.length
+            ? pred.last_under_matchup
+            : null;
+        const lastUnderMinutes =
+          typeof pred.last_under_minutes === "number"
+            ? `${pred.last_under_minutes.toFixed(0)} min`
+            : null;
+        const lastUnderBits = [
+          lastUnderMeta,
+          lastUnderMatchup,
+          lastUnderText !== "n/a" ? lastUnderText : null,
+          lastUnderMinutes,
+        ].filter(Boolean);
         const headshotUrl = getHeadshotUrl(
           pred.player_id,
           pred.team_id,
@@ -339,6 +385,32 @@ function PredictionsGrid({
                   </div>
                 </div>
               )}
+            <div className={`under-risk-card mt-3 ${underRiskClass}`}>
+              <div className="under-risk-row">
+                <span className="label">
+                  Under <strong className="under-risk-x">{underThresholdText}</strong> next game
+                </span>
+                <span className="value">{underRiskPct}</span>
+              </div>
+              {lastUnderMeta && (
+                <div className="under-risk-meta">
+                  <span className="under-risk-last">
+                    Last under: {lastUnderBits.join(" • ")}
+                  </span>
+                </div>
+              )}
+              <div className="under-risk-bar">
+                <div
+                  className="under-risk-fill"
+                  style={{
+                    width:
+                      underRiskValue !== null
+                        ? `${Math.min(100, Math.max(0, underRiskValue * 100))}%`
+                        : "0%",
+                  }}
+                ></div>
+              </div>
+            </div>
           </div>
         </div>
         );
@@ -380,6 +452,7 @@ function App() {
   >("pred_value_desc");
   const [predictionSearch, setPredictionSearch] = useState("");
   const [predictionTeam, setPredictionTeam] = useState("all");
+  const [predictionLine, setPredictionLine] = useState<number | "all">("all");
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -498,6 +571,16 @@ function App() {
   useEffect(() => {
     handleLoadPredictions(true);
   }, [predictionDay, predictionStat]);
+
+  useEffect(() => {
+    const defaults: Record<typeof predictionStat, number> = {
+      points: 5,
+      assists: 2,
+      rebounds: 2,
+      threept: 1,
+    };
+    setPredictionLine(defaults[predictionStat]);
+  }, [predictionStat]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -843,6 +926,12 @@ function App() {
         );
       case "predictions":
         const activePrediction = predictionConfig[predictionStat];
+        const lineOptions: Record<typeof predictionStat, number[]> = {
+          points: [5, 10, 15, 20, 25, 30],
+          assists: [2, 3, 4, 6, 7, 10],
+          rebounds: [2, 3, 4, 6, 7, 10],
+          threept: [1, 2, 3, 4, 5],
+        };
         const teamOptions = activePrediction.state.data
           ? Array.from(
               new Set(
@@ -856,8 +945,8 @@ function App() {
         const filteredPredictions = activePrediction.state.data
           ? activePrediction.state.data.filter((row) => {
               if (
-                predictionStat !== "threept" &&
-                (row.pred_value ?? 0) < 3
+                predictionLine !== "all" &&
+                (row.pred_value ?? 0) < predictionLine
               ) {
                 return false;
               }
@@ -884,9 +973,6 @@ function App() {
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
               <div>
                 <h4 className="mb-1">Prediction Focus</h4>
-                <p className="text-sm text-secondary mb-0">
-                  Live projections for points, assists, and rebounds.
-                </p>
               </div>
               <div className="d-flex flex-wrap gap-2 align-items-center">
                 <div className="stat-toggle">
@@ -902,38 +988,56 @@ function App() {
                     </button>
                   ))}
                 </div>
-                <select
-                  className="form-select form-select-sm"
-                  value={predictionDay}
-                  onChange={(e) =>
-                    setPredictionDay(
-                      e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
-                    )
-                  }
-                  style={{ maxWidth: "150px" }}
-                >
-                  <option value="auto">Auto (ET)</option>
-                  <option value="today">Today (ET)</option>
-                  <option value="tomorrow">Tomorrow (ET)</option>
-                  <option value="yesterday">Yesterday (ET)</option>
-                </select>
-                <select
-                  className="form-select form-select-sm"
-                  value={predictionSort}
-                  onChange={(e) =>
-                    setPredictionSort(
-                      e.target.value as
-                        | "pred_value_desc"
-                        | "pred_value_asc"
-                        | "confidence_desc"
-                    )
-                  }
-                  style={{ maxWidth: "170px" }}
-                >
-                  <option value="pred_value_desc">Value (High → Low)</option>
-                  <option value="pred_value_asc">Value (Low → High)</option>
-                  <option value="confidence_desc">Confidence (High → Low)</option>
-                </select>
+                <div className="prediction-select-group">
+                  <select
+                    className="form-select form-select-sm"
+                    value={predictionDay}
+                    onChange={(e) =>
+                      setPredictionDay(
+                        e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                      )
+                    }
+                  >
+                    <option value="auto">Auto (ET)</option>
+                    <option value="today">Today (ET)</option>
+                    <option value="tomorrow">Tomorrow (ET)</option>
+                    <option value="yesterday">Yesterday (ET)</option>
+                  </select>
+                  <select
+                    className="form-select form-select-sm"
+                    value={predictionLine}
+                    onChange={(e) => {
+                      const value =
+                        e.target.value === "all"
+                          ? "all"
+                          : Number(e.target.value);
+                      setPredictionLine(value);
+                    }}
+                  >
+                    <option value="all">All lines</option>
+                    {lineOptions[predictionStat].map((line) => (
+                      <option key={line} value={line}>
+                        {line}+
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="form-select form-select-sm"
+                    value={predictionSort}
+                    onChange={(e) =>
+                      setPredictionSort(
+                        e.target.value as
+                          | "pred_value_desc"
+                          | "pred_value_asc"
+                          | "confidence_desc"
+                      )
+                    }
+                  >
+                    <option value="pred_value_desc">Value (High &gt;&gt; Low)</option>
+                    <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
+                    <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
+                  </select>
+                </div>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
                   onClick={handleLoadPredictions}
@@ -1003,19 +1107,20 @@ function App() {
               </div>
             )}
             {activePrediction.state.data && (
-              <PredictionsGrid
-                predictions={[...filteredPredictions].sort((a, b) => {
-                  if (predictionSort === "pred_value_asc") {
-                    return (a.pred_value ?? 0) - (b.pred_value ?? 0);
-                  }
-                  if (predictionSort === "confidence_desc") {
-                    return (b.confidence ?? 0) - (a.confidence ?? 0);
-                  }
-                  return (b.pred_value ?? 0) - (a.pred_value ?? 0);
-                })}
-                statLabel={activePrediction.label}
-                unitLabel={activePrediction.unit}
-              />
+            <PredictionsGrid
+              predictions={[...filteredPredictions].sort((a, b) => {
+                if (predictionSort === "pred_value_asc") {
+                  return (a.pred_value ?? 0) - (b.pred_value ?? 0);
+                }
+                if (predictionSort === "confidence_desc") {
+                  return (b.confidence ?? 0) - (a.confidence ?? 0);
+                }
+                return (b.pred_value ?? 0) - (a.pred_value ?? 0);
+              })}
+              statLabel={activePrediction.label}
+              unitLabel={activePrediction.unit}
+              statKey={predictionStat}
+            />
             )}
           </div>
         );

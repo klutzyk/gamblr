@@ -346,6 +346,101 @@
   opacity: 0.8;
 }
 
+.under-risk-card {
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.8rem;
+  background: rgba(16, 29, 26, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+.under-risk-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--brand-dark);
+  margin-bottom: 0.35rem;
+}
+
+.under-risk-row .label {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.under-risk-x {
+  font-weight: 800;
+  color: var(--brand-dark);
+  opacity: 1;
+}
+
+.under-risk-meta {
+  font-size: 0.7rem;
+  color: var(--brand-muted);
+  margin-bottom: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.under-risk-note {
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.7);
+}
+
+.under-risk-threshold {
+  font-weight: 700;
+  color: var(--brand-dark);
+}
+
+.under-risk-last {
+  color: rgba(15, 23, 42, 0.7);
+}
+
+.under-risk-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(16, 29, 26, 0.12);
+  overflow: hidden;
+}
+
+.under-risk-fill {
+  height: 100%;
+  background: #ffa726;
+}
+
+.under-risk-card.risk-low {
+  background: rgba(106, 223, 79, 0.12);
+  border-color: rgba(106, 223, 79, 0.35);
+}
+
+.under-risk-card.risk-low .under-risk-fill {
+  background: #6adf4f;
+}
+
+.under-risk-card.risk-mid {
+  background: rgba(243, 227, 161, 0.18);
+  border-color: rgba(243, 227, 161, 0.55);
+}
+
+.under-risk-card.risk-mid .under-risk-fill {
+  background: #f3e3a1;
+}
+
+.under-risk-card.risk-high {
+  background: rgba(255, 167, 38, 0.18);
+  border-color: rgba(255, 167, 38, 0.55);
+}
+
+.under-risk-card.risk-high .under-risk-fill {
+  background: #ffa726;
+}
+
+.under-risk-card.risk-unknown {
+  background: rgba(16, 29, 26, 0.06);
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
 .player-avatar {
   position: relative;
   width: 48px;
@@ -410,6 +505,50 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
+}
+
+.prediction-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.85rem;
+  background: rgba(16, 29, 26, 0.05);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  max-width: fit-content;
+}
+
+.prediction-line .label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--brand-dark);
+  opacity: 0.8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.prediction-line .form-select {
+  border: none;
+  background: transparent;
+  padding: 0.25rem 1.5rem 0.25rem 0.5rem;
+}
+
+.prediction-select-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: rgba(16, 29, 26, 0.06);
+}
+
+.prediction-select-group .form-select {
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.35rem 1.8rem 0.35rem 0.7rem;
 }
 
 .team-chip {

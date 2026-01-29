@@ -30,6 +30,13 @@ export type PredictionRow = {
   pred_p50?: number;
   pred_p90?: number;
   confidence?: number;
+  under_risk?: number | null;
+  under_risk_n?: number | null;
+  last_under_date?: string | null;
+  last_under_value?: number | null;
+  last_under_games_ago?: number | null;
+  last_under_matchup?: string | null;
+  last_under_minutes?: number | null;
   model_version?: string;
 };
 
