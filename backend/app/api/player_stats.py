@@ -117,6 +117,92 @@ def fetch_last_under(engine, stat_type: str, player_ids: list[int]):
     return result
 
 
+def fetch_good_player_ids(engine, stat_type: str):
+    stat_thresholds = {
+        "points": 20,
+        "assists": 6,
+        "rebounds": 6,
+        "threept": 2,
+    }
+    threshold = stat_thresholds.get(stat_type)
+    if threshold is None:
+        return set()
+
+    stat_query = text(
+        """
+        WITH ranked AS (
+            SELECT player_id, actual_value, game_date,
+                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC) AS rn
+            FROM prediction_logs
+            WHERE stat_type = :stat_type
+              AND actual_value IS NOT NULL
+              AND game_date IS NOT NULL
+        ),
+        recent AS (
+            SELECT player_id, actual_value
+            FROM ranked
+            WHERE rn <= 20
+        )
+        SELECT player_id, AVG(actual_value) AS avg_actual
+        FROM recent
+        GROUP BY player_id
+        HAVING AVG(actual_value) >= :threshold
+        """
+    )
+
+    minutes_query = text(
+        """
+        WITH ranked AS (
+            SELECT player_id, minutes, game_date,
+                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC) AS rn
+            FROM player_game_stats
+            WHERE minutes IS NOT NULL
+              AND game_date IS NOT NULL
+        ),
+        recent AS (
+            SELECT player_id, minutes
+            FROM ranked
+            WHERE rn <= 20
+        )
+        SELECT player_id, AVG(minutes) AS avg_minutes
+        FROM recent
+        GROUP BY player_id
+        HAVING AVG(minutes) >= 20
+        """
+    )
+
+    with engine.connect() as conn:
+        stat_rows = conn.execute(
+            stat_query, {"stat_type": stat_type, "threshold": threshold}
+        ).fetchall()
+        min_rows = conn.execute(minutes_query).fetchall()
+
+    stat_ids = {int(r[0]) for r in stat_rows}
+    min_ids = {int(r[0]) for r in min_rows}
+    return stat_ids.intersection(min_ids)
+
+
+def apply_under_risk_boost(df, stat_type: str, good_ids: set[int]):
+    boosts = {
+        "points": 0.026,
+        "assists": 0.055,
+        "rebounds": 0.023,
+        "threept": 0.013,
+    }
+    delta = boosts.get(stat_type, 0)
+    if not delta:
+        return
+
+    def adjust(row):
+        base = row.get("under_risk")
+        if base is None:
+            return base
+        if row.get("last_under_games_ago") == 0 and row.get("player_id") in good_ids:
+            return max(0.0, float(base) - delta)
+        return base
+
+    df["under_risk"] = df.apply(adjust, axis=1)
+
 @router.get("/top_scorers")
 def top_scorers(season: str = "2025-26", top_n: int = 10):
     df = client.fetch_player_stats(
@@ -201,6 +287,7 @@ async def predict_points_api(
     last_under = fetch_last_under(
         sync_engine, "points", df_preds["player_id"].tolist()
     )
+    good_ids = fetch_good_player_ids(sync_engine, "points")
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
     )
@@ -222,6 +309,7 @@ async def predict_points_api(
     df_preds["last_under_minutes"] = df_preds["player_id"].map(
         lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
     )
+    apply_under_risk_boost(df_preds, "points", good_ids)
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
@@ -255,6 +343,7 @@ async def predict_assists_api(
     last_under = fetch_last_under(
         sync_engine, "assists", df_preds["player_id"].tolist()
     )
+    good_ids = fetch_good_player_ids(sync_engine, "assists")
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
     )
@@ -276,6 +365,7 @@ async def predict_assists_api(
     df_preds["last_under_minutes"] = df_preds["player_id"].map(
         lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
     )
+    apply_under_risk_boost(df_preds, "assists", good_ids)
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
@@ -309,6 +399,7 @@ async def predict_rebounds_api(
     last_under = fetch_last_under(
         sync_engine, "rebounds", df_preds["player_id"].tolist()
     )
+    good_ids = fetch_good_player_ids(sync_engine, "rebounds")
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
     )
@@ -330,6 +421,7 @@ async def predict_rebounds_api(
     df_preds["last_under_minutes"] = df_preds["player_id"].map(
         lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
     )
+    apply_under_risk_boost(df_preds, "rebounds", good_ids)
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
@@ -363,6 +455,7 @@ async def predict_threept_api(
     last_under = fetch_last_under(
         sync_engine, "threept", df_preds["player_id"].tolist()
     )
+    good_ids = fetch_good_player_ids(sync_engine, "threept")
     df_preds["under_risk"] = df_preds["player_id"].map(
         lambda pid: under_risk.get(int(pid), {}).get("under_rate")
     )
@@ -384,6 +477,7 @@ async def predict_threept_api(
     df_preds["last_under_minutes"] = df_preds["player_id"].map(
         lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
     )
+    apply_under_risk_boost(df_preds, "threept", good_ids)
 
     df_preds = df_preds.sort_values("pred_value", ascending=False)
 
