@@ -5,6 +5,9 @@ from app.core.config import settings
 from fastapi.concurrency import run_in_threadpool
 import sys
 from pathlib import Path
+import pandas as pd
+import numpy as np
+import math
 
 # get teh path to the ml folder
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -21,7 +24,15 @@ sync_engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
 
 # Helper function to convert DataFrame to list of dicts for API response
 def df_to_dict(df):
-    return df.to_dict(orient="records")
+    df = df.replace({pd.NA: None, np.inf: None, -np.inf: None})
+    df = df.where(pd.notnull(df), None)
+    records = df.to_dict(orient="records")
+    for row in records:
+        for key, value in row.items():
+            if isinstance(value, (float, np.floating)):
+                if not math.isfinite(value):
+                    row[key] = None
+    return records
 
 
 def fetch_under_risk(engine, stat_type: str, player_ids: list[int]):
