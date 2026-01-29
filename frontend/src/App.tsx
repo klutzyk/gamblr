@@ -450,6 +450,9 @@ function App() {
   const [predictionSort, setPredictionSort] = useState<
     "pred_value_desc" | "pred_value_asc" | "confidence_desc"
   >("pred_value_desc");
+  const [underRiskSort, setUnderRiskSort] = useState<
+    "none" | "under_risk_desc" | "under_risk_asc"
+  >("none");
   const [predictionSearch, setPredictionSearch] = useState("");
   const [predictionTeam, setPredictionTeam] = useState("all");
   const [predictionLine, setPredictionLine] = useState<number | "all">("all");
@@ -1037,6 +1040,19 @@ function App() {
                     <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
                     <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
                   </select>
+                  <select
+                    className="form-select form-select-sm"
+                    value={underRiskSort}
+                    onChange={(e) =>
+                      setUnderRiskSort(
+                        e.target.value as "none" | "under_risk_desc" | "under_risk_asc"
+                      )
+                    }
+                  >
+                    <option value="none">Under Risk (None)</option>
+                    <option value="under_risk_desc">Under Risk (High &gt;&gt; Low)</option>
+                    <option value="under_risk_asc">Under Risk (Low &gt;&gt; High)</option>
+                  </select>
                 </div>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
@@ -1107,20 +1123,38 @@ function App() {
               </div>
             )}
             {activePrediction.state.data && (
-            <PredictionsGrid
-              predictions={[...filteredPredictions].sort((a, b) => {
-                if (predictionSort === "pred_value_asc") {
-                  return (a.pred_value ?? 0) - (b.pred_value ?? 0);
-                }
-                if (predictionSort === "confidence_desc") {
-                  return (b.confidence ?? 0) - (a.confidence ?? 0);
-                }
-                return (b.pred_value ?? 0) - (a.pred_value ?? 0);
-              })}
-              statLabel={activePrediction.label}
-              unitLabel={activePrediction.unit}
-              statKey={predictionStat}
-            />
+                <PredictionsGrid
+                  predictions={[...filteredPredictions].sort((a, b) => {
+                    const valA = a.pred_value ?? 0;
+                    const valB = b.pred_value ?? 0;
+                    const confA = a.confidence ?? -1;
+                    const confB = b.confidence ?? -1;
+                    const riskA = a.under_risk ?? -1;
+                    const riskB = b.under_risk ?? -1;
+
+                    if (predictionSort === "pred_value_asc" && valA !== valB) {
+                      return valA - valB;
+                    }
+                    if (predictionSort === "pred_value_desc" && valA !== valB) {
+                      return valB - valA;
+                    }
+                    if (predictionSort === "confidence_desc" && confA !== confB) {
+                      return confB - confA;
+                    }
+
+                    if (underRiskSort === "under_risk_desc" && riskA !== riskB) {
+                      return riskB - riskA;
+                    }
+                    if (underRiskSort === "under_risk_asc" && riskA !== riskB) {
+                      return riskA - riskB;
+                    }
+
+                    return valB - valA;
+                  })}
+                  statLabel={activePrediction.label}
+                  unitLabel={activePrediction.unit}
+                  statKey={predictionStat}
+                />
             )}
           </div>
         );
