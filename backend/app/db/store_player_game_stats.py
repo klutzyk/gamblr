@@ -26,6 +26,8 @@ async def save_last_n_games(
         )
         db.add(player)
         await db.flush()
+    elif team_abbr and player.team_abbreviation != team_abbr:
+        player.team_abbreviation = team_abbr
 
     # Normalize API dates
     df["GAME_DATE"] = df["GAME_DATE"].apply(

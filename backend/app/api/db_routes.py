@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.session import get_db
+from app.db.session import get_db, AsyncSessionLocal
 from app.services.theodds_client import TheOddsClient
 from app.services.nba_client import NBAClient
 from app.db.store_odds import save_event_odds
@@ -21,6 +21,7 @@ from app.models.game_schedule import GameSchedule
 import logging
 import asyncio
 import httpx
+import uuid
 from asyncio_throttle import Throttler
 import pandas as pd
 from app.core.constants import MAX_GAMES_PER_PLAYER
@@ -33,6 +34,7 @@ nba_client = NBAClient()
 
 #  throttler to prevent hammering NBA API. rate limiting to 5 requests/sec
 throttler = Throttler(rate_limit=5, period=1)
+update_jobs: dict[str, dict] = {}
 
 
 # store player points props for a single event (game)
@@ -121,6 +123,32 @@ async def store_last_n_games_all_players(
             if "TEAM_ABBREVIATION" in df.columns
             else None
         )
+        if not team_abbr:
+            for attempt in range(2):
+                try:
+                    async with throttler:
+                        info_df, _ = nba_client.fetch_player_info(player_id)
+                    if not info_df.empty and "TEAM_ABBREVIATION" in info_df.columns:
+                        team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
+                    break
+                except Exception as e:
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed for player info {player_name}: {e}"
+                    )
+                    await asyncio.sleep(0.5)
+        if not team_abbr:
+            for attempt in range(2):
+                try:
+                    async with throttler:
+                        info_df, _ = nba_client.fetch_player_info(player_id)
+                    if not info_df.empty and "TEAM_ABBREVIATION" in info_df.columns:
+                        team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
+                    break
+                except Exception as e:
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed for player info {player_name}: {e}"
+                    )
+                    await asyncio.sleep(0.5)
 
         try:
             new_games = await save_last_n_games(
@@ -155,21 +183,12 @@ async def store_last_n_games_all_players(
     }
 
 
-@router.post("/last-n/update")
-async def update_last_n_games_since(
-    since: str,
-    season: str = "2025-26",
-    db: AsyncSession = Depends(get_db),
+async def _run_last_n_update(
+    since_date,
+    season: str,
+    db: AsyncSession,
+    job_id: str | None = None,
 ):
-    """
-    Update last-n games only for players whose latest stored game is older than `since`.
-    `since` should be YYYY-MM-DD.
-    """
-    try:
-        since_date = datetime.strptime(since, "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
-
     today = datetime.utcnow().date()
     schedule_result = await db.execute(
         select(GameSchedule.game_id, GameSchedule.game_date).where(
@@ -223,9 +242,13 @@ async def update_last_n_games_since(
     failed = 0
     total_new_games = 0
 
-    for p in active_players:
+    for idx, p in enumerate(active_players, start=1):
         player_id = p["id"]
         player_name = p["full_name"]
+
+        if job_id and job_id in update_jobs:
+            update_jobs[job_id]["players_done"] = idx - 1
+            update_jobs[job_id]["players_total"] = len(active_players)
 
         result = await db.execute(
             select(func.max(PlayerGameStat.game_date)).where(
@@ -259,6 +282,19 @@ async def update_last_n_games_since(
             if "TEAM_ABBREVIATION" in df.columns
             else None
         )
+        if not team_abbr:
+            for attempt in range(2):
+                try:
+                    async with throttler:
+                        info_df, _ = nba_client.fetch_player_info(player_id)
+                    if not info_df.empty and "TEAM_ABBREVIATION" in info_df.columns:
+                        team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
+                    break
+                except Exception as e:
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed for player info {player_name}: {e}"
+                    )
+                    await asyncio.sleep(0.5)
 
         try:
             new_games = await save_last_n_games(
@@ -289,8 +325,79 @@ async def update_last_n_games_since(
         "players_skipped": skipped,
         "players_failed": failed,
         "total_new_games_inserted": total_new_games,
-        "since": since,
+        "since": str(since_date),
     }
+
+
+@router.post("/last-n/update")
+async def update_last_n_games_since(
+    since: str,
+    season: str = "2025-26",
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Update last-n games only for players whose latest stored game is older than `since`.
+    `since` should be YYYY-MM-DD.
+    """
+    try:
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+    return await _run_last_n_update(since_date, season, db)
+
+
+async def _run_last_n_update_job(job_id: str, since: str, season: str):
+    try:
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
+        update_jobs[job_id]["status"] = "running"
+        async with AsyncSessionLocal() as db:
+            result = await _run_last_n_update(since_date, season, db, job_id=job_id)
+        update_jobs[job_id]["status"] = "completed"
+        update_jobs[job_id]["result"] = result
+        update_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+    except Exception as e:
+        logger.error(f"last-n update job {job_id} failed: {e}")
+        update_jobs[job_id]["status"] = "failed"
+        update_jobs[job_id]["error"] = str(e)
+        update_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+
+
+@router.post("/last-n/update/start")
+async def start_update_last_n_games_since(
+    since: str,
+    season: str = "2025-26",
+):
+    """
+    Start last-n update in the background and return a job id for polling.
+    """
+    try:
+        datetime.strptime(since, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+
+    job_id = str(uuid.uuid4())
+    update_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "last_n_update",
+        "status": "queued",
+        "since": since,
+        "season": season,
+        "players_done": 0,
+        "players_total": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "result": None,
+        "error": None,
+    }
+    asyncio.create_task(_run_last_n_update_job(job_id, since, season))
+    return {"status": "queued", "job_id": job_id}
+
+
+@router.get("/jobs/{job_id}")
+async def get_update_job_status(job_id: str):
+    job = update_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return job
 
 
 @router.post("/last-n/backfill-shooting")
@@ -371,6 +478,55 @@ async def backfill_shooting_stats(
         "players_skipped": skipped,
         "players_failed": failed,
         "total_rows_updated": total_updates,
+    }
+
+
+@router.post("/players/backfill-team-abbr")
+async def backfill_player_team_abbr(
+    db: AsyncSession = Depends(get_db),
+    limit: int | None = None,
+):
+    """
+    Backfill missing player team_abbreviation using NBA API player info.
+    """
+    result = await db.execute(select(Player).where(Player.team_abbreviation.is_(None)))
+    players_missing = result.scalars().all()
+    if limit:
+        players_missing = players_missing[:limit]
+
+    updated = 0
+    failed = 0
+
+    for p in players_missing:
+        player_id = p.id
+        player_name = p.full_name
+        for attempt in range(3):
+            try:
+                async with throttler:
+                    info_df, _ = nba_client.fetch_player_info(player_id)
+                if not info_df.empty and "TEAM_ABBREVIATION" in info_df.columns:
+                    team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
+                    if team_abbr:
+                        p.team_abbreviation = team_abbr
+                        updated += 1
+                break
+            except Exception as e:
+                logger.warning(
+                    f"Attempt {attempt + 1} failed for player info {player_name}: {e}"
+                )
+                await asyncio.sleep(0.5)
+        else:
+            failed += 1
+
+        await asyncio.sleep(0.05)
+
+    await db.commit()
+
+    return {
+        "status": "completed",
+        "players_targeted": len(players_missing),
+        "players_updated": updated,
+        "players_failed": failed,
     }
 
 
