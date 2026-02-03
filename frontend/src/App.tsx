@@ -464,13 +464,11 @@ function App() {
   const [predictionLine, setPredictionLine] = useState<number | "all">("all");
   const [targetMultiplierInput, setTargetMultiplierInput] = useState("2");
   const [bestBetLegCount, setBestBetLegCount] = useState(2);
-  const [bestBetDay, setBestBetDay] = useState<
-    "today" | "tomorrow" | "yesterday" | "auto"
-  >("auto");
   const [bestBetSyncMode, setBestBetSyncMode] = useState<
     "auto" | "night" | "morning" | "all"
   >("auto");
   const [bestBetEvents, setBestBetEvents] = useState(4);
+  const [includeComboMarkets, setIncludeComboMarkets] = useState(false);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
@@ -596,6 +594,12 @@ function App() {
       });
       return;
     }
+    const derivedPredictionDay =
+      bestBetSyncMode === "night"
+        ? "tomorrow"
+        : bestBetSyncMode === "morning"
+          ? "today"
+          : "auto";
 
     await safeLoad(
       bestBetsState,
@@ -604,8 +608,9 @@ function App() {
         getBestBets({
           target_multiplier: targetMultiplier,
           leg_count: bestBetLegCount,
-          day: bestBetDay,
+          day: derivedPredictionDay,
           bookmaker: "sportsbet",
+          include_combos: includeComboMarkets,
           min_confidence: 55,
           min_edge: 0.02,
           min_prob: 0.52,
@@ -619,9 +624,14 @@ function App() {
   const handleSyncAndLoadBestBets = async () => {
     setSyncSummary(null);
     try {
+      const selectedMarkets = includeComboMarkets
+        ? "player_points,player_assists,player_rebounds," +
+          "player_points_rebounds_assists,player_points_rebounds," +
+          "player_points_assists,player_rebounds_assists"
+        : "player_points,player_assists,player_rebounds";
       const sync = await syncPlayerPropsWindow({
         bookmakers: "sportsbet",
-        markets: "player_points,player_assists,player_rebounds",
+        markets: selectedMarkets,
         min_remaining_after_call: 5,
         max_events: bestBetEvents,
         schedule_mode: bestBetSyncMode,
@@ -998,14 +1008,13 @@ function App() {
           </div>
         );
       case "best_bets":
+        const estimatedMarketsPerEvent = includeComboMarkets ? 7 : 3;
+        const estimatedCredits = bestBetEvents * estimatedMarketsPerEvent;
         return (
           <div className="card card-body border-radius-xl shadow-lg best-bets-panel">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
               <div>
                 <h4 className="mb-1">Best Bet Builder</h4>
-                <p className="text-sm text-secondary mb-0">
-                  Sync Sportsbet props in AU windows, then rank singles/parlays by model edge.
-                </p>
               </div>
               <div className="best-bets-controls">
                 <div className="control-group">
@@ -1034,24 +1043,7 @@ function App() {
                   </select>
                 </div>
                 <div className="control-group">
-                  <label className="form-label mb-1">Prediction day</label>
-                  <select
-                    className="form-select form-select-sm"
-                    value={bestBetDay}
-                    onChange={(e) =>
-                      setBestBetDay(
-                        e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
-                      )
-                    }
-                  >
-                    <option value="auto">Auto</option>
-                    <option value="today">Today</option>
-                    <option value="tomorrow">Tomorrow</option>
-                    <option value="yesterday">Yesterday</option>
-                  </select>
-                </div>
-                <div className="control-group">
-                  <label className="form-label mb-1">Sync window</label>
+                  <label className="form-label mb-1">Time of Day</label>
                   <select
                     className="form-select form-select-sm"
                     value={bestBetSyncMode}
@@ -1081,6 +1073,20 @@ function App() {
                     ))}
                   </select>
                 </div>
+                <div className="control-group">
+                  <label className="form-label mb-1">Market scope</label>
+                  <button
+                    type="button"
+                    className={`combo-toggle ${includeComboMarkets ? "active" : ""}`}
+                    onClick={() => setIncludeComboMarkets((prev) => !prev)}
+                    aria-pressed={includeComboMarkets}
+                  >
+                    <span className="combo-toggle-title">Combo markets</span>
+                    <span className="combo-toggle-state">
+                      {includeComboMarkets ? "On" : "Off"}
+                    </span>
+                  </button>
+                </div>
               </div>
             </div>
             <div className="d-flex flex-wrap gap-2 mb-3">
@@ -1099,6 +1105,10 @@ function App() {
                 Recompute from Stored Props
               </button>
             </div>
+            <p className="text-sm text-secondary mb-3">
+              Estimated sync cost: ~{estimatedCredits} credits ({bestBetEvents} events x{" "}
+              {estimatedMarketsPerEvent} markets/event, Sportsbet only). 
+            </p>
             {syncSummary && <p className="text-sm text-secondary mb-3">{syncSummary}</p>}
             {bestBetsState.error && (
               <div className="alert alert-danger text-white" role="alert">

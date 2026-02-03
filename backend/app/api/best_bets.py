@@ -20,10 +20,14 @@ from ml.predict import predict_assists, predict_points, predict_rebounds
 router = APIRouter()
 sync_engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
 
-MARKET_TO_STAT = {
-    "player_points": "points",
-    "player_assists": "assists",
-    "player_rebounds": "rebounds",
+MARKET_TO_STATS = {
+    "player_points": ("points",),
+    "player_assists": ("assists",),
+    "player_rebounds": ("rebounds",),
+    "player_points_rebounds_assists": ("points", "rebounds", "assists"),
+    "player_points_rebounds": ("points", "rebounds"),
+    "player_points_assists": ("points", "assists"),
+    "player_rebounds_assists": ("rebounds", "assists"),
 }
 
 
@@ -57,6 +61,39 @@ def _build_prediction_index(day: str) -> dict[str, dict[str, dict]]:
                 continue
             index[stat_type][key] = row
     return index
+
+
+def _compose_prediction_row(
+    stat_components: tuple[str, ...], player_name: str, index: dict[str, dict[str, dict]]
+) -> dict | None:
+    rows = []
+    for stat in stat_components:
+        row = index.get(stat, {}).get(player_name)
+        if not row:
+            return None
+        rows.append(row)
+
+    def _sum_or_none(field: str):
+        vals = [r.get(field) for r in rows]
+        if any(v is None for v in vals):
+            return None
+        return float(sum(float(v) for v in vals))
+
+    confidence_values = [
+        float(r.get("confidence"))
+        for r in rows
+        if r.get("confidence") is not None
+    ]
+    confidence = min(confidence_values) if confidence_values else None
+
+    return {
+        "pred_value": _sum_or_none("pred_value"),
+        "pred_p10": _sum_or_none("pred_p10"),
+        "pred_p50": _sum_or_none("pred_p50"),
+        "pred_p90": _sum_or_none("pred_p90"),
+        "confidence": confidence,
+        "team_abbreviation": rows[0].get("team_abbreviation"),
+    }
 
 
 def _model_probability(row: dict, line: float, side: str) -> tuple[float, float]:
@@ -99,6 +136,7 @@ async def get_best_bets(
     leg_count: int = 2,
     bookmaker: str = "sportsbet",
     day: str = "auto",
+    include_combos: bool = False,
     min_confidence: int = 55,
     min_edge: float = 0.02,
     min_prob: float = 0.52,
@@ -119,6 +157,21 @@ async def get_best_bets(
     prediction_index = await run_in_threadpool(_build_prediction_index, day)
 
     now_utc = datetime.now(ZoneInfo("UTC")) - timedelta(hours=2)
+    markets_to_use = [
+        "player_points",
+        "player_assists",
+        "player_rebounds",
+    ]
+    if include_combos:
+        markets_to_use.extend(
+            [
+                "player_points_rebounds_assists",
+                "player_points_rebounds",
+                "player_points_assists",
+                "player_rebounds_assists",
+            ]
+        )
+
     stmt = (
         select(
             Event.id,
@@ -137,7 +190,7 @@ async def get_best_bets(
         .join(PlayerProp, PlayerProp.market_id == Market.id)
         .where(
             Bookmaker.key == bookmaker,
-            Market.key.in_(tuple(MARKET_TO_STAT.keys())),
+            Market.key.in_(tuple(markets_to_use)),
             Event.commence_time >= now_utc,
         )
         .order_by(Event.commence_time.asc())
@@ -171,12 +224,15 @@ async def get_best_bets(
         ) = row
         if line is None or price is None or price <= 1.0:
             continue
-        stat_type = MARKET_TO_STAT.get(market_key)
-        if not stat_type:
+        stat_components = MARKET_TO_STATS.get(market_key)
+        if not stat_components:
             continue
 
         normalized = _normalize_name(player_name or "")
-        pred = prediction_index.get(stat_type, {}).get(normalized)
+        if len(stat_components) == 1:
+            pred = prediction_index.get(stat_components[0], {}).get(normalized)
+        else:
+            pred = _compose_prediction_row(stat_components, normalized, prediction_index)
         if not pred:
             skipped_no_prediction += 1
             continue
@@ -194,6 +250,7 @@ async def get_best_bets(
             continue
 
         expected_value = model_prob * (float(price) - 1.0) - (1.0 - model_prob)
+        stat_type = "+".join(stat_components)
         candidates.append(
             {
                 "event_id": event_id,
@@ -304,6 +361,7 @@ async def get_best_bets(
         "target_multiplier": target_multiplier,
         "leg_count": leg_count,
         "day": day,
+        "include_combos": include_combos,
         "filters": {
             "min_confidence": min_confidence,
             "min_edge": min_edge,

@@ -75,7 +75,11 @@ async def refresh_player_points_event(
 # This is much cheaper than looping per-event odds calls.
 @router.post("/player-points/all")
 async def refresh_all_player_points(
-    markets: str = "player_points,player_assists,player_rebounds",
+    markets: str = (
+        "player_points,player_assists,player_rebounds,"
+        "player_points_rebounds_assists,player_points_rebounds,"
+        "player_points_assists,player_rebounds_assists"
+    ),
     regions: str | None = None,
     bookmakers: str | None = "sportsbet",
     min_remaining_after_call: int = 3,
@@ -185,7 +189,11 @@ async def refresh_all_player_points(
 
 @router.post("/player-props/sync")
 async def refresh_player_props_sync(
-    markets: str = "player_points,player_assists,player_rebounds",
+    markets: str = (
+        "player_points,player_assists,player_rebounds,"
+        "player_points_rebounds_assists,player_points_rebounds,"
+        "player_points_assists,player_rebounds_assists"
+    ),
     regions: str | None = None,
     bookmakers: str | None = "sportsbet",
     min_remaining_after_call: int = 3,

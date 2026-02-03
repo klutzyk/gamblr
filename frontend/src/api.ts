@@ -46,7 +46,7 @@ export type BestBetLeg = {
   matchup: string;
   bookmaker: string;
   market: string;
-  stat_type: "points" | "assists" | "rebounds";
+  stat_type: string;
   player_name: string;
   side: "Over" | "Under" | string;
   line: number;
@@ -285,6 +285,7 @@ export function getBestBets(
     leg_count?: number;
     bookmaker?: string;
     day?: "today" | "tomorrow" | "yesterday" | "auto";
+    include_combos?: boolean;
     min_confidence?: number;
     min_edge?: number;
     min_prob?: number;

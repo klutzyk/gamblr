@@ -583,7 +583,7 @@
 
 .best-bets-controls {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 0.6rem;
   width: min(100%, 760px);
 }
@@ -594,6 +594,52 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--brand-muted);
+}
+
+.combo-toggle {
+  width: 100%;
+  height: 38px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  border-radius: 0.7rem;
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--brand-dark);
+  transition: all 0.2s ease;
+}
+
+.combo-toggle:hover {
+  border-color: rgba(106, 223, 79, 0.55);
+  box-shadow: 0 10px 24px rgba(12, 20, 18, 0.08);
+}
+
+.combo-toggle-title {
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.combo-toggle-state {
+  min-width: 44px;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.22rem 0.55rem;
+  background: rgba(15, 23, 42, 0.1);
+  color: var(--brand-muted);
+}
+
+.combo-toggle.active {
+  border-color: rgba(106, 223, 79, 0.6);
+  background: rgba(106, 223, 79, 0.13);
+}
+
+.combo-toggle.active .combo-toggle-state {
+  background: var(--brand-accent);
+  color: var(--brand-dark);
 }
 
 .best-parlays-grid {
