@@ -12,9 +12,12 @@ import {
   getAssistsPredictions,
   getReboundsPredictions,
   getThreeptPredictions,
+  getBestBets,
+  syncPlayerPropsWindow,
   type PlayerRow,
   type PlayerPropsResponse,
   type PredictionRow,
+  type BestBetsResponse,
 } from "./api";
 
 // Types derived from the SportsData BettingMarket / BettingOutcome shape.
@@ -61,7 +64,8 @@ type TabKey =
   | "guards"
   | "recent"
   | "props"
-  | "predictions";
+  | "predictions"
+  | "best_bets";
 
 type ApiState<T> = {
   loading: boolean;
@@ -444,6 +448,8 @@ function App() {
     useState<ApiState<PredictionRow[]>>(initialState);
   const [threeptPredictionsState, setThreeptPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
+  const [bestBetsState, setBestBetsState] =
+    useState<ApiState<BestBetsResponse>>(initialState);
   const [predictionDay, setPredictionDay] = useState<
     "today" | "tomorrow" | "yesterday" | "auto"
   >("auto");
@@ -456,6 +462,16 @@ function App() {
   const [predictionSearch, setPredictionSearch] = useState("");
   const [predictionTeams, setPredictionTeams] = useState<string[]>([]);
   const [predictionLine, setPredictionLine] = useState<number | "all">("all");
+  const [targetMultiplierInput, setTargetMultiplierInput] = useState("2");
+  const [bestBetLegCount, setBestBetLegCount] = useState(2);
+  const [bestBetDay, setBestBetDay] = useState<
+    "today" | "tomorrow" | "yesterday" | "auto"
+  >("auto");
+  const [bestBetSyncMode, setBestBetSyncMode] = useState<
+    "auto" | "night" | "morning" | "all"
+  >("auto");
+  const [bestBetEvents, setBestBetEvents] = useState(4);
+  const [syncSummary, setSyncSummary] = useState<string | null>(null);
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -569,6 +585,60 @@ function App() {
       5 * 60 * 1000,
       force
     );
+  };
+
+  const handleLoadBestBets = async (force = false) => {
+    const targetMultiplier = Number(targetMultiplierInput);
+    if (!targetMultiplier || Number.isNaN(targetMultiplier) || targetMultiplier <= 1) {
+      setBestBetsState({
+        ...bestBetsState,
+        error: "Target multiplier must be a number greater than 1 (e.g. 2).",
+      });
+      return;
+    }
+
+    await safeLoad(
+      bestBetsState,
+      setBestBetsState,
+      () =>
+        getBestBets({
+          target_multiplier: targetMultiplier,
+          leg_count: bestBetLegCount,
+          day: bestBetDay,
+          bookmaker: "sportsbet",
+          min_confidence: 55,
+          min_edge: 0.02,
+          min_prob: 0.52,
+          max_candidates: 36,
+        }),
+      2 * 60 * 1000,
+      force
+    );
+  };
+
+  const handleSyncAndLoadBestBets = async () => {
+    setSyncSummary(null);
+    try {
+      const sync = await syncPlayerPropsWindow({
+        bookmakers: "sportsbet",
+        markets: "player_points,player_assists,player_rebounds",
+        min_remaining_after_call: 5,
+        max_events: bestBetEvents,
+        schedule_mode: bestBetSyncMode,
+      });
+      const processed = Number(sync.events_processed ?? 0);
+      const considered = Number(sync.events_considered ?? 0);
+      const usage = sync.usage as Record<string, unknown> | undefined;
+      const remaining =
+        usage && typeof usage.requests_remaining !== "undefined"
+          ? ` | credits left: ${usage.requests_remaining}`
+          : "";
+      setSyncSummary(`Synced ${processed}/${considered} events${remaining}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to sync props.";
+      setSyncSummary(`Sync error: ${message}`);
+    }
+    await handleLoadBestBets(true);
   };
 
   useEffect(() => {
@@ -927,6 +997,214 @@ function App() {
             )}
           </div>
         );
+      case "best_bets":
+        return (
+          <div className="card card-body border-radius-xl shadow-lg best-bets-panel">
+            <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
+              <div>
+                <h4 className="mb-1">Best Bet Builder</h4>
+                <p className="text-sm text-secondary mb-0">
+                  Sync Sportsbet props in AU windows, then rank singles/parlays by model edge.
+                </p>
+              </div>
+              <div className="best-bets-controls">
+                <div className="control-group">
+                  <label className="form-label mb-1">Target payout (x)</label>
+                  <input
+                    type="number"
+                    min="1.1"
+                    step="0.1"
+                    className="form-control form-control-sm"
+                    value={targetMultiplierInput}
+                    onChange={(e) => setTargetMultiplierInput(e.target.value)}
+                  />
+                </div>
+                <div className="control-group">
+                  <label className="form-label mb-1">Legs</label>
+                  <select
+                    className="form-select form-select-sm"
+                    value={bestBetLegCount}
+                    onChange={(e) => setBestBetLegCount(Number(e.target.value))}
+                  >
+                    {[1, 2, 3, 4].map((count) => (
+                      <option key={count} value={count}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="control-group">
+                  <label className="form-label mb-1">Prediction day</label>
+                  <select
+                    className="form-select form-select-sm"
+                    value={bestBetDay}
+                    onChange={(e) =>
+                      setBestBetDay(
+                        e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                      )
+                    }
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="today">Today</option>
+                    <option value="tomorrow">Tomorrow</option>
+                    <option value="yesterday">Yesterday</option>
+                  </select>
+                </div>
+                <div className="control-group">
+                  <label className="form-label mb-1">Sync window</label>
+                  <select
+                    className="form-select form-select-sm"
+                    value={bestBetSyncMode}
+                    onChange={(e) =>
+                      setBestBetSyncMode(
+                        e.target.value as "auto" | "night" | "morning" | "all"
+                      )
+                    }
+                  >
+                    <option value="auto">Auto (AU time)</option>
+                    <option value="night">Night (next slate)</option>
+                    <option value="morning">Morning (near tipoff)</option>
+                    <option value="all">All upcoming</option>
+                  </select>
+                </div>
+                <div className="control-group">
+                  <label className="form-label mb-1">Max events</label>
+                  <select
+                    className="form-select form-select-sm"
+                    value={bestBetEvents}
+                    onChange={(e) => setBestBetEvents(Number(e.target.value))}
+                  >
+                    {[2, 4, 6, 8].map((count) => (
+                      <option key={count} value={count}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div className="d-flex flex-wrap gap-2 mb-3">
+              <button
+                className="btn btn-sm bg-gradient-primary mb-0"
+                onClick={handleSyncAndLoadBestBets}
+                disabled={bestBetsState.loading}
+              >
+                {bestBetsState.loading ? "Working..." : "Sync Props + Build Bets"}
+              </button>
+              <button
+                className="btn btn-sm btn-outline-dark mb-0"
+                onClick={() => handleLoadBestBets(true)}
+                disabled={bestBetsState.loading}
+              >
+                Recompute from Stored Props
+              </button>
+            </div>
+            {syncSummary && <p className="text-sm text-secondary mb-3">{syncSummary}</p>}
+            {bestBetsState.error && (
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {bestBetsState.error}
+              </div>
+            )}
+            {bestBetsState.loading && !bestBetsState.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Building best bets...</p>
+              </div>
+            )}
+            {bestBetsState.data && (
+              <div className="best-bets-results">
+                {bestBetsState.data.status !== "ok" ? (
+                  <div className="alert alert-warning text-dark mb-3" role="alert">
+                    {bestBetsState.data.message ?? "No bets available for current filters."}
+                  </div>
+                ) : (
+                  <>
+                    <div className="d-flex flex-wrap gap-3 mb-3">
+                      <span className="badge badge-sm bg-gradient-info">
+                        Pool: {bestBetsState.data.pool_size ?? 0}
+                      </span>
+                      <span className="badge badge-sm bg-gradient-secondary">
+                        Target: {bestBetsState.data.target_multiplier?.toFixed(2)}x
+                      </span>
+                      <span className="badge badge-sm bg-gradient-secondary">
+                        Legs: {bestBetsState.data.leg_count}
+                      </span>
+                    </div>
+                    <h6 className="mb-2">Recommended Parlays</h6>
+                    {(bestBetsState.data.recommended_parlays ?? []).length === 0 ? (
+                      <p className="text-sm text-secondary mb-4">
+                        No parlay hit the target. Try fewer legs or lower target.
+                      </p>
+                    ) : (
+                      <div className="best-parlays-grid mb-4">
+                        {(bestBetsState.data.recommended_parlays ?? []).map((parlay, idx) => (
+                          <div key={idx} className="best-parlay-card">
+                            <div className="d-flex justify-content-between mb-2">
+                              <strong>Parlay #{idx + 1}</strong>
+                              <span>{parlay.combined_odds.toFixed(2)}x</span>
+                            </div>
+                            <p className="text-xs text-secondary mb-2">
+                              Hit chance {(parlay.combined_probability * 100).toFixed(1)}% | EV{" "}
+                              {parlay.expected_value_per_unit.toFixed(2)}
+                            </p>
+                            <ul className="best-leg-list">
+                              {parlay.legs.map((leg) => (
+                                <li
+                                  key={`${leg.event_id}-${leg.player_name}-${leg.market}-${leg.side}-${leg.line}`}
+                                >
+                                  {leg.player_name} {leg.side} {leg.line} ({leg.stat_type}) @{" "}
+                                  {leg.price_decimal.toFixed(2)}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <h6 className="mb-2">Top Single Legs</h6>
+                    <div className="table-responsive">
+                      <table className="table align-items-center mb-0">
+                        <thead>
+                          <tr>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Bet</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Odds</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Model Prob</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Edge</th>
+                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Confidence</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(bestBetsState.data.top_single_legs ?? []).map((leg) => (
+                            <tr
+                              key={`${leg.event_id}-${leg.player_name}-${leg.market}-${leg.side}-${leg.line}`}
+                            >
+                              <td className="text-sm">{leg.player_name}</td>
+                              <td className="text-sm">
+                                {leg.side} {leg.line} ({leg.stat_type})
+                              </td>
+                              <td className="text-sm">{leg.price_decimal.toFixed(2)}</td>
+                              <td className="text-sm">{(leg.model_prob * 100).toFixed(1)}%</td>
+                              <td className="text-sm">{(leg.edge * 100).toFixed(1)}%</td>
+                              <td className="text-sm">
+                                {typeof leg.prediction.confidence === "number"
+                                  ? `${leg.prediction.confidence}%`
+                                  : "n/a"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        );
       case "predictions":
         const activePrediction = predictionConfig[predictionStat];
         const lineOptions: Record<typeof predictionStat, number[]> = {
@@ -1056,7 +1334,9 @@ function App() {
                 </div>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
-                  onClick={handleLoadPredictions}
+                  onClick={() => {
+                    void handleLoadPredictions();
+                  }}
                   disabled={activePrediction.state.loading}
                 >
                   {activePrediction.state.loading ? (
@@ -1223,6 +1503,13 @@ function App() {
                     <i className="material-symbols-rounded me-2">casino</i>
                     View Props
                   </button>
+                  <button
+                    className="btn btn-outline-white mb-0"
+                    onClick={() => jumpToTab("best_bets")}
+                  >
+                    <i className="material-symbols-rounded me-2">paid</i>
+                    Best Bets
+                  </button>
                 </div>
                 <div className="hero-tags mt-4">
                   <span className="badge badge-sm bg-white text-dark">Realtime APIs</span>
@@ -1370,6 +1657,17 @@ function App() {
                     </li>
                     <li className="nav-item">
                       <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "best_bets" ? "active" : ""}`}
+                        onClick={() => setActiveTab("best_bets")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">paid</i>
+                        Best Bets
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
                         className={`nav-link mb-0 px-0 py-1 ${activeTab === "predictions" ? "active" : ""}`}
                         onClick={() => setActiveTab("predictions")}
                         role="tab"
@@ -1404,8 +1702,16 @@ function App() {
                     Fetch Player Props
                   </button>
                   <button
+                    className="btn btn-sm btn-outline-dark w-100 mb-3"
+                    onClick={() => jumpToTab("best_bets", handleSyncAndLoadBestBets)}
+                  >
+                    Build Best Bets
+                  </button>
+                  <button
                     className="btn btn-sm btn-outline-dark w-100"
-                    onClick={handleLoadPredictions}
+                    onClick={() => {
+                      void handleLoadPredictions();
+                    }}
                   >
                     Update Predictions
                   </button>

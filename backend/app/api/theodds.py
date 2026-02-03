@@ -20,14 +20,18 @@ async def list_sports():
 @router.get("/{sport}")
 async def get_odds(
     sport: str,
-    regions: str = "us",
+    regions: str | None = "us",
+    bookmakers: str | None = "fanduel",
     markets: str = "h2h",
+    min_remaining_after_call: int = 3,
 ):
     try:
         return await client.get_odds(
             sport=sport,
             regions=regions,
+            bookmakers=bookmakers,
             markets=markets,
+            min_remaining_after_call=min_remaining_after_call,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -47,15 +51,24 @@ async def get_events(sport: str):
 async def get_event_odds(
     sport: str,
     event_id: str,
-    regions: str = "us",
+    regions: str | None = "us",
+    bookmakers: str | None = None,
     markets: str = "player_points",
+    min_remaining_after_call: int = 3,
 ):
     try:
         return await client.get_event_odds(
             sport=sport,
             event_id=event_id,
             regions=regions,
+            bookmakers=bookmakers,
             markets=markets,
+            min_remaining_after_call=min_remaining_after_call,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/usage/snapshot")
+async def usage_snapshot():
+    return client.latest_usage()

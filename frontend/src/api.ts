@@ -40,6 +40,54 @@ export type PredictionRow = {
   model_version?: string;
 };
 
+export type BestBetLeg = {
+  event_id: string;
+  commence_time: string;
+  matchup: string;
+  bookmaker: string;
+  market: string;
+  stat_type: "points" | "assists" | "rebounds";
+  player_name: string;
+  side: "Over" | "Under" | string;
+  line: number;
+  price_decimal: number;
+  implied_prob: number;
+  model_prob_raw: number;
+  model_prob: number;
+  edge: number;
+  ev_per_unit: number;
+  prediction: {
+    pred_value?: number;
+    pred_p10?: number;
+    pred_p50?: number;
+    pred_p90?: number;
+    confidence?: number;
+    team_abbreviation?: string;
+  };
+};
+
+export type BestBetParlay = {
+  legs: BestBetLeg[];
+  combined_odds: number;
+  combined_probability: number;
+  expected_value_per_unit: number;
+  meets_target: boolean;
+};
+
+export type BestBetsResponse = {
+  status: string;
+  generated_at?: string;
+  bookmaker?: string;
+  target_multiplier?: number;
+  leg_count?: number;
+  day?: string;
+  pool_size?: number;
+  top_single_legs?: BestBetLeg[];
+  recommended_parlays?: BestBetParlay[];
+  message?: string;
+  debug?: Record<string, number>;
+};
+
 const API_BASE =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -81,6 +129,27 @@ async function fetchWithCache<T>(
   const data = (await res.json()) as T;
   cache[key] = { data, timestamp: now };
   return data;
+}
+
+async function postJson<T>(
+  path: string,
+  params?: Record<string, unknown>
+): Promise<T> {
+  const url = new URL(path, API_BASE);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== "") {
+        url.searchParams.set(k, String(v));
+      }
+    });
+  }
+
+  const res = await fetch(url.toString(), { method: "POST" });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Request failed with status ${res.status}: ${body}`);
+  }
+  return (await res.json()) as T;
 }
 
 // Player stats endpoints (cached clientside for 10 minutes)
@@ -196,4 +265,31 @@ export function getThreeptPredictions(
     { day },
     PREDICTIONS_TTL
   );
+}
+
+export function syncPlayerPropsWindow(
+  params: {
+    bookmakers?: string;
+    markets?: string;
+    min_remaining_after_call?: number;
+    max_events?: number;
+    schedule_mode?: "auto" | "night" | "morning" | "all";
+  } = {}
+): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/db/player-props/sync", params);
+}
+
+export function getBestBets(
+  params: {
+    target_multiplier?: number;
+    leg_count?: number;
+    bookmaker?: string;
+    day?: "today" | "tomorrow" | "yesterday" | "auto";
+    min_confidence?: number;
+    min_edge?: number;
+    min_prob?: number;
+    max_candidates?: number;
+  } = {}
+): Promise<BestBetsResponse> {
+  return fetchWithCache<BestBetsResponse>("/bets/best", params, 2 * 60 * 1000);
 }

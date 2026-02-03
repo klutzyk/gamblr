@@ -41,7 +41,9 @@ async def save_event_odds(event_data: dict, db: AsyncSession):
     # --- Bookmakers ---
     for b in event_data.get("bookmakers", []):
         # check if bookmaker exists
-        stmt = select(Bookmaker).where(Bookmaker.key == b["key"])
+        stmt = select(Bookmaker).where(
+            Bookmaker.event_id == event.id, Bookmaker.key == b["key"]
+        )
         res = await db.execute(stmt)
         bookmaker = res.scalar_one_or_none()
 
@@ -87,10 +89,12 @@ async def save_event_odds(event_data: dict, db: AsyncSession):
 
             # --- Player Props ---
             for o in m.get("outcomes", []):
+                line = o.get("point")
                 stmt = select(PlayerProp).where(
                     PlayerProp.market_id == market.id,
                     PlayerProp.player_name == o["description"],
                     PlayerProp.side == o["name"],
+                    PlayerProp.line == line,
                 )
                 res = await db.execute(stmt)
                 prop = res.scalar_one_or_none()
@@ -101,12 +105,12 @@ async def save_event_odds(event_data: dict, db: AsyncSession):
                         player_name=o["description"],
                         side=o["name"],
                         price=o["price"],
-                        line=o["point"],
+                        line=line,
                     )
                     db.add(prop)
                 else:
                     prop.price = o["price"]
-                    prop.line = o["point"]
+                    prop.line = line
 
     # final commit after all children added/updated
     await db.commit()

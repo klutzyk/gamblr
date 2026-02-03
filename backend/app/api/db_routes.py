@@ -25,6 +25,7 @@ import uuid
 from asyncio_throttle import Throttler
 import pandas as pd
 from app.core.constants import MAX_GAMES_PER_PLAYER
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -40,47 +41,167 @@ update_jobs: dict[str, dict] = {}
 # store player points props for a single event (game)
 @router.post("/player-points/{event_id}")
 async def refresh_player_points_event(
-    event_id: str, db: AsyncSession = Depends(get_db)
+    event_id: str,
+    markets: str = "player_points",
+    regions: str | None = None,
+    bookmakers: str | None = "sportsbet",
+    min_remaining_after_call: int = 3,
+    db: AsyncSession = Depends(get_db),
 ):
     try:
-        odds_data = await odds_client.get_event_odds(
-            sport="basketball_nba", event_id=event_id
+        response = await odds_client.get_event_odds(
+            sport="basketball_nba",
+            event_id=event_id,
+            markets=markets,
+            regions=regions,
+            bookmakers=bookmakers,
+            min_remaining_after_call=min_remaining_after_call,
         )
+        odds_data = response["data"]
         await save_event_odds(odds_data, db)
         return {
             "status": "success",
             "event_id": event_id,
-            "stored_markets": len(odds_data.get("bookmakers", [])),
+            "bookmakers_seen": len(odds_data.get("bookmakers", [])),
+            "usage": response.get("usage"),
+            "estimated_cost": response.get("estimated_cost"),
         }
     except Exception as e:
         logger.error(f"Error fetching/storing event {event_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# get all events for today and store all player point props for those events
-# (MIGHT BE EXCESSIVE AND OVERUSE THE API)
+# One-call sync for all upcoming events.
+# This is much cheaper than looping per-event odds calls.
 @router.post("/player-points/all")
-async def refresh_all_player_points(db: AsyncSession = Depends(get_db)):
+async def refresh_all_player_points(
+    markets: str = "player_points,player_assists,player_rebounds",
+    regions: str | None = None,
+    bookmakers: str | None = "sportsbet",
+    min_remaining_after_call: int = 3,
+    max_events: int = 4,
+    schedule_mode: str = "auto",
+    db: AsyncSession = Depends(get_db),
+):
     try:
         events = await odds_client.get_events("basketball_nba")
-        total_markets = 0
+        events = sorted(events, key=lambda e: e.get("commence_time", ""))
 
-        for event in events:
-            event_id = event["id"]
-            odds_data = await odds_client.get_event_odds(
-                sport="basketball_nba", event_id=event_id
+        now_utc = datetime.now(ZoneInfo("UTC"))
+        now_au = datetime.now(ZoneInfo("Australia/Sydney"))
+        au_hour = now_au.hour
+        mode = schedule_mode.lower().strip()
+
+        if mode == "auto":
+            if 18 <= au_hour <= 23:
+                mode = "night"
+            elif 7 <= au_hour <= 11:
+                mode = "morning"
+            else:
+                mode = "skip"
+
+        if mode == "night":
+            min_hours_to_tipoff = 10
+            max_hours_to_tipoff = 30
+        elif mode == "morning":
+            min_hours_to_tipoff = 0
+            max_hours_to_tipoff = 8
+        elif mode == "all":
+            min_hours_to_tipoff = 0
+            max_hours_to_tipoff = 36
+        elif mode == "skip":
+            min_hours_to_tipoff = 9999
+            max_hours_to_tipoff = 9999
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="schedule_mode must be one of: auto, night, morning, all",
             )
+
+        filtered_events = []
+        for event in events:
+            commence_time = event.get("commence_time")
+            if not commence_time:
+                continue
+            event_time = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+            hours_to_tipoff = (event_time - now_utc).total_seconds() / 3600
+            if min_hours_to_tipoff <= hours_to_tipoff <= max_hours_to_tipoff:
+                filtered_events.append(event)
+
+        if max_events > 0:
+            filtered_events = filtered_events[:max_events]
+
+        events_processed = 0
+        events_skipped = 0
+        total_bookmakers = 0
+        total_estimated_cost = 0
+        last_usage = odds_client.latest_usage()
+
+        for event in filtered_events:
+            event_id = event.get("id")
+            if not event_id:
+                events_skipped += 1
+                continue
+            try:
+                response = await odds_client.get_event_odds(
+                    sport="basketball_nba",
+                    event_id=event_id,
+                    markets=markets,
+                    regions=regions,
+                    bookmakers=bookmakers,
+                    min_remaining_after_call=min_remaining_after_call,
+                )
+            except RuntimeError as quota_error:
+                logger.warning(f"Stopping prop sync due to quota guard: {quota_error}")
+                break
+
+            odds_data = response["data"]
             await save_event_odds(odds_data, db)
-            total_markets += len(odds_data.get("bookmakers", []))
+            events_processed += 1
+            total_bookmakers += len(odds_data.get("bookmakers", []))
+            total_estimated_cost += int(response.get("estimated_cost") or 0)
+            last_usage = response.get("usage") or last_usage
 
         return {
             "status": "success",
-            "events_processed": len(events),
-            "stored_markets": total_markets,
+            "events_processed": events_processed,
+            "events_skipped": events_skipped,
+            "events_considered": len(filtered_events),
+            "events_available": len(events),
+            "bookmakers_seen": total_bookmakers,
+            "usage": last_usage,
+            "estimated_cost": total_estimated_cost,
+            "markets_requested": markets,
+            "bookmakers_requested": bookmakers,
+            "max_events": max_events,
+            "schedule_mode": mode,
+            "timezone": "Australia/Sydney",
+            "sync_local_hour": au_hour,
         }
     except Exception as e:
         logger.error(f"Error fetching/storing all events: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/player-props/sync")
+async def refresh_player_props_sync(
+    markets: str = "player_points,player_assists,player_rebounds",
+    regions: str | None = None,
+    bookmakers: str | None = "sportsbet",
+    min_remaining_after_call: int = 3,
+    max_events: int = 4,
+    schedule_mode: str = "auto",
+    db: AsyncSession = Depends(get_db),
+):
+    return await refresh_all_player_points(
+        markets=markets,
+        regions=regions,
+        bookmakers=bookmakers,
+        min_remaining_after_call=min_remaining_after_call,
+        max_events=max_events,
+        schedule_mode=schedule_mode,
+        db=db,
+    )
 
 
 # get and store last N box score stats for ALL active players. N takes on the value of MAX_GAMES_PER_PLAYER
