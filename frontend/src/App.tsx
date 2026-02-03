@@ -454,7 +454,7 @@ function App() {
     "none" | "under_risk_desc" | "under_risk_asc"
   >("none");
   const [predictionSearch, setPredictionSearch] = useState("");
-  const [predictionTeam, setPredictionTeam] = useState("all");
+  const [predictionTeams, setPredictionTeams] = useState<string[]>([]);
   const [predictionLine, setPredictionLine] = useState<number | "all">("all");
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
@@ -954,8 +954,8 @@ function App() {
                 return false;
               }
               if (
-                predictionTeam !== "all" &&
-                row.team_abbreviation !== predictionTeam
+                predictionTeams.length > 0 &&
+                !predictionTeams.includes(row.team_abbreviation ?? "")
               ) {
                 return false;
               }
@@ -1090,9 +1090,9 @@ function App() {
               <div className="prediction-team-chips">
                 <button
                   className={`team-chip ${
-                    predictionTeam === "all" ? "active" : ""
+                    predictionTeams.length === 0 ? "active" : ""
                   }`}
-                  onClick={() => setPredictionTeam("all")}
+                  onClick={() => setPredictionTeams([])}
                 >
                   All teams
                 </button>
@@ -1100,9 +1100,15 @@ function App() {
                   <button
                     key={team}
                     className={`team-chip ${
-                      predictionTeam === team ? "active" : ""
+                      predictionTeams.includes(team) ? "active" : ""
                     }`}
-                    onClick={() => setPredictionTeam(team)}
+                    onClick={() =>
+                      setPredictionTeams((prev) =>
+                        prev.includes(team)
+                          ? prev.filter((t) => t !== team)
+                          : [...prev, team]
+                      )
+                    }
                   >
                     {team}
                   </button>

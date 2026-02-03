@@ -123,7 +123,7 @@ def main():
                     client,
                     "POST",
                     f"/ml/backtest/walkforward/{stat}",
-                    {"reset": "true"},
+                    {"reset": "false"},
                 )
 
     print("Pipeline complete.")
