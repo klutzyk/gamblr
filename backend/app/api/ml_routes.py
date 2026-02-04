@@ -23,6 +23,7 @@ from ml.backtest import walk_forward_backtest
 from app.db.store_prediction_logs import log_predictions
 from ml.first_basket_labels import build_first_basket_labels
 from ml.first_basket_model import train_first_basket_models
+from ml.under_side_model import train_under_side_model
 
 router = APIRouter()
 
@@ -66,6 +67,15 @@ async def train_all():
     assists = await run_in_threadpool(train_assists_model, sync_engine)
     rebounds = await run_in_threadpool(train_rebounds_model, sync_engine)
     threept = await run_in_threadpool(train_threept_model, sync_engine)
+    try:
+        under_side = await run_in_threadpool(
+            train_under_side_model,
+            sync_engine,
+            180,
+            300,
+        )
+    except Exception as e:
+        under_side = {"status": "error", "detail": str(e)}
     return {
         "status": "trained",
         "minutes": minutes,
@@ -73,6 +83,7 @@ async def train_all():
         "assists": assists,
         "rebounds": rebounds,
         "threept": threept,
+        "under_side": under_side,
     }
 
 
@@ -157,3 +168,17 @@ async def train_first_basket():
 async def evaluate_first_basket():
     updated = await run_in_threadpool(update_first_basket_actuals, sync_engine)
     return {"status": "updated", "rows_updated": updated}
+
+
+@router.post("/under-side/train")
+async def train_under_side(
+    lookback_days: int = 180,
+    min_rows_per_stat: int = 300,
+):
+    result = await run_in_threadpool(
+        train_under_side_model,
+        sync_engine,
+        lookback_days,
+        min_rows_per_stat,
+    )
+    return {"status": "trained", **result}

@@ -109,12 +109,12 @@ def main():
     print("Rolling features updated.")
 
     with httpx.Client(base_url=base_url) as client:
-        print("Training models...")
-        call_api(client, "POST", "/ml/train/all")
-
         if recalc_under_risk:
             print("Recalculating under-risk metrics...")
             call_api(client, "POST", "/db/under-risk/recalc-all")
+
+        print("Training models...")
+        call_api(client, "POST", "/ml/train/all")
 
         if run_backtests:
             print("Running backtests...")
