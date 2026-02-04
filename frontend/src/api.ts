@@ -88,6 +88,27 @@ export type PredictionRow = {
   model_version?: string;
 };
 
+export type FirstBasketPredictionRow = {
+  game_id?: string;
+  game_date?: string;
+  matchup: string;
+  tipoff_et?: string;
+  tipoff_au?: string;
+  team_side?: string;
+  team_id?: number | null;
+  team_abbreviation: string;
+  lineup_status?: string;
+  player_id: number;
+  full_name: string;
+  position?: string;
+  first_basket_prob: number;
+  team_scores_first_prob?: number;
+  player_share_on_team?: number;
+  model_version?: string;
+  jedibets_first_baskets?: number;
+  jedibets_team_first_fg_pct?: number;
+};
+
 export type BestBetLeg = {
   event_id: string;
   commence_time: string;
@@ -342,6 +363,25 @@ export function getThreeptPredictions(
     { day },
     PREDICTIONS_TTL
   );
+}
+
+export function getFirstBasketPredictions(
+  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto",
+  top_n_per_game = 6
+): Promise<FirstBasketPredictionRow[]> {
+  const url = new URL("/players/predictions/first_basket", API_BASE);
+  url.searchParams.set("day", day);
+  url.searchParams.set("top_n_per_game", String(top_n_per_game));
+  // First-basket output is sensitive to lineup/time updates; skip client cache.
+  url.searchParams.set("_t", String(Date.now()));
+  return fetch(url.toString())
+    .then(async (res) => {
+      if (!res.ok) {
+        throw new Error(`Request failed with status ${res.status}`);
+      }
+      return (await res.json()) as { data?: FirstBasketPredictionRow[] };
+    })
+    .then((payload) => payload.data ?? []);
 }
 
 export function syncPlayerPropsWindow(

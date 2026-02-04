@@ -17,6 +17,8 @@ from app.models import (
     team,
     team_game_stat,
     lineup_stat,
+    first_basket_label,
+    first_basket_prediction_log,
 )
 
 

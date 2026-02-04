@@ -3,11 +3,22 @@ from ..services.nba_client import NBAClient
 from sqlalchemy import create_engine, text
 from app.core.config import settings
 from fastapi.concurrency import run_in_threadpool
+from app.services.rotowire_lineups_client import RotoWireLineupsClient
+from app.services.jedibets_first_basket_client import JediBetsFirstBasketClient
+from app.services.lineup_resolver import LineupResolver
+from app.db.store_first_basket import upsert_first_basket_prediction_logs
 import sys
 from pathlib import Path
 import pandas as pd
 import numpy as np
 import math
+from datetime import datetime
+from datetime import timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
 
 # get teh path to the ml folder
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -15,11 +26,15 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from ml.predict import predict_points, predict_assists, predict_rebounds, predict_threept
+from ml.first_basket_model import predict_first_basket_with_models
 from app.db.store_prediction_logs import log_predictions
 
 router = APIRouter()
 client = NBAClient(timeout=15)
 sync_engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
+rotowire_lineups_client = RotoWireLineupsClient(timeout=20)
+jedi_client = JediBetsFirstBasketClient(timeout=20)
+lineup_resolver = LineupResolver(sync_engine)
 
 
 # Helper function to convert DataFrame to list of dicts for API response
@@ -565,3 +580,495 @@ async def predict_threept_api(
     )
 
     return df_to_dict(df_preds)
+
+
+def fetch_recent_points_avgs(engine, player_ids: list[int], n_games: int = 10):
+    if not player_ids:
+        return {}
+    ids = ",".join(str(int(pid)) for pid in set(player_ids))
+    query = text(
+        f"""
+        WITH ranked AS (
+            SELECT player_id, points, game_date,
+                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC) AS rn
+            FROM player_game_stats
+            WHERE player_id IN ({ids})
+              AND points IS NOT NULL
+              AND game_date IS NOT NULL
+        )
+        SELECT player_id, AVG(points) AS avg_points
+        FROM ranked
+        WHERE rn <= :n_games
+        GROUP BY player_id
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"n_games": n_games}).fetchall()
+    return {int(r[0]): float(r[1]) for r in rows if r[1] is not None}
+
+
+def _injury_multiplier(injury_tag: str | None):
+    if not injury_tag:
+        return 1.0
+    tag = injury_tag.lower()
+    if tag == "prob":
+        return 0.9
+    if tag == "ques":
+        return 0.75
+    if tag in {"out", "ofs"}:
+        return 0.0
+    return 1.0
+
+
+TEAM_ABBR_ALIAS = {
+    "NY": "NYK",
+    "GS": "GSW",
+    "WSH": "WAS",
+    "NO": "NOP",
+    "SA": "SAS",
+    "UTAH": "UTA",
+}
+
+
+def _canon_team_abbr(team_abbr: str | None):
+    if not team_abbr:
+        return ""
+    t = team_abbr.upper().strip()
+    return TEAM_ABBR_ALIAS.get(t, t)
+
+
+def _norm_name(name: str | None):
+    if not name:
+        return ""
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def build_jedibets_priors(jedibets_stats: dict | None):
+    if not jedibets_stats:
+        return {}, {}
+
+    player_counts: dict[tuple[str, str], int] = {}
+    team_fg_pct: dict[str, float] = {}
+
+    for row in jedibets_stats.get("players", []):
+        name = _norm_name(row.get("player"))
+        team = _canon_team_abbr(row.get("team"))
+        count = row.get("first_baskets")
+        if name and team and isinstance(count, int):
+            player_counts[(name, team)] = count
+
+    for row in jedibets_stats.get("teams", []):
+        team = _canon_team_abbr(row.get("team"))
+        fg_pct = row.get("first_fg_pct")
+        if team and isinstance(fg_pct, (float, int)):
+            team_fg_pct[team] = float(fg_pct)
+
+    return player_counts, team_fg_pct
+
+
+def build_first_basket_predictions(
+    lineups_payload: dict,
+    df_points: pd.DataFrame,
+    top_n_per_game: int,
+    jedibets_stats: dict | None = None,
+):
+    points_map = {}
+    if not df_points.empty and "player_id" in df_points and "pred_value" in df_points:
+        points_map = {
+            int(pid): float(val)
+            for pid, val in zip(df_points["player_id"], df_points["pred_value"])
+            if pd.notnull(pid) and pd.notnull(val)
+        }
+
+    starter_ids = []
+    for game in lineups_payload.get("games", []):
+        for team_key in ["away", "home"]:
+            for starter in game.get(team_key, {}).get("starters", []):
+                pid = starter.get("resolved_player_id")
+                if pid is not None:
+                    starter_ids.append(int(pid))
+    recent_points_map = fetch_recent_points_avgs(sync_engine, starter_ids, n_games=10)
+    player_fb_counts, team_fg_pct = build_jedibets_priors(jedibets_stats)
+
+    output_rows = []
+    for game in lineups_payload.get("games", []):
+        team_rows = {"away": [], "home": []}
+        team_scores = {"away": 0.0, "home": 0.0}
+
+        for team_key, team_abbr_key in [("away", "away_team_abbr"), ("home", "home_team_abbr")]:
+            team = game.get(team_key, {})
+            team_status = (team.get("status") or "expected").lower()
+            status_multiplier = 1.0 if team_status == "confirmed" else 0.9
+
+            for starter in team.get("starters", []):
+                pid = starter.get("resolved_player_id")
+                if pid is None:
+                    continue
+
+                pred_points = points_map.get(int(pid))
+                if pred_points is None:
+                    pred_points = recent_points_map.get(int(pid), 5.0)
+
+                play_pct = starter.get("play_pct") or 100
+                pos = (starter.get("position") or "").upper()
+                injury_mult = _injury_multiplier(starter.get("injury_tag"))
+                pos_mult = 1.18 if pos == "C" else 1.0
+                team_abbr = _canon_team_abbr(game.get(team_abbr_key))
+                player_name_key = _norm_name(starter.get("resolved_full_name") or starter.get("name"))
+                fb_count = player_fb_counts.get((player_name_key, team_abbr), 0)
+                fg_team_rate = team_fg_pct.get(team_abbr, 0.5)
+                # Blend priors from JediBets into baseline score.
+                player_prior_mult = 1.0 + min(0.8, fb_count / 20.0)
+                team_prior_mult = 0.8 + fg_team_rate
+
+                base_score = max(0.1, (pred_points + 2.0))
+                score = (
+                    base_score
+                    * (play_pct / 100.0)
+                    * pos_mult
+                    * status_multiplier
+                    * injury_mult
+                    * player_prior_mult
+                    * team_prior_mult
+                )
+                if score <= 0:
+                    continue
+
+                row = {
+                    "matchup": game.get("matchup"),
+                    "tipoff_et": game.get("tipoff_et"),
+                    "team_abbreviation": game.get(team_abbr_key),
+                    "team_side": team_key,
+                    "lineup_status": team.get("status"),
+                    "player_id": int(pid),
+                    "full_name": starter.get("resolved_full_name") or starter.get("name"),
+                    "position": starter.get("position"),
+                    "pred_points": round(float(pred_points), 2),
+                    "lineup_play_pct": play_pct,
+                    "jedibets_first_baskets": fb_count,
+                    "jedibets_team_first_fg_pct": round(float(fg_team_rate), 4),
+                    "raw_score": float(score),
+                }
+                team_rows[team_key].append(row)
+                team_scores[team_key] += float(score)
+
+        game_total = team_scores["away"] + team_scores["home"]
+        if game_total <= 0:
+            continue
+
+        game_results = []
+        for team_key in ["away", "home"]:
+            team_total = team_scores[team_key]
+            if team_total <= 0:
+                continue
+            team_first_score_prob = team_total / game_total
+            for row in team_rows[team_key]:
+                player_share = row["raw_score"] / team_total
+                first_basket_prob = team_first_score_prob * player_share
+                row["team_scores_first_prob"] = round(float(team_first_score_prob), 4)
+                row["player_share_on_team"] = round(float(player_share), 4)
+                row["first_basket_prob"] = round(float(first_basket_prob), 4)
+                game_results.append(row)
+
+        game_results.sort(key=lambda r: r["first_basket_prob"], reverse=True)
+        output_rows.extend(game_results[:top_n_per_game])
+
+    output_rows.sort(key=lambda r: (r["tipoff_et"] or "", -r["first_basket_prob"]))
+    return output_rows
+
+
+def attach_schedule_metadata(lineups_payload: dict):
+    games = lineups_payload.get("games", [])
+    if not games:
+        return lineups_payload
+
+    # Use team abbreviations to attach local schedule game_id/date.
+    pair_keys = {
+        f"{(g.get('away_team_abbr') or '').upper()}@{(g.get('home_team_abbr') or '').upper()}"
+        for g in games
+        if g.get("away_team_abbr") and g.get("home_team_abbr")
+    }
+    if not pair_keys:
+        return lineups_payload
+
+    with sync_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT game_id, game_date, matchup, home_team_id, away_team_id, home_team_abbr, away_team_abbr
+                FROM game_schedule
+                WHERE game_date >= (CURRENT_DATE - INTERVAL '7 day')
+                  AND game_date <= (CURRENT_DATE + INTERVAL '7 day')
+                ORDER BY game_date DESC
+                """
+            ),
+            {},
+        ).fetchall()
+
+    by_pair = {}
+    for r in rows:
+        pair = f"{(r[6] or '').upper()}@{(r[5] or '').upper()}"
+        if pair in pair_keys and pair not in by_pair:
+            by_pair[pair] = r
+
+    for game in lineups_payload.get("games", []):
+        key = f"{(game.get('away_team_abbr') or '').upper()}@{(game.get('home_team_abbr') or '').upper()}"
+        row = by_pair.get(key)
+        if not row:
+            continue
+        game["game_id"] = row[0]
+        game["game_date"] = row[1]
+        if game.get("home_team_id") is None and row[3] is not None:
+            game["home_team_id"] = int(row[3])
+        if game.get("away_team_id") is None and row[4] is not None:
+            game["away_team_id"] = int(row[4])
+    return lineups_payload
+
+
+def _tipoff_et_to_au_text(tipoff_et: str | None, game_date):
+    if not tipoff_et or game_date is None or ZoneInfo is None:
+        return None
+    try:
+        parsed = datetime.strptime(tipoff_et.replace(" ET", "").strip(), "%I:%M %p")
+        d = pd.to_datetime(game_date).date()
+        et_dt = datetime(
+            d.year,
+            d.month,
+            d.day,
+            parsed.hour,
+            parsed.minute,
+            tzinfo=ZoneInfo("America/New_York"),
+        )
+        au_dt = et_dt.astimezone(ZoneInfo("Australia/Sydney"))
+        return au_dt.strftime("%b %d, %I:%M %p %Z")
+    except Exception:
+        return None
+
+
+def _target_et_date_for_day(day: str):
+    if ZoneInfo:
+        base_date = datetime.now(ZoneInfo("America/New_York")).date()
+    else:
+        base_date = datetime.now().date()
+    if day == "today":
+        return base_date - timedelta(days=1)
+    if day == "tomorrow":
+        return base_date
+    if day == "yesterday":
+        return base_date - timedelta(days=2)
+    return base_date
+
+
+def _infer_team_starters(engine, team_abbr: str, target_date, top_n: int = 5):
+    df = pd.read_sql(
+        text(
+            """
+            SELECT p.id AS player_id, p.full_name, p.team_abbreviation,
+                   pg.minutes, pg.game_date
+            FROM players p
+            JOIN player_game_stats pg ON pg.player_id = p.id
+            WHERE p.team_abbreviation = :team_abbr
+              AND pg.game_date < :target_date
+              AND pg.game_date >= (:target_date - INTERVAL '40 day')
+              AND pg.minutes IS NOT NULL
+            ORDER BY pg.game_date DESC
+            """
+        ),
+        engine,
+        params={"team_abbr": team_abbr, "target_date": target_date},
+    )
+    if df.empty:
+        return []
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    df["minutes"] = pd.to_numeric(df["minutes"], errors="coerce").fillna(0.0)
+    df = df.sort_values(["player_id", "game_date"], ascending=[True, False])
+    recent = df.groupby("player_id").head(5)
+    rank = (
+        recent.groupby(["player_id", "full_name", "team_abbreviation"], as_index=False)["minutes"]
+        .mean()
+        .sort_values("minutes", ascending=False)
+        .head(top_n)
+    )
+    rows = []
+    for _, r in rank.iterrows():
+        rows.append(
+            {
+                "name": r["full_name"],
+                "resolved_full_name": r["full_name"],
+                "position": None,
+                "injury_tag": None,
+                "play_pct": 70,
+                "resolved_player_id": int(r["player_id"]),
+                "team_id": None,
+                "name_match_type": "inferred",
+                "name_match_score": 0.0,
+            }
+        )
+    return rows
+
+
+def build_inferred_lineups_from_schedule(engine, day: str):
+    target_date = _target_et_date_for_day(day)
+    df_schedule = pd.read_sql(
+        text(
+            """
+            SELECT game_id, game_date, matchup, home_team_id, away_team_id,
+                   home_team_abbr, away_team_abbr
+            FROM game_schedule
+            WHERE game_date = :target_date
+            ORDER BY game_id
+            """
+        ),
+        engine,
+        params={"target_date": target_date},
+    )
+    if df_schedule.empty:
+        return {
+            "source": "schedule_inferred",
+            "games_count": 0,
+            "games": [],
+        }
+
+    games = []
+    for _, game in df_schedule.iterrows():
+        away_abbr = game["away_team_abbr"]
+        home_abbr = game["home_team_abbr"]
+        away_starters = _infer_team_starters(engine, away_abbr, target_date)
+        home_starters = _infer_team_starters(engine, home_abbr, target_date)
+        for s in away_starters:
+            s["team_id"] = int(game["away_team_id"]) if pd.notnull(game["away_team_id"]) else None
+        for s in home_starters:
+            s["team_id"] = int(game["home_team_id"]) if pd.notnull(game["home_team_id"]) else None
+        games.append(
+            {
+                "game_id": game["game_id"],
+                "game_date": game["game_date"],
+                "matchup": game["matchup"],
+                "tipoff_et": None,
+                "away_team_abbr": away_abbr,
+                "home_team_abbr": home_abbr,
+                "away_team_id": int(game["away_team_id"]) if pd.notnull(game["away_team_id"]) else None,
+                "home_team_id": int(game["home_team_id"]) if pd.notnull(game["home_team_id"]) else None,
+                "away": {
+                    "status": "inferred",
+                    "status_text": "Inferred from recent starters/minutes",
+                    "team_id": int(game["away_team_id"]) if pd.notnull(game["away_team_id"]) else None,
+                    "starters": away_starters,
+                    "all_listed_players": away_starters,
+                    "resolved_starters": len([s for s in away_starters if s.get("resolved_player_id")]),
+                    "all_starters_resolved": len(away_starters) >= 5,
+                },
+                "home": {
+                    "status": "inferred",
+                    "status_text": "Inferred from recent starters/minutes",
+                    "team_id": int(game["home_team_id"]) if pd.notnull(game["home_team_id"]) else None,
+                    "starters": home_starters,
+                    "all_listed_players": home_starters,
+                    "resolved_starters": len([s for s in home_starters if s.get("resolved_player_id")]),
+                    "all_starters_resolved": len(home_starters) >= 5,
+                },
+                "starter_count_ok": len(away_starters) >= 5 and len(home_starters) >= 5,
+            }
+        )
+
+    total_starters = sum(len(g["away"]["starters"]) + len(g["home"]["starters"]) for g in games)
+    resolved = sum(
+        g["away"]["resolved_starters"] + g["home"]["resolved_starters"]
+        for g in games
+    )
+    return {
+        "source": "schedule_inferred",
+        "games_count": len(games),
+        "games": games,
+        "resolution": {
+            "resolved_starters": resolved,
+            "total_starters": total_starters,
+            "resolution_rate": round((resolved / total_starters), 4) if total_starters else 0.0,
+        },
+    }
+
+
+@router.get("/predictions/first_basket")
+async def predict_first_basket_api(
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    top_n_per_game: int = Query(6, ge=1, le=10),
+):
+    """
+    Generate first-basket probabilities using projected starters and point projections.
+    """
+    rotowire_day = day if day in {"today", "tomorrow", "yesterday"} else None
+    raw_lineups = await run_in_threadpool(rotowire_lineups_client.fetch_lineups, rotowire_day)
+    lineups = await run_in_threadpool(lineup_resolver.enrich_rotowire_payload, raw_lineups)
+    lineups = await run_in_threadpool(attach_schedule_metadata, lineups)
+    lineups_source = "rotowire"
+    if (lineups.get("games_count") or 0) == 0:
+        inferred = await run_in_threadpool(build_inferred_lineups_from_schedule, sync_engine, day)
+        if (inferred.get("games_count") or 0) > 0:
+            lineups = inferred
+            lineups_source = "schedule_inferred"
+    jedibets_stats = None
+    try:
+        jedibets_stats = await run_in_threadpool(jedi_client.fetch_stats)
+    except Exception:
+        jedibets_stats = None
+
+    df_points = await run_in_threadpool(predict_points, sync_engine, day)
+    source = f"heuristic[{lineups_source}]"
+    model_version = None
+    try:
+        model_result = await run_in_threadpool(
+            predict_first_basket_with_models,
+            sync_engine,
+            lineups,
+            df_points,
+        )
+        model_version = model_result.get("model_version")
+        predictions = model_result.get("data", [])
+        source = f"two_stage_ml[{lineups_source}]"
+    except FileNotFoundError:
+        predictions = await run_in_threadpool(
+            build_first_basket_predictions,
+            lineups,
+            df_points,
+            top_n_per_game,
+            jedibets_stats,
+        )
+        if jedibets_stats:
+            source = f"heuristic+jedibets[{lineups_source}]"
+
+    grouped = {}
+    for row in predictions:
+        grouped.setdefault(row.get("matchup"), []).append(row)
+    top_rows = []
+    for matchup, rows in grouped.items():
+        rows.sort(key=lambda x: x.get("first_basket_prob", 0), reverse=True)
+        top_rows.extend(rows[:top_n_per_game])
+
+    fallback_date = _target_et_date_for_day(day)
+    for row in top_rows:
+        base_date = row.get("game_date") or fallback_date
+        row["tipoff_au"] = _tipoff_et_to_au_text(row.get("tipoff_et"), base_date)
+
+    loggable_rows = [
+        r
+        for r in top_rows
+        if r.get("game_id") and r.get("player_id") is not None
+    ]
+    if loggable_rows:
+        await run_in_threadpool(
+            upsert_first_basket_prediction_logs,
+            sync_engine,
+            loggable_rows,
+            model_version,
+        )
+
+    return {
+        "source": source,
+        "games_count": lineups.get("games_count"),
+        "lineup_resolution": lineups.get("resolution"),
+        "day": day,
+        "top_n_per_game": top_n_per_game,
+        "model_version": model_version,
+        "used_jedibets": bool(jedibets_stats),
+        "data": top_rows,
+    }

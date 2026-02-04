@@ -18,8 +18,11 @@ from ml.training import (
     train_threept_model,
 )
 from app.db.store_prediction_logs import update_prediction_actuals, delete_walkforward_logs
+from app.db.store_first_basket import update_first_basket_actuals
 from ml.backtest import walk_forward_backtest
 from app.db.store_prediction_logs import log_predictions
+from ml.first_basket_labels import build_first_basket_labels
+from ml.first_basket_model import train_first_basket_models
 
 router = APIRouter()
 
@@ -124,3 +127,33 @@ async def backtest_walkforward(
 async def evaluate_stat(stat_type: str):
     updated = await run_in_threadpool(update_prediction_actuals, sync_engine, stat_type)
     return {"status": "updated", "stat_type": stat_type, "rows_updated": updated}
+
+
+@router.post("/first-basket/build-labels")
+async def build_first_basket_labels_api(
+    season: str | None = None,
+    max_games: int | None = 150,
+    overwrite: bool = False,
+    timeout: int = 12,
+):
+    result = await run_in_threadpool(
+        build_first_basket_labels,
+        sync_engine,
+        season,
+        max_games,
+        overwrite,
+        timeout,
+    )
+    return {"status": "ok", **result}
+
+
+@router.post("/first-basket/train")
+async def train_first_basket():
+    result = await run_in_threadpool(train_first_basket_models, sync_engine)
+    return {"status": "trained", **result}
+
+
+@router.post("/first-basket/evaluate")
+async def evaluate_first_basket():
+    updated = await run_in_threadpool(update_first_basket_actuals, sync_engine)
+    return {"status": "updated", "rows_updated": updated}

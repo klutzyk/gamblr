@@ -1,6 +1,7 @@
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 from bs4 import BeautifulSoup
@@ -105,9 +106,13 @@ class RotoWireLineupsClient:
         return games
 
     @cached(ttl_seconds=60 * 2)
-    def fetch_lineups(self) -> dict[str, Any]:
+    def fetch_lineups(self, day: str | None = None) -> dict[str, Any]:
+        url = ROTOWIRE_LINEUPS_URL
+        if day in {"today", "tomorrow", "yesterday"}:
+            url = f"{ROTOWIRE_LINEUPS_URL}?{urlencode({'date': day})}"
+
         response = requests.get(
-            ROTOWIRE_LINEUPS_URL,
+            url,
             timeout=self.timeout,
             headers={"User-Agent": USER_AGENT},
         )
@@ -115,7 +120,7 @@ class RotoWireLineupsClient:
         games = self._parse(response.text)
         return {
             "source": "rotowire",
-            "url": ROTOWIRE_LINEUPS_URL,
+            "url": url,
             "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
             "games_count": len(games),
             "games": games,

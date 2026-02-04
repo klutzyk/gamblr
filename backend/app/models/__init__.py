@@ -8,3 +8,5 @@ from .team_game_stat import TeamGameStat
 from .lineup_stat import LineupStat
 from .prediction_log import PredictionLog
 from .player_under_risk import PlayerUnderRisk
+from .first_basket_label import FirstBasketLabel
+from .first_basket_prediction_log import FirstBasketPredictionLog

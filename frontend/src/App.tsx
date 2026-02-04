@@ -13,12 +13,14 @@ import {
   getAssistsPredictions,
   getReboundsPredictions,
   getThreeptPredictions,
+  getFirstBasketPredictions,
   getBestBets,
   syncPlayerPropsWindow,
   type PlayerRow,
   type OddsEvent,
   type OddsEventPropsResponse,
   type PredictionRow,
+  type FirstBasketPredictionRow,
   type BestBetsResponse,
 } from "./api";
 
@@ -42,7 +44,8 @@ type TabKey =
   | "recent"
   | "props"
   | "predictions"
-  | "best_bets";
+  | "best_bets"
+  | "first_basket";
 
 type ApiState<T> = {
   loading: boolean;
@@ -398,6 +401,51 @@ function PredictionsGrid({
   );
 }
 
+function FirstBasketGrid({ rows }: { rows: FirstBasketPredictionRow[] }) {
+  if (!rows.length) {
+    return (
+      <div className="text-center py-5">
+        <p className="text-secondary">No first basket predictions available.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-responsive">
+      <table className="table align-items-center mb-0">
+        <thead>
+          <tr>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Team</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Matchup</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Tipoff</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">First Basket %</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Team First %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={`${row.game_id ?? row.matchup}-${row.player_id}`}>
+              <td className="text-sm">{row.full_name}</td>
+              <td className="text-sm">{row.team_abbreviation}</td>
+              <td className="text-sm">{row.matchup}</td>
+              <td className="text-sm">{row.tipoff_au ?? row.tipoff_et ?? "-"}</td>
+              <td className="text-sm text-primary font-weight-bold">
+                {`${(row.first_basket_prob * 100).toFixed(1)}%`}
+              </td>
+              <td className="text-sm">
+                {typeof row.team_scores_first_prob === "number"
+                  ? `${(row.team_scores_first_prob * 100).toFixed(1)}%`
+                  : "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("predictions");
 
@@ -425,6 +473,8 @@ function App() {
     useState<ApiState<PredictionRow[]>>(initialState);
   const [threeptPredictionsState, setThreeptPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
+  const [firstBasketPredictionsState, setFirstBasketPredictionsState] =
+    useState<ApiState<FirstBasketPredictionRow[]>>(initialState);
   const [bestBetsState, setBestBetsState] =
     useState<ApiState<BestBetsResponse>>(initialState);
   const [predictionDay, setPredictionDay] = useState<
@@ -439,6 +489,9 @@ function App() {
   const [predictionSearch, setPredictionSearch] = useState("");
   const [predictionTeams, setPredictionTeams] = useState<string[]>([]);
   const [predictionLine, setPredictionLine] = useState<number | "all">("all");
+  const [firstBasketSort, setFirstBasketSort] = useState<
+    "prob_desc" | "prob_asc"
+  >("prob_desc");
   const [targetMultiplierInput, setTargetMultiplierInput] = useState("2");
   const [bestBetLegCount, setBestBetLegCount] = useState(2);
   const [wildcardLegs, setWildcardLegs] = useState(false);
@@ -652,9 +705,24 @@ function App() {
     }
   };
 
+  const handleLoadFirstBasketPredictions = (force = false) =>
+    safeLoad(
+      firstBasketPredictionsState,
+      setFirstBasketPredictionsState,
+      () => getFirstBasketPredictions(predictionDay, 6),
+      5 * 60 * 1000,
+      force
+    );
+
   useEffect(() => {
     handleLoadPredictions(true);
   }, [predictionDay, predictionStat]);
+
+  useEffect(() => {
+    if (activeTab === "first_basket") {
+      void handleLoadFirstBasketPredictions(true);
+    }
+  }, [activeTab, predictionDay]);
 
   useEffect(() => {
     const defaults: Record<typeof predictionStat, number> = {
@@ -1567,6 +1635,158 @@ function App() {
             )}
           </div>
         );
+      case "first_basket":
+        const fbTeamOptions = firstBasketPredictionsState.data
+          ? Array.from(
+              new Set(
+                firstBasketPredictionsState.data
+                  .map((row) => row.team_abbreviation)
+                  .filter((team): team is string => Boolean(team))
+              )
+            ).sort()
+          : [];
+        const fbSearch = predictionSearch.trim().toLowerCase();
+        const filteredFirstBasket = firstBasketPredictionsState.data
+          ? firstBasketPredictionsState.data.filter((row) => {
+              if (
+                predictionTeams.length > 0 &&
+                !predictionTeams.includes(row.team_abbreviation ?? "")
+              ) {
+                return false;
+              }
+              if (!fbSearch) return true;
+              return (
+                row.full_name.toLowerCase().includes(fbSearch) ||
+                row.team_abbreviation.toLowerCase().includes(fbSearch)
+              );
+            })
+          : [];
+        const bestFirstBasketPlays = [...filteredFirstBasket]
+          .sort((a, b) => {
+            const scoreA =
+              (a.first_basket_prob ?? 0) * (0.7 + 0.3 * (a.team_scores_first_prob ?? 0));
+            const scoreB =
+              (b.first_basket_prob ?? 0) * (0.7 + 0.3 * (b.team_scores_first_prob ?? 0));
+            return scoreB - scoreA;
+          })
+          .slice(0, 5);
+        return (
+          <div className="card card-body border-radius-xl shadow-lg prediction-focus">
+            <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
+              <div>
+                <h4 className="mb-1">First Basket Predictions</h4>
+              </div>
+              <div className="d-flex flex-wrap gap-2 align-items-center">
+                <div className="prediction-select-group">
+                  <select
+                    className="form-select form-select-sm"
+                    value={predictionDay}
+                    onChange={(e) =>
+                      setPredictionDay(
+                        e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                      )
+                    }
+                  >
+                    <option value="auto">Auto (ET)</option>
+                    <option value="today">Today (ET)</option>
+                    <option value="tomorrow">Tomorrow (ET)</option>
+                    <option value="yesterday">Yesterday (ET)</option>
+                  </select>
+                  <select
+                    className="form-select form-select-sm"
+                    value={firstBasketSort}
+                    onChange={(e) =>
+                      setFirstBasketSort(e.target.value as "prob_desc" | "prob_asc")
+                    }
+                  >
+                    <option value="prob_desc">First Basket % (High &gt;&gt; Low)</option>
+                    <option value="prob_asc">First Basket % (Low &gt;&gt; High)</option>
+                  </select>
+                </div>
+                <button
+                  className="btn btn-sm bg-gradient-primary mb-0"
+                  onClick={() => {
+                    void handleLoadFirstBasketPredictions();
+                  }}
+                  disabled={firstBasketPredictionsState.loading}
+                >
+                  Get First Basket
+                </button>
+              </div>
+            </div>
+            <div className="prediction-filters mb-4">
+              <div className="prediction-search">
+                <i className="material-symbols-rounded">search</i>
+                <input
+                  type="search"
+                  placeholder="Search player or team"
+                  value={predictionSearch}
+                  onChange={(e) => setPredictionSearch(e.target.value)}
+                />
+              </div>
+              <div className="prediction-team-chips">
+                <button
+                  className={`team-chip ${predictionTeams.length === 0 ? "active" : ""}`}
+                  onClick={() => setPredictionTeams([])}
+                >
+                  All teams
+                </button>
+                {fbTeamOptions.map((team) => (
+                  <button
+                    key={team}
+                    className={`team-chip ${predictionTeams.includes(team) ? "active" : ""}`}
+                    onClick={() =>
+                      setPredictionTeams((prev) =>
+                        prev.includes(team)
+                          ? prev.filter((t) => t !== team)
+                          : [...prev, team]
+                      )
+                    }
+                  >
+                    {team}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {firstBasketPredictionsState.error && (
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {firstBasketPredictionsState.error}
+              </div>
+            )}
+            {firstBasketPredictionsState.loading && !firstBasketPredictionsState.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+              </div>
+            )}
+            {firstBasketPredictionsState.data && (
+              <>
+                <div className="mb-4">
+                  <h6 className="mb-2">Best First Basket Plays</h6>
+                  <div className="d-flex flex-wrap gap-2">
+                    {bestFirstBasketPlays.map((row) => (
+                      <span
+                        key={`best-${row.game_id ?? row.matchup}-${row.player_id}`}
+                        className="badge bg-gradient-success"
+                      >
+                        {row.full_name} ({row.team_abbreviation}) -{" "}
+                        {(row.first_basket_prob * 100).toFixed(1)}%
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <FirstBasketGrid
+                  rows={[...filteredFirstBasket].sort((a, b) => {
+                    const pa = a.first_basket_prob ?? 0;
+                    const pb = b.first_basket_prob ?? 0;
+                    return firstBasketSort === "prob_asc" ? pa - pb : pb - pa;
+                  })}
+                />
+              </>
+            )}
+          </div>
+        );
       default:
         return null;
     }
@@ -1798,6 +2018,17 @@ function App() {
                       >
                         <i className="material-symbols-rounded me-2">psychology</i>
                         Predictions
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "first_basket" ? "active" : ""}`}
+                        onClick={() => setActiveTab("first_basket")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">sports</i>
+                        First Basket
                       </a>
                     </li>
                   </ul>
