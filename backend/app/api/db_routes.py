@@ -85,6 +85,7 @@ async def refresh_all_player_points(
     min_remaining_after_call: int = 3,
     max_events: int = 4,
     schedule_mode: str = "auto",
+    event_ids: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -122,18 +123,27 @@ async def refresh_all_player_points(
                 detail="schedule_mode must be one of: auto, night, morning, all",
             )
 
-        filtered_events = []
-        for event in events:
-            commence_time = event.get("commence_time")
-            if not commence_time:
-                continue
-            event_time = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
-            hours_to_tipoff = (event_time - now_utc).total_seconds() / 3600
-            if min_hours_to_tipoff <= hours_to_tipoff <= max_hours_to_tipoff:
-                filtered_events.append(event)
+        selected_ids = set()
+        if event_ids:
+            selected_ids = {eid.strip() for eid in event_ids.split(",") if eid.strip()}
 
-        if max_events > 0:
-            filtered_events = filtered_events[:max_events]
+        filtered_events = []
+        if selected_ids:
+            for event in events:
+                if event.get("id") in selected_ids:
+                    filtered_events.append(event)
+        else:
+            for event in events:
+                commence_time = event.get("commence_time")
+                if not commence_time:
+                    continue
+                event_time = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+                hours_to_tipoff = (event_time - now_utc).total_seconds() / 3600
+                if min_hours_to_tipoff <= hours_to_tipoff <= max_hours_to_tipoff:
+                    filtered_events.append(event)
+
+            if max_events > 0:
+                filtered_events = filtered_events[:max_events]
 
         events_processed = 0
         events_skipped = 0
@@ -179,6 +189,7 @@ async def refresh_all_player_points(
             "bookmakers_requested": bookmakers,
             "max_events": max_events,
             "schedule_mode": mode,
+            "selected_event_count": len(selected_ids),
             "timezone": "Australia/Sydney",
             "sync_local_hour": au_hour,
         }
@@ -199,6 +210,7 @@ async def refresh_player_props_sync(
     min_remaining_after_call: int = 3,
     max_events: int = 4,
     schedule_mode: str = "auto",
+    event_ids: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     return await refresh_all_player_points(
@@ -208,6 +220,7 @@ async def refresh_player_props_sync(
         min_remaining_after_call=min_remaining_after_call,
         max_events=max_events,
         schedule_mode=schedule_mode,
+        event_ids=event_ids,
         db=db,
     )
 

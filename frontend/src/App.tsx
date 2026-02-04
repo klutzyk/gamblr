@@ -7,7 +7,8 @@ import {
   getTopRebounders,
   getGuardStats,
   getRecentPerformers,
-  getPlayerPropsByGame,
+  getNbaEvents,
+  getOddsEventProps,
   getPointsPredictions,
   getAssistsPredictions,
   getReboundsPredictions,
@@ -15,46 +16,22 @@ import {
   getBestBets,
   syncPlayerPropsWindow,
   type PlayerRow,
-  type PlayerPropsResponse,
+  type OddsEvent,
+  type OddsEventPropsResponse,
   type PredictionRow,
   type BestBetsResponse,
 } from "./api";
 
-// Types derived from the SportsData BettingMarket / BettingOutcome shape.
-type BettingOutcome = {
-  BettingOutcomeType: string; // Over/Under, Home/Away, etc.
-  PayoutAmerican: number;
-  Value: number | null;
-  Participant: string;
-  IsInPlay: boolean;
-  SportsbookUrl?: string | null;
-  SportsBook?: {
-    Name?: string;
-  };
-};
-
-type BettingMarket = {
-  BettingMarketID: number;
-  BettingBetType: string; // e.g. "Total Points"
-  BettingPeriodType: string; // e.g. "Full Game"
-  PlayerName?: string | null;
-  TeamKey?: string | null;
-  AnyBetsAvailable?: boolean;
-  Updated?: string;
-  BettingOutcomes?: BettingOutcome[];
-};
-
 type NormalizedPropRow = {
-  marketId: number;
+  eventId: string;
+  matchup: string;
   player: string;
-  team: string | null;
-  betType: string;
-  period: string;
+  marketKey: string;
   outcomeType: string;
   line: number | null;
-  odds: number;
+  odds: number | null;
   sportsbook: string;
-  inPlay: boolean;
+  lastUpdate: string | null;
 };
 
 type TabKey =
@@ -86,27 +63,25 @@ function formatNumber(value: unknown, digits = 1): string {
   return value.toFixed(digits);
 }
 
-function normalizeMarkets(markets: BettingMarket[]): NormalizedPropRow[] {
+function normalizeOddsEventProps(payload: OddsEventPropsResponse["data"]): NormalizedPropRow[] {
   const rows: NormalizedPropRow[] = [];
-
-  for (const m of markets) {
-    const outcomes = m.BettingOutcomes ?? [];
-    for (const o of outcomes) {
-      rows.push({
-        marketId: m.BettingMarketID,
-        player: m.PlayerName ?? o.Participant,
-        team: m.TeamKey ?? null,
-        betType: m.BettingBetType,
-        period: m.BettingPeriodType,
-        outcomeType: o.BettingOutcomeType,
-        line: o.Value ?? null,
-        odds: o.PayoutAmerican,
-        sportsbook: o.SportsBook?.Name ?? "",
-        inPlay: o.IsInPlay,
-      });
+  for (const book of payload.bookmakers ?? []) {
+    for (const market of book.markets ?? []) {
+      for (const outcome of market.outcomes ?? []) {
+        rows.push({
+          eventId: payload.id,
+          matchup: `${payload.away_team} @ ${payload.home_team}`,
+          player: outcome.description,
+          marketKey: market.key,
+          outcomeType: outcome.name,
+          line: typeof outcome.point === "number" ? outcome.point : null,
+          odds: typeof outcome.price === "number" ? outcome.price : null,
+          sportsbook: book.title,
+          lastUpdate: market.last_update ?? null,
+        });
+      }
     }
   }
-
   return rows;
 }
 
@@ -434,9 +409,11 @@ function App() {
     useState<ApiState<PlayerRow[]>>(initialState);
   const [guards, setGuards] = useState<ApiState<PlayerRow[]>>(initialState);
   const [recent, setRecent] = useState<ApiState<PlayerRow[]>>(initialState);
+  const [eventsState, setEventsState] =
+    useState<ApiState<OddsEvent[]>>(initialState);
   const [propsState, setPropsState] =
-    useState<ApiState<PlayerPropsResponse>>(initialState);
-  const [gameIdInput, setGameIdInput] = useState("");
+    useState<ApiState<OddsEventPropsResponse>>(initialState);
+  const [selectedEventId, setSelectedEventId] = useState("");
   const [predictionStat, setPredictionStat] = useState<
     "points" | "assists" | "rebounds" | "threept"
   >("points");
@@ -464,12 +441,15 @@ function App() {
   const [predictionLine, setPredictionLine] = useState<number | "all">("all");
   const [targetMultiplierInput, setTargetMultiplierInput] = useState("2");
   const [bestBetLegCount, setBestBetLegCount] = useState(2);
+  const [wildcardLegs, setWildcardLegs] = useState(false);
   const [bestBetSyncMode, setBestBetSyncMode] = useState<
     "auto" | "night" | "morning" | "all"
   >("auto");
-  const [bestBetEvents, setBestBetEvents] = useState(4);
+  const bestBetEvents = 4;
   const [includeComboMarkets, setIncludeComboMarkets] = useState(false);
+  const [selectedBestBetEventIds, setSelectedBestBetEventIds] = useState<string[]>([]);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
+  const [isSyncingBestBets, setIsSyncingBestBets] = useState(false);
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -526,20 +506,28 @@ function App() {
       5 * 60 * 1000
     );
 
+  const handleLoadEvents = (force = false) =>
+    safeLoad(
+      eventsState,
+      setEventsState,
+      () => getNbaEvents(),
+      5 * 60 * 1000,
+      force
+    );
+
   const handleLoadProps = () => {
-    const gameId = Number(gameIdInput);
-    if (!gameId || Number.isNaN(gameId)) {
+    if (!selectedEventId) {
       setPropsState({
         ...propsState,
-        error: "Enter a valid numeric game ID.",
+        error: "Select a matchup first.",
       });
       return;
     }
     return safeLoad(
       propsState,
       setPropsState,
-      () => getPlayerPropsByGame(gameId),
-      60 * 60 * 1000 // 1 hour cooldown for props
+      () => getOddsEventProps(selectedEventId),
+      5 * 60 * 1000
     );
   };
 
@@ -608,9 +596,15 @@ function App() {
         getBestBets({
           target_multiplier: targetMultiplier,
           leg_count: bestBetLegCount,
+          leg_mode: wildcardLegs ? "up_to" : "exact",
+          max_legs: wildcardLegs ? bestBetLegCount : undefined,
           day: derivedPredictionDay,
           bookmaker: "sportsbet",
           include_combos: includeComboMarkets,
+          event_ids:
+            selectedBestBetEventIds.length > 0
+              ? selectedBestBetEventIds.join(",")
+              : undefined,
           min_confidence: 55,
           min_edge: 0.02,
           min_prob: 0.52,
@@ -623,6 +617,7 @@ function App() {
 
   const handleSyncAndLoadBestBets = async () => {
     setSyncSummary(null);
+    setIsSyncingBestBets(true);
     try {
       const selectedMarkets = includeComboMarkets
         ? "player_points,player_assists,player_rebounds," +
@@ -635,6 +630,10 @@ function App() {
         min_remaining_after_call: 5,
         max_events: bestBetEvents,
         schedule_mode: bestBetSyncMode,
+        event_ids:
+          selectedBestBetEventIds.length > 0
+            ? selectedBestBetEventIds.join(",")
+            : undefined,
       });
       const processed = Number(sync.events_processed ?? 0);
       const considered = Number(sync.events_considered ?? 0);
@@ -647,8 +646,10 @@ function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to sync props.";
       setSyncSummary(`Sync error: ${message}`);
+    } finally {
+      await handleLoadBestBets(true);
+      setIsSyncingBestBets(false);
     }
-    await handleLoadBestBets(true);
   };
 
   useEffect(() => {
@@ -664,6 +665,27 @@ function App() {
     };
     setPredictionLine(defaults[predictionStat]);
   }, [predictionStat]);
+
+  useEffect(() => {
+    if (activeTab === "props") {
+      void handleLoadEvents();
+    }
+    if (activeTab === "best_bets") {
+      void handleLoadEvents(true);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!selectedEventId && eventsState.data && eventsState.data.length > 0) {
+      setSelectedEventId(eventsState.data[0].id);
+    }
+  }, [eventsState.data, selectedEventId]);
+
+  useEffect(() => {
+    if (!eventsState.data) return;
+    const validIds = new Set(eventsState.data.map((e) => e.id));
+    setSelectedBestBetEventIds((prev) => prev.filter((id) => validIds.has(id)));
+  }, [eventsState.data]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -856,20 +878,44 @@ function App() {
         return (
           <div className="card card-body border-radius-xl shadow-lg">
             <div className="mb-4">
-              <h4 className="mb-1">Player Props (by Game)</h4>
+              <h4 className="mb-1">Player Props (by Matchup)</h4>
               <p className="text-sm text-secondary mb-0">
-                Snapshot of available player prop markets for a game.
+                Select a live/upcoming matchup instead of manually entering IDs.
               </p>
             </div>
             <div className="d-flex flex-wrap gap-2 mb-4">
-              <input
-                type="number"
-                className="form-control"
-                placeholder="Game ID"
-                value={gameIdInput}
-                onChange={(e) => setGameIdInput(e.target.value)}
-                style={{ maxWidth: "200px" }}
-              />
+              <select
+                className="form-select"
+                value={selectedEventId}
+                onChange={(e) => setSelectedEventId(e.target.value)}
+                style={{ maxWidth: "420px" }}
+                disabled={eventsState.loading}
+              >
+                {eventsState.data && eventsState.data.length > 0 ? (
+                  eventsState.data.map((event) => (
+                    <option key={event.id} value={event.id}>
+                      {event.away_team} @ {event.home_team} |{" "}
+                      {new Date(event.commence_time).toLocaleString("en-AU", {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No matchups available</option>
+                )}
+              </select>
+              <button
+                className="btn btn-sm btn-outline-dark mb-0"
+                onClick={() => {
+                  void handleLoadEvents(true);
+                }}
+                disabled={eventsState.loading}
+              >
+                {eventsState.loading ? "Refreshing..." : "Refresh Matchups"}
+              </button>
               <button
                 className="btn btn-sm bg-gradient-primary mb-0"
                 onClick={handleLoadProps}
@@ -880,9 +926,14 @@ function App() {
                 ) : (
                   <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>search</i>
                 )}
-                Load Props
+                Load Matchup Props
               </button>
             </div>
+            {eventsState.error && (
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {eventsState.error}
+              </div>
+            )}
             {propsState.error && (
               <div className="alert alert-danger text-white" role="alert">
                 <strong>Error:</strong> {propsState.error}
@@ -900,62 +951,58 @@ function App() {
               <>
                 <div className="d-flex gap-4 mb-4">
                   <div>
-                    <span className="text-sm text-secondary">Game ID:</span>
-                    <span className="text-sm font-weight-bold ms-2">{propsState.data.game_id}</span>
+                    <span className="text-sm text-secondary">Matchup:</span>
+                    <span className="text-sm font-weight-bold ms-2">
+                      {propsState.data.data.away_team} @ {propsState.data.data.home_team}
+                    </span>
                   </div>
                   <div>
-                    <span className="text-sm text-secondary">Markets:</span>
-                    <span className="text-sm font-weight-bold ms-2">{propsState.data.count}</span>
+                    <span className="text-sm text-secondary">Bookmakers:</span>
+                    <span className="text-sm font-weight-bold ms-2">
+                      {propsState.data.data.bookmakers?.length ?? 0}
+                    </span>
                   </div>
                 </div>
                 <div className="table-responsive">
                   {(() => {
-                    const markets = propsState.data
-                      .markets as BettingMarket[];
-                    const rows = normalizeMarkets(markets);
+                    const rows = normalizeOddsEventProps(propsState.data.data);
 
-                    // If we have fully populated outcomes, show the detailed table.
                     if (rows.length) {
                       return (
                         <table className="table align-items-center mb-0">
                           <thead>
                             <tr>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Matchup</th>
                               <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
-                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Team</th>
-                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Bet</th>
-                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Period</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Market</th>
                               <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Side</th>
                               <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Line</th>
-                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Odds</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Price</th>
                               <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Book</th>
-                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">In-Play</th>
+                              <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Updated</th>
                             </tr>
                           </thead>
                           <tbody>
                             {rows.map((row, index) => (
-                              <tr key={`${row.marketId}-${index}`}>
+                              <tr key={`${row.eventId}-${row.player}-${row.marketKey}-${row.outcomeType}-${row.line}-${index}`}>
+                                <td className="text-sm">{row.matchup}</td>
                                 <td className="text-sm">{row.player}</td>
-                                <td>
-                                  <span className="badge badge-sm bg-gradient-secondary">
-                                    {row.team ?? "-"}
-                                  </span>
-                                </td>
-                                <td className="text-sm">{row.betType}</td>
-                                <td className="text-sm">{row.period}</td>
+                                <td className="text-sm">{row.marketKey}</td>
                                 <td className="text-sm">{row.outcomeType}</td>
                                 <td className="text-sm">
                                   {row.line !== null ? row.line.toFixed(1) : "-"}
                                 </td>
                                 <td className="text-sm">
-                                  {row.odds > 0 ? `+${row.odds}` : row.odds}
+                                  {row.odds !== null ? row.odds.toFixed(2) : "-"}
                                 </td>
                                 <td className="text-sm">{row.sportsbook}</td>
-                                <td>
-                                  {row.inPlay ? (
-                                    <span className="badge badge-sm bg-gradient-success">Yes</span>
-                                  ) : (
-                                    <span className="badge badge-sm bg-gradient-secondary">No</span>
-                                  )}
+                                <td className="text-sm">
+                                  {row.lastUpdate
+                                    ? new Date(row.lastUpdate).toLocaleTimeString("en-AU", {
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })
+                                    : "-"}
                                 </td>
                               </tr>
                             ))}
@@ -964,43 +1011,7 @@ function App() {
                       );
                     }
 
-                    // Fallback: show market-level view when there are no outcomes yet.
-                    if (!markets.length) {
-                      return <p className="text-secondary text-center py-4">No markets available.</p>;
-                    }
-
-                    return (
-                      <table className="table align-items-center mb-0">
-                        <thead>
-                          <tr>
-                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
-                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Team</th>
-                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Bet</th>
-                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Period</th>
-                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Any Bets</th>
-                            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Updated</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {markets.map((m) => (
-                            <tr key={m.BettingMarketID}>
-                              <td className="text-sm">{m.PlayerName ?? "-"}</td>
-                              <td className="text-sm">{m.TeamKey ?? "-"}</td>
-                              <td className="text-sm">{m.BettingBetType}</td>
-                              <td className="text-sm">{m.BettingPeriodType}</td>
-                              <td>
-                                {m.AnyBetsAvailable ? (
-                                  <span className="badge badge-sm bg-gradient-success">Yes</span>
-                                ) : (
-                                  <span className="badge badge-sm bg-gradient-secondary">No</span>
-                                )}
-                              </td>
-                              <td className="text-sm">{m.Updated}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    );
+                    return <p className="text-secondary text-center py-4">No prop outcomes available.</p>;
                   })()}
                 </div>
               </>
@@ -1009,7 +1020,21 @@ function App() {
         );
       case "best_bets":
         const estimatedMarketsPerEvent = includeComboMarkets ? 7 : 3;
-        const estimatedCredits = bestBetEvents * estimatedMarketsPerEvent;
+        const bestBetMatchupOptions = (eventsState.data ?? []).map((event) => ({
+          id: event.id,
+          label: `${event.away_team} @ ${event.home_team}`,
+          kickoff: new Date(event.commence_time).toLocaleString("en-AU", {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+        }));
+        const selectedMatchupCount =
+          selectedBestBetEventIds.length > 0
+            ? selectedBestBetEventIds.length
+            : bestBetEvents;
+        const estimatedCredits = selectedMatchupCount * estimatedMarketsPerEvent;
         return (
           <div className="card card-body border-radius-xl shadow-lg best-bets-panel">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
@@ -1043,6 +1068,22 @@ function App() {
                   </select>
                 </div>
                 <div className="control-group">
+                  <label className="form-label mb-1">Leg mode</label>
+                  <button
+                    type="button"
+                    className={`combo-toggle ${wildcardLegs ? "active" : ""}`}
+                    onClick={() => setWildcardLegs((prev) => !prev)}
+                    aria-pressed={wildcardLegs}
+                  >
+                    <span className="combo-toggle-title">
+                      {wildcardLegs ? `Any up to ${bestBetLegCount}` : "Exact legs"}
+                    </span>
+                    <span className="combo-toggle-state">
+                      {wildcardLegs ? "Any" : "Exact"}
+                    </span>
+                  </button>
+                </div>
+                <div className="control-group">
                   <label className="form-label mb-1">Time of Day</label>
                   <select
                     className="form-select form-select-sm"
@@ -1057,20 +1098,6 @@ function App() {
                     <option value="night">Night (next slate)</option>
                     <option value="morning">Morning (near tipoff)</option>
                     <option value="all">All upcoming</option>
-                  </select>
-                </div>
-                <div className="control-group">
-                  <label className="form-label mb-1">Max events</label>
-                  <select
-                    className="form-select form-select-sm"
-                    value={bestBetEvents}
-                    onChange={(e) => setBestBetEvents(Number(e.target.value))}
-                  >
-                    {[2, 4, 6, 8].map((count) => (
-                      <option key={count} value={count}>
-                        {count}
-                      </option>
-                    ))}
                   </select>
                 </div>
                 <div className="control-group">
@@ -1089,26 +1116,100 @@ function App() {
                 </div>
               </div>
             </div>
+            <div className="best-bets-matchups mb-3">
+              <div className="d-flex align-items-center justify-content-between mb-2">
+                <label className="form-label mb-0">Matchups</label>
+                <div className="d-flex gap-2">
+                  <button
+                    className="btn btn-sm btn-outline-dark mb-0"
+                    onClick={() => {
+                      void handleLoadEvents(true);
+                    }}
+                    disabled={eventsState.loading}
+                  >
+                    {eventsState.loading ? "Refreshing..." : "Refresh"}
+                  </button>
+                  <button
+                    className="btn btn-sm btn-outline-dark mb-0"
+                    onClick={() =>
+                      setSelectedBestBetEventIds(
+                        (eventsState.data ?? []).slice(0, bestBetEvents).map((e) => e.id)
+                      )
+                    }
+                    disabled={!eventsState.data || eventsState.data.length === 0}
+                  >
+                    Use top {bestBetEvents}
+                  </button>
+                  <button
+                    className="btn btn-sm btn-outline-dark mb-0"
+                    onClick={() => setSelectedBestBetEventIds([])}
+                    disabled={selectedBestBetEventIds.length === 0}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              {eventsState.error && (
+                <p className="text-xs text-danger mb-2">Matchup load failed: {eventsState.error}</p>
+              )}
+              <p className="text-xs text-secondary mb-2">
+                {selectedBestBetEventIds.length > 0
+                  ? `${selectedBestBetEventIds.length} selected`
+                  : "No explicit selection (uses Day + Max events)."}
+              </p>
+              <div className="matchup-chip-wrap">
+                {bestBetMatchupOptions.map((event) => {
+                  const active = selectedBestBetEventIds.includes(event.id);
+                  return (
+                    <button
+                      key={event.id}
+                      type="button"
+                      className={`matchup-chip ${active ? "active" : ""}`}
+                      onClick={() =>
+                        setSelectedBestBetEventIds((prev) =>
+                          prev.includes(event.id)
+                            ? prev.filter((id) => id !== event.id)
+                            : [...prev, event.id]
+                        )
+                      }
+                    >
+                      <span>{event.label}</span>
+                      <small>{event.kickoff}</small>
+                    </button>
+                  );
+                })}
+                {bestBetMatchupOptions.length === 0 && (
+                  <span className="text-sm text-secondary">No upcoming matchups found.</span>
+                )}
+              </div>
+            </div>
             <div className="d-flex flex-wrap gap-2 mb-3">
               <button
                 className="btn btn-sm bg-gradient-primary mb-0"
                 onClick={handleSyncAndLoadBestBets}
-                disabled={bestBetsState.loading}
+                disabled={bestBetsState.loading || isSyncingBestBets}
               >
-                {bestBetsState.loading ? "Working..." : "Sync Props + Build Bets"}
+                {isSyncingBestBets
+                  ? "Syncing props..."
+                  : bestBetsState.loading
+                    ? "Working..."
+                    : "Sync Props + Build Bets"}
               </button>
               <button
                 className="btn btn-sm btn-outline-dark mb-0"
                 onClick={() => handleLoadBestBets(true)}
-                disabled={bestBetsState.loading}
+                disabled={bestBetsState.loading || isSyncingBestBets}
               >
                 Recompute from Stored Props
               </button>
             </div>
             <p className="text-sm text-secondary mb-3">
-              Estimated sync cost: ~{estimatedCredits} credits ({bestBetEvents} events x{" "}
+              Estimated sync cost: ~{estimatedCredits} credits ({selectedMatchupCount} events x{" "}
               {estimatedMarketsPerEvent} markets/event, Sportsbet only). 
             </p>
+            {isSyncingBestBets && (
+              <p className="text-sm text-secondary mb-3">Sync in progress...</p>
+            )}
             {syncSummary && <p className="text-sm text-secondary mb-3">{syncSummary}</p>}
             {bestBetsState.error && (
               <div className="alert alert-danger text-white" role="alert">
@@ -1152,7 +1253,10 @@ function App() {
                         {(bestBetsState.data.recommended_parlays ?? []).map((parlay, idx) => (
                           <div key={idx} className="best-parlay-card">
                             <div className="d-flex justify-content-between mb-2">
-                              <strong>Parlay #{idx + 1}</strong>
+                              <strong>
+                                Parlay #{idx + 1}
+                                {parlay.leg_count ? ` (${parlay.leg_count} legs)` : ""}
+                              </strong>
                               <span>{parlay.combined_odds.toFixed(2)}x</span>
                             </div>
                             <p className="text-xs text-secondary mb-2">
@@ -1164,7 +1268,11 @@ function App() {
                                 <li
                                   key={`${leg.event_id}-${leg.player_name}-${leg.market}-${leg.side}-${leg.line}`}
                                 >
-                                  {leg.player_name} {leg.side} {leg.line} ({leg.stat_type}) @{" "}
+                                  {leg.player_name}
+                                  {leg.prediction.team_abbreviation
+                                    ? ` (${leg.prediction.team_abbreviation})`
+                                    : ""}{" "}
+                                  {leg.side} {leg.line} ({leg.stat_type}) @{" "}
                                   {leg.price_decimal.toFixed(2)}
                                 </li>
                               ))}
@@ -1192,7 +1300,12 @@ function App() {
                             <tr
                               key={`${leg.event_id}-${leg.player_name}-${leg.market}-${leg.side}-${leg.line}`}
                             >
-                              <td className="text-sm">{leg.player_name}</td>
+                              <td className="text-sm">
+                                {leg.player_name}
+                                {leg.prediction.team_abbreviation
+                                  ? ` (${leg.prediction.team_abbreviation})`
+                                  : ""}
+                              </td>
                               <td className="text-sm">
                                 {leg.side} {leg.line} ({leg.stat_type})
                               </td>

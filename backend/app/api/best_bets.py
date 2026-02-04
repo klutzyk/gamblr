@@ -134,9 +134,12 @@ def _combo_product(values: list[float]) -> float:
 async def get_best_bets(
     target_multiplier: float = 2.0,
     leg_count: int = 2,
+    leg_mode: str = "exact",
+    max_legs: int | None = None,
     bookmaker: str = "sportsbet",
     day: str = "auto",
     include_combos: bool = False,
+    event_ids: str | None = None,
     min_confidence: int = 55,
     min_edge: float = 0.02,
     min_prob: float = 0.52,
@@ -145,6 +148,10 @@ async def get_best_bets(
 ):
     if leg_count < 1 or leg_count > 6:
         raise HTTPException(status_code=400, detail="leg_count must be between 1 and 6")
+    if leg_mode not in {"exact", "up_to"}:
+        raise HTTPException(status_code=400, detail="leg_mode must be exact or up_to")
+    if max_legs is not None and (max_legs < 1 or max_legs > 6):
+        raise HTTPException(status_code=400, detail="max_legs must be between 1 and 6")
     if target_multiplier < 1.01:
         raise HTTPException(
             status_code=400, detail="target_multiplier must be greater than 1.0"
@@ -195,6 +202,10 @@ async def get_best_bets(
         )
         .order_by(Event.commence_time.asc())
     )
+
+    selected_ids = [eid.strip() for eid in (event_ids or "").split(",") if eid.strip()]
+    if selected_ids:
+        stmt = stmt.where(Event.id.in_(tuple(selected_ids)))
 
     rows = (await db.execute(stmt)).all()
     if not rows:
@@ -306,21 +317,35 @@ async def get_best_bets(
     )[: max(leg_count, max_candidates)]
 
     parlay_options = []
-    if leg_count == 1:
-        for leg in ranked[: min(8, len(ranked))]:
-            payout = leg["price_decimal"]
-            parlay_options.append(
-                {
-                    "legs": [leg],
-                    "combined_odds": round(payout, 4),
-                    "combined_probability": leg["model_prob"],
-                    "expected_value_per_unit": leg["ev_per_unit"],
-                    "meets_target": payout >= target_multiplier,
-                }
-            )
+    all_combo_candidates = []
+    max_target_overshoot = 1.8
+    target_leg_max = max_legs if max_legs is not None else leg_count
+    if leg_mode == "up_to":
+        leg_counts = [n for n in range(2, target_leg_max + 1)]
+        if not leg_counts:
+            leg_counts = [1]
     else:
+        leg_counts = [leg_count]
+
+    for active_leg_count in leg_counts:
+        if active_leg_count == 1:
+            for leg in ranked[: min(8, len(ranked))]:
+                payout = leg["price_decimal"]
+                parlay_options.append(
+                    {
+                        "legs": [leg],
+                        "leg_count": 1,
+                        "combined_odds": round(payout, 4),
+                        "combined_probability": leg["model_prob"],
+                        "expected_value_per_unit": leg["ev_per_unit"],
+                        "meets_target": payout >= target_multiplier,
+                    }
+                )
+            continue
+
         pool = ranked[: min(len(ranked), 18)]
-        for combo in combinations(pool, leg_count):
+        min_distinct_events = 2 if len(selected_ids) >= 2 and active_leg_count >= 2 else 1
+        for combo in combinations(pool, active_leg_count):
             combo_keys = {
                 (leg["event_id"], leg["player_name"], leg["market"], leg["side"], leg["line"])
                 for leg in combo
@@ -328,27 +353,83 @@ async def get_best_bets(
             if len(combo_keys) != len(combo):
                 continue
 
-            combined_odds = _combo_product([leg["price_decimal"] for leg in combo])
-            if combined_odds < target_multiplier:
+            # If user selected multiple matchups, force event diversity in parlays.
+            distinct_events = {leg["event_id"] for leg in combo}
+            if len(distinct_events) < min_distinct_events:
                 continue
 
+            combined_odds = _combo_product([leg["price_decimal"] for leg in combo])
             combined_prob = _combo_product([leg["model_prob"] for leg in combo])
             expected_value = combined_prob * (combined_odds - 1.0) - (1.0 - combined_prob)
-            parlay_options.append(
-                {
-                    "legs": list(combo),
-                    "combined_odds": round(combined_odds, 4),
-                    "combined_probability": round(combined_prob, 4),
-                    "expected_value_per_unit": round(expected_value, 4),
-                    "meets_target": True,
-                }
+            parlay_payload = {
+                "legs": list(combo),
+                "leg_count": active_leg_count,
+                "combined_odds": round(combined_odds, 4),
+                "combined_probability": round(combined_prob, 4),
+                "expected_value_per_unit": round(expected_value, 4),
+                "meets_target": combined_odds >= target_multiplier,
+            }
+            all_combo_candidates.append(parlay_payload)
+
+            if combined_odds < target_multiplier:
+                continue
+            # Keep recommendations near the requested payout target.
+            if combined_odds > target_multiplier * max_target_overshoot:
+                continue
+            parlay_options.append(parlay_payload)
+
+    ranked_parlays = sorted(
+        parlay_options,
+        key=lambda p: (
+            abs(p["combined_odds"] - target_multiplier),
+            -p["combined_probability"],
+            -p["expected_value_per_unit"],
+        ),
+    )
+
+    # Fallback path: if no near-target parlays, show best available combos.
+    # Preference order:
+    # 1) combos above target with more "Over" legs
+    # 2) if none above target, combos below target with more "Over" legs
+    if not ranked_parlays and max(leg_counts) > 1 and all_combo_candidates:
+        above_target = [p for p in all_combo_candidates if p["combined_odds"] >= target_multiplier]
+        below_target = [p for p in all_combo_candidates if p["combined_odds"] < target_multiplier]
+
+        def over_count(parlay: dict) -> int:
+            return sum(1 for leg in parlay["legs"] if str(leg.get("side", "")).lower() == "over")
+
+        if above_target:
+            ranked_parlays = sorted(
+                above_target,
+                key=lambda p: (
+                    -over_count(p),
+                    abs(p["combined_odds"] - target_multiplier),
+                    -p["combined_probability"],
+                ),
+            )
+        elif below_target:
+            ranked_parlays = sorted(
+                below_target,
+                key=lambda p: (
+                    -over_count(p),
+                    abs(p["combined_odds"] - target_multiplier),
+                    -p["combined_probability"],
+                ),
             )
 
-    parlay_options = sorted(
-        parlay_options,
-        key=lambda p: (p["combined_probability"], p["expected_value_per_unit"]),
-        reverse=True,
-    )[:5]
+    # Diversify recommendations so the same player does not repeat across parlays.
+    parlay_options = []
+    used_players: set[tuple[str, str]] = set()
+    for parlay in ranked_parlays:
+        parlay_players = {
+            (leg["event_id"], str(leg["player_name"]).lower()) for leg in parlay["legs"]
+        }
+        if used_players.intersection(parlay_players):
+            continue
+        parlay_options.append(parlay)
+        used_players.update(parlay_players)
+        if len(parlay_options) >= 5:
+            break
 
     top_single_legs = sorted(
         candidates, key=lambda c: (c["model_prob"], c["edge"]), reverse=True
@@ -360,8 +441,11 @@ async def get_best_bets(
         "bookmaker": bookmaker,
         "target_multiplier": target_multiplier,
         "leg_count": leg_count,
+        "leg_mode": leg_mode,
+        "max_legs": target_leg_max,
         "day": day,
         "include_combos": include_combos,
+        "selected_event_count": len(selected_ids),
         "filters": {
             "min_confidence": min_confidence,
             "min_edge": min_edge,

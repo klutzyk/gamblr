@@ -128,7 +128,7 @@ class TheOddsClient:
                 "estimated_cost": estimated_cost,
             }
 
-    @cached(ttl_seconds=60 * 60)
+    @cached(ttl_seconds=60 * 5)  # 5 minutes (events endpoint is free; keep it fresh)
     async def get_events(self, sport: str):
         logger.info("THE ODDS API CALLED: get_events")
 

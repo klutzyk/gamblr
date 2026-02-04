@@ -17,6 +17,54 @@ export type PlayerPropsResponse = {
   count: number;
 };
 
+export type OddsEvent = {
+  id: string;
+  sport_key: string;
+  sport_title: string;
+  commence_time: string;
+  home_team: string;
+  away_team: string;
+};
+
+export type OddsEventOutcome = {
+  name: string;
+  description: string;
+  price: number;
+  point?: number;
+};
+
+export type OddsEventMarket = {
+  key: string;
+  last_update: string;
+  outcomes: OddsEventOutcome[];
+};
+
+export type OddsEventBookmaker = {
+  key: string;
+  title: string;
+  markets: OddsEventMarket[];
+};
+
+export type OddsEventPropsPayload = {
+  id: string;
+  sport_key: string;
+  sport_title: string;
+  commence_time: string;
+  home_team: string;
+  away_team: string;
+  bookmakers: OddsEventBookmaker[];
+};
+
+export type OddsEventPropsResponse = {
+  data: OddsEventPropsPayload;
+  usage?: {
+    requests_last?: number | null;
+    requests_remaining?: number | null;
+    requests_used?: number | null;
+  };
+  estimated_cost?: number;
+};
+
 export type PredictionRow = {
   player_id: number;
   full_name: string;
@@ -68,6 +116,7 @@ export type BestBetLeg = {
 
 export type BestBetParlay = {
   legs: BestBetLeg[];
+  leg_count?: number;
   combined_odds: number;
   combined_probability: number;
   expected_value_per_unit: number;
@@ -224,6 +273,34 @@ export function getPlayerPropsByGame(
   );
 }
 
+export function getNbaEvents(): Promise<OddsEvent[]> {
+  return fetchWithCache<OddsEvent[]>(
+    "/odds/basketball_nba/events",
+    undefined,
+    5 * 60 * 1000
+  );
+}
+
+export function getOddsEventProps(
+  eventId: string,
+  params: {
+    markets?: string;
+    bookmakers?: string;
+    min_remaining_after_call?: number;
+  } = {}
+): Promise<OddsEventPropsResponse> {
+  const resolved = {
+    markets: "player_points,player_assists,player_rebounds",
+    bookmakers: "sportsbet",
+    ...params,
+  };
+  return fetchWithCache<OddsEventPropsResponse>(
+    `/odds/basketball_nba/events/${eventId}/odds`,
+    resolved,
+    5 * 60 * 1000
+  );
+}
+
 // Predictions endpoint (cached for 5 minutes since predictions may update)
 const PREDICTIONS_TTL = 5 * 60 * 1000;
 
@@ -274,6 +351,7 @@ export function syncPlayerPropsWindow(
     min_remaining_after_call?: number;
     max_events?: number;
     schedule_mode?: "auto" | "night" | "morning" | "all";
+    event_ids?: string;
   } = {}
 ): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>("/db/player-props/sync", params);
@@ -283,9 +361,12 @@ export function getBestBets(
   params: {
     target_multiplier?: number;
     leg_count?: number;
+    leg_mode?: "exact" | "up_to";
+    max_legs?: number;
     bookmaker?: string;
     day?: "today" | "tomorrow" | "yesterday" | "auto";
     include_combos?: boolean;
+    event_ids?: string;
     min_confidence?: number;
     min_edge?: number;
     min_prob?: number;
