@@ -331,20 +331,47 @@ async def _run_last_n_update(
     db: AsyncSession,
     job_id: str | None = None,
 ):
-    today = datetime.utcnow().date()
+    # Use NBA league day boundary (US Eastern) to avoid AU/UTC date drift.
+    today = datetime.now(ZoneInfo("America/New_York")).date()
     schedule_result = await db.execute(
-        select(GameSchedule.game_id, GameSchedule.game_date).where(
-            GameSchedule.game_date > since_date,
+        select(
+            GameSchedule.game_id,
+            GameSchedule.game_date,
+            GameSchedule.home_team_abbr,
+            GameSchedule.away_team_abbr,
+        ).where(
+            GameSchedule.game_date >= since_date,
             GameSchedule.game_date <= today,
         )
     )
     game_rows = schedule_result.all()
     player_map = {}
+    team_abbrs: set[str] = set()
+
+    if not game_rows:
+        logger.info(
+            "update_last_n_games_since: no scheduled games in range; skipping player sync"
+        )
+        return {
+            "status": "completed",
+            "players_total": 0,
+            "players_saved": 0,
+            "players_skipped": 0,
+            "players_failed": 0,
+            "total_new_games_inserted": 0,
+            "since": str(since_date),
+            "season": season,
+            "note": "No games found in game_schedule for the requested date range.",
+        }
 
     if game_rows:
-        for game_id, _game_date in game_rows:
+        for game_id, _game_date, home_abbr, away_abbr in game_rows:
             if not game_id:
                 continue
+            if home_abbr:
+                team_abbrs.add(str(home_abbr))
+            if away_abbr:
+                team_abbrs.add(str(away_abbr))
             for attempt in range(3):
                 try:
                     async with throttler:
@@ -374,11 +401,48 @@ async def _run_last_n_update(
             f"{len(active_players)} players since {since_date}"
         )
     else:
-        logger.warning(
-            "update_last_n_games_since: no recent games found in schedule; "
-            "falling back to active players list"
-        )
-        active_players = players.get_active_players()
+        if team_abbrs:
+            logger.warning(
+                "update_last_n_games_since: no boxscore players resolved; "
+                "falling back to players table by team abbreviations"
+            )
+            players_result = await db.execute(
+                select(Player.id, Player.full_name).where(
+                    Player.team_abbreviation.in_(tuple(team_abbrs))
+                )
+            )
+            active_players = [
+                {"id": int(pid), "full_name": name}
+                for pid, name in players_result.all()
+                if pid is not None
+            ]
+            if not active_players:
+                return {
+                    "status": "completed",
+                    "players_total": 0,
+                    "players_saved": 0,
+                    "players_skipped": 0,
+                    "players_failed": 0,
+                    "total_new_games_inserted": 0,
+                    "since": str(since_date),
+                    "season": season,
+                    "note": "No players found for teams in schedule window.",
+                }
+        else:
+            logger.warning(
+                "update_last_n_games_since: games were found but no team abbreviations resolved"
+            )
+            return {
+                "status": "completed",
+                "players_total": 0,
+                "players_saved": 0,
+                "players_skipped": 0,
+                "players_failed": 0,
+                "total_new_games_inserted": 0,
+                "since": str(since_date),
+                "season": season,
+                "note": "Game rows exist but no teams/players could be resolved.",
+            }
     saved = 0
     skipped = 0
     failed = 0
