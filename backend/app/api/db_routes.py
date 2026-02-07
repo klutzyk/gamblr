@@ -777,37 +777,91 @@ async def backfill_player_team_abbr(
 async def refresh_player_team_abbr(
     db: AsyncSession = Depends(get_db),
     limit: int | None = None,
+    season: str = "2025-26",
+    fallback: bool = True,
 ):
     """
-    Refresh team_abbreviation for all active players using NBA API player info.
-    Updates existing players and creates missing records when possible.
+    Refresh team_abbreviation for all active players using bulk stats first,
+    then optional per-player fallback. Updates existing players and creates
+    missing records when possible.
     """
     active_players = players.get_active_players()
     if limit:
         active_players = active_players[:limit]
+
+    team_map: dict[int, str] = {}
+    bulk_rows = 0
+    bulk_resolved = 0
+    bulk_failed = False
+
+    try:
+        bulk_df = nba_client.fetch_player_stats(
+            season=season,
+            per_mode_detailed="PerGame",
+            season_type_all_star="Regular Season",
+        )
+        if (
+            bulk_df is not None
+            and not bulk_df.empty
+            and "PLAYER_ID" in bulk_df.columns
+            and "TEAM_ABBREVIATION" in bulk_df.columns
+        ):
+            bulk_rows = int(len(bulk_df))
+            for _, row in bulk_df[["PLAYER_ID", "TEAM_ABBREVIATION"]].iterrows():
+                pid = row.get("PLAYER_ID")
+                team_abbr = row.get("TEAM_ABBREVIATION")
+                if pd.notnull(pid) and pd.notnull(team_abbr):
+                    team_map[int(pid)] = str(team_abbr)
+            bulk_resolved = len(team_map)
+        else:
+            bulk_failed = True
+    except Exception as e:
+        logger.warning(f"Bulk player team refresh failed: {e}")
+        bulk_failed = True
 
     updated = 0
     unchanged = 0
     created = 0
     skipped = 0
     failed = 0
+    fallback_used = 0
+    bulk_used = 0
 
     for p in active_players:
         player_id = p["id"]
         player_name = p["full_name"]
+        team_abbr = team_map.get(int(player_id)) if team_map else None
+
+        if team_abbr:
+            bulk_used += 1
+        elif fallback:
+            fallback_used += 1
+            for attempt in range(3):
+                try:
+                    async with throttler:
+                        info_df, _ = nba_client.fetch_player_info(player_id)
+                    if not info_df.empty and "TEAM_ABBREVIATION" in info_df.columns:
+                        team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
+                    else:
+                        team_abbr = None
+                    break
+                except Exception as e:
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed for player info {player_name}: {e}"
+                    )
+                    await asyncio.sleep(0.5)
+            else:
+                failed += 1
+                await asyncio.sleep(0.05)
+                continue
+
+        if not team_abbr:
+            skipped += 1
+            await asyncio.sleep(0.05)
+            continue
+
         for attempt in range(3):
             try:
-                async with throttler:
-                    info_df, _ = nba_client.fetch_player_info(player_id)
-                if not info_df.empty and "TEAM_ABBREVIATION" in info_df.columns:
-                    team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
-                else:
-                    team_abbr = None
-
-                if not team_abbr:
-                    skipped += 1
-                    break
-
                 player = await db.get(Player, player_id)
                 if not player:
                     player = Player(
@@ -825,7 +879,7 @@ async def refresh_player_team_abbr(
                 break
             except Exception as e:
                 logger.warning(
-                    f"Attempt {attempt + 1} failed for player info {player_name}: {e}"
+                    f"Attempt {attempt + 1} failed for player upsert {player_name}: {e}"
                 )
                 await asyncio.sleep(0.5)
         else:
@@ -843,6 +897,13 @@ async def refresh_player_team_abbr(
         "players_created": created,
         "players_skipped": skipped,
         "players_failed": failed,
+        "bulk_rows": bulk_rows,
+        "bulk_resolved": bulk_resolved,
+        "bulk_used": bulk_used,
+        "fallback_used": fallback_used,
+        "bulk_failed": bulk_failed,
+        "season": season,
+        "fallback": fallback,
     }
 
 

@@ -41,7 +41,21 @@ def update_rolling_stats(engine):
     df_new = pd.read_sql(query, engine)
 
     if df_new.empty:
-        print("No new games to update.")
+        if df_rolling_old.empty:
+            print("No new games to update.")
+            return df_rolling_old
+        # Refresh team abbreviations even when no new games are available.
+        players_df = pd.read_sql(
+            "SELECT id AS player_id, team_abbreviation FROM players", engine
+        )
+        team_map = dict(
+            zip(players_df["player_id"], players_df["team_abbreviation"])
+        )
+        df_rolling_old["team_abbreviation"] = df_rolling_old["player_id"].map(
+            team_map
+        )
+        df_rolling_old.to_csv(ROLLING_PATH, index=False)
+        print("No new games to update. Refreshed team abbreviations.")
         return df_rolling_old
 
     # Combine with previous history
@@ -50,6 +64,11 @@ def update_rolling_stats(engine):
 
     # Keep only the latest row per player
     df_latest = df_history.groupby("player_id").tail(1)
+    players_df = pd.read_sql(
+        "SELECT id AS player_id, team_abbreviation FROM players", engine
+    )
+    team_map = dict(zip(players_df["player_id"], players_df["team_abbreviation"]))
+    df_latest["team_abbreviation"] = df_latest["player_id"].map(team_map)
     df_latest.to_csv(ROLLING_PATH, index=False)
 
     print(f"Updated rolling averages for {len(df_latest)} players.")

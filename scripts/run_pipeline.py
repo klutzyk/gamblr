@@ -126,6 +126,9 @@ def main():
     refresh_player_teams = prompt_yes_no(
         "Refresh active player teams (/db/players/refresh-team-abbr)", True
     )
+    refresh_player_fallback = prompt_yes_no(
+        "Allow per-player fallback if bulk refresh misses players", True
+    )
     update_actuals = prompt_yes_no("Update prediction actuals (/ml/evaluate/all)", True)
     recalc_under_risk = prompt_yes_no("Recalculate under-risk metrics", True)
     run_backtests = prompt_yes_no("Run backtests (assists/rebounds/threept/threepa)", False)
@@ -178,7 +181,12 @@ def main():
 
         if refresh_player_teams:
             print("Refreshing player team abbreviations...")
-            call_api(client, "POST", "/db/players/refresh-team-abbr")
+            call_api(
+                client,
+                "POST",
+                "/db/players/refresh-team-abbr",
+                {"fallback": str(refresh_player_fallback).lower()},
+            )
 
         if update_actuals:
             print("Updating prediction actuals...")
