@@ -645,12 +645,49 @@ function App() {
       });
       return;
     }
+    const getPredictionDayFromSelectedEvents = () => {
+      if (!eventsState.data || selectedBestBetEventIds.length === 0) return null;
+      const selected = eventsState.data.filter((event) =>
+        selectedBestBetEventIds.includes(event.id)
+      );
+      if (selected.length === 0) return null;
+      const earliest = selected
+        .map((event) => new Date(event.commence_time))
+        .filter((date) => !Number.isNaN(date.getTime()))
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      if (!earliest) return null;
+      const tz = "America/New_York";
+      const formatKey = (date: Date) =>
+        new Intl.DateTimeFormat("en-CA", {
+          timeZone: tz,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(date);
+      const parseKey = (key: string) => {
+        const [year, month, day] = key.split("-").map(Number);
+        return Date.UTC(year, month - 1, day);
+      };
+      const eventKey = formatKey(earliest);
+      const nowKey = formatKey(new Date());
+      const diffDays = Math.round(
+        (parseKey(eventKey) - parseKey(nowKey)) / (24 * 60 * 60 * 1000)
+      );
+      // The prediction API maps "today" -> ET date minus 1, and "tomorrow" -> ET date.
+      // Align selected event date to that mapping to avoid day mismatches.
+      if (diffDays === 0) return "tomorrow";
+      if (diffDays === -1) return "today";
+      if (diffDays === -2) return "yesterday";
+      return "auto";
+    };
+
     const derivedPredictionDay =
-      bestBetSyncMode === "night"
+      getPredictionDayFromSelectedEvents() ??
+      (bestBetSyncMode === "night"
         ? "tomorrow"
         : bestBetSyncMode === "morning"
           ? "today"
-          : "auto";
+          : "auto");
 
     await safeLoad(
       bestBetsState,
@@ -692,7 +729,8 @@ function App() {
         markets: selectedMarkets,
         min_remaining_after_call: 5,
         max_events: bestBetEvents,
-        schedule_mode: bestBetSyncMode,
+        schedule_mode:
+          selectedBestBetEventIds.length > 0 ? "auto" : bestBetSyncMode,
         event_ids:
           selectedBestBetEventIds.length > 0
             ? selectedBestBetEventIds.join(",")
@@ -1172,6 +1210,7 @@ function App() {
                         e.target.value as "auto" | "night" | "morning" | "all"
                       )
                     }
+                    disabled={selectedBestBetEventIds.length > 0}
                   >
                     <option value="auto">Auto (AU time)</option>
                     <option value="night">Night (next slate)</option>
