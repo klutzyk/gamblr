@@ -128,6 +128,35 @@ THREEPT_FEATURES = [
     "team_lineup_net_rating",
 ]
 
+THREEPA_FEATURES = [
+    "avg_minutes_last5",
+    "avg_minutes_last10",
+    "pred_minutes",
+    "avg_fg3a_last5",
+    "avg_fg3a_last10",
+    "avg_fga_last5",
+    "avg_fga_last10",
+    "fg3a_rate_last10",
+    "avg_points_last5",
+    "days_since_last_game",
+    "is_back_to_back",
+    "is_home",
+    "games_played_season",
+    "team_points_avg_last5",
+    "team_points_avg_last10",
+    "team_fga_avg_last5",
+    "team_fga_avg_last10",
+    "team_fg3a_avg_last5",
+    "team_fg3a_avg_last10",
+    "team_fg3m_avg_last5",
+    "team_fg3m_avg_last10",
+    "opponent_fg3a_allowed_last5",
+    "opponent_fg3m_allowed_last5",
+    "team_lineup_pace",
+    "team_lineup_net_rating",
+    "team_lineup_ast_pct",
+]
+
 
 def parse_opponent_team(matchup: str) -> Optional[str]:
     if " vs. " in matchup:

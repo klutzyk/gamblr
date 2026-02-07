@@ -365,6 +365,16 @@ export function getThreeptPredictions(
   );
 }
 
+export function getThreepaPredictions(
+  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
+): Promise<PredictionRow[]> {
+  return fetchWithCache<PredictionRow[]>(
+    "/players/predictions/threepa",
+    { day },
+    PREDICTIONS_TTL
+  );
+}
+
 export function getFirstBasketPredictions(
   day: "today" | "tomorrow" | "yesterday" | "auto" = "auto",
   top_n_per_game = 6

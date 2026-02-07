@@ -25,7 +25,13 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from ml.predict import predict_points, predict_assists, predict_rebounds, predict_threept
+from ml.predict import (
+    predict_points,
+    predict_assists,
+    predict_rebounds,
+    predict_threept,
+    predict_threepa,
+)
 from ml.first_basket_model import predict_first_basket_with_models
 from app.db.store_prediction_logs import log_predictions
 
@@ -147,6 +153,7 @@ def fetch_player_games_for_stat(engine, stat_type: str, player_ids: list[int]):
         "assists": "assists",
         "rebounds": "rebounds",
         "threept": "fg3m",
+        "threepa": "fg3a",
     }.get(stat_type)
     if not stat_column or not player_ids:
         return pd.DataFrame()
@@ -221,6 +228,7 @@ def fetch_good_player_ids(engine, stat_type: str):
         "assists": 6,
         "rebounds": 6,
         "threept": 2,
+        "threepa": 4.0,
     }
     threshold = stat_thresholds.get(stat_type)
     if threshold is None:
@@ -286,6 +294,7 @@ def apply_under_risk_boost(df, stat_type: str, good_ids: set[int]):
         "assists": 0.055,
         "rebounds": 0.023,
         "threept": 0.013,
+        "threepa": 0.01,
     }
     delta = boosts.get(stat_type, 0)
     if not delta:
@@ -576,6 +585,60 @@ async def predict_threept_api(
         sync_engine,
         df_preds,
         "threept",
+        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
+    )
+
+    return df_to_dict(df_preds)
+
+
+@router.get("/predictions/threepa")
+async def predict_threepa_api(
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+):
+    """
+    Predict player 3-point attempts for NBA games.
+    day = today | tomorrow | yesterday
+    """
+    df_preds = await run_in_threadpool(predict_threepa, sync_engine, day)
+
+    if df_preds.empty:
+        return {"message": f"No games found for {day}", "data": []}
+
+    under_risk = fetch_under_risk(
+        sync_engine, "threepa", df_preds["player_id"].tolist()
+    )
+    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "threepa")
+    good_ids = fetch_good_player_ids(sync_engine, "threepa")
+    df_preds["under_risk"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
+    )
+    df_preds["under_risk_n"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
+    df_preds["last_under_date"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
+    )
+    df_preds["last_under_value"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
+    )
+    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
+    )
+    df_preds["last_under_matchup"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
+    )
+    df_preds["last_under_minutes"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
+    )
+    apply_under_risk_boost(df_preds, "threepa", good_ids)
+
+    df_preds = df_preds.sort_values("pred_value", ascending=False)
+
+    await run_in_threadpool(
+        log_predictions,
+        sync_engine,
+        df_preds,
+        "threepa",
         df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
     )
 

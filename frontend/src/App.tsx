@@ -13,6 +13,7 @@ import {
   getAssistsPredictions,
   getReboundsPredictions,
   getThreeptPredictions,
+  getThreepaPredictions,
   getFirstBasketPredictions,
   getBestBets,
   syncPlayerPropsWindow,
@@ -161,7 +162,7 @@ function PredictionsGrid({
   predictions: PredictionRow[];
   statLabel: string;
   unitLabel: string;
-  statKey: "points" | "assists" | "rebounds" | "threept";
+  statKey: "points" | "assists" | "rebounds" | "threept" | "threepa";
 }) {
   const TEAM_ID_BY_ABBR: Record<string, number> = {
     ATL: 1610612737,
@@ -463,7 +464,7 @@ function App() {
     useState<ApiState<OddsEventPropsResponse>>(initialState);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [predictionStat, setPredictionStat] = useState<
-    "points" | "assists" | "rebounds" | "threept"
+    "points" | "assists" | "rebounds" | "threept" | "threepa"
   >("points");
   const [pointsPredictionsState, setPointsPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
@@ -472,6 +473,8 @@ function App() {
   const [reboundsPredictionsState, setReboundsPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
   const [threeptPredictionsState, setThreeptPredictionsState] =
+    useState<ApiState<PredictionRow[]>>(initialState);
+  const [threepaPredictionsState, setThreepaPredictionsState] =
     useState<ApiState<PredictionRow[]>>(initialState);
   const [firstBasketPredictionsState, setFirstBasketPredictionsState] =
     useState<ApiState<FirstBasketPredictionRow[]>>(initialState);
@@ -613,6 +616,13 @@ function App() {
       setState: setThreeptPredictionsState,
       loader: () => getThreeptPredictions(predictionDay),
     },
+    threepa: {
+      label: "3PT Attempts",
+      unit: "3PA",
+      state: threepaPredictionsState,
+      setState: setThreepaPredictionsState,
+      loader: () => getThreepaPredictions(predictionDay),
+    },
   };
 
   const handleLoadPredictions = (force = false) => {
@@ -730,6 +740,7 @@ function App() {
       assists: 2,
       rebounds: 2,
       threept: 1,
+      threepa: 3,
     };
     setPredictionLine(defaults[predictionStat]);
   }, [predictionStat]);
@@ -1403,6 +1414,7 @@ function App() {
           assists: [2, 3, 4, 6, 7, 10],
           rebounds: [2, 3, 4, 6, 7, 10],
           threept: [1, 2, 3, 4, 5],
+          threepa: [2, 4, 6, 8, 10],
         };
         const teamOptions = activePrediction.state.data
           ? Array.from(
@@ -1448,7 +1460,7 @@ function App() {
               </div>
               <div className="d-flex flex-wrap gap-2 align-items-center">
                 <div className="stat-toggle">
-                  {(["points", "assists", "rebounds", "threept"] as const).map((stat) => (
+                  {(["points", "assists", "rebounds", "threept", "threepa"] as const).map((stat) => (
                     <button
                       key={stat}
                       className={`stat-chip ${

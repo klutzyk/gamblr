@@ -16,6 +16,7 @@ from ml.training import (
     train_rebounds_model,
     train_minutes_model,
     train_threept_model,
+    train_threepa_model,
 )
 from app.db.store_prediction_logs import update_prediction_actuals, delete_walkforward_logs
 from app.db.store_first_basket import update_first_basket_actuals
@@ -60,6 +61,12 @@ async def train_threept():
     return {"status": "trained", **results}
 
 
+@router.post("/train/threepa")
+async def train_threepa():
+    results = await run_in_threadpool(train_threepa_model, sync_engine)
+    return {"status": "trained", **results}
+
+
 @router.post("/train/all")
 async def train_all():
     minutes = await run_in_threadpool(train_minutes_model, sync_engine)
@@ -67,6 +74,7 @@ async def train_all():
     assists = await run_in_threadpool(train_assists_model, sync_engine)
     rebounds = await run_in_threadpool(train_rebounds_model, sync_engine)
     threept = await run_in_threadpool(train_threept_model, sync_engine)
+    threepa = await run_in_threadpool(train_threepa_model, sync_engine)
     try:
         under_side = await run_in_threadpool(
             train_under_side_model,
@@ -83,6 +91,7 @@ async def train_all():
         "assists": assists,
         "rebounds": rebounds,
         "threept": threept,
+        "threepa": threepa,
         "under_side": under_side,
     }
 
@@ -94,6 +103,7 @@ async def evaluate_all():
     rebounds = await run_in_threadpool(update_prediction_actuals, sync_engine, "rebounds")
     minutes = await run_in_threadpool(update_prediction_actuals, sync_engine, "minutes")
     threept = await run_in_threadpool(update_prediction_actuals, sync_engine, "threept")
+    threepa = await run_in_threadpool(update_prediction_actuals, sync_engine, "threepa")
     return {
         "status": "updated",
         "points": points,
@@ -101,6 +111,7 @@ async def evaluate_all():
         "rebounds": rebounds,
         "minutes": minutes,
         "threept": threept,
+        "threepa": threepa,
     }
 
 

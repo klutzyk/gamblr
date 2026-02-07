@@ -3,7 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-STAT_TYPES = {"points", "assists", "rebounds", "threept"}
+STAT_TYPES = {"points", "assists", "rebounds", "threept", "threepa"}
 
 
 def _threshold_type_for_stat(stat_type: str) -> str:
@@ -16,7 +16,9 @@ async def compute_under_risk(
     window_n: int = 20,
 ):
     if stat_type not in STAT_TYPES:
-        raise ValueError("stat_type must be one of: points, assists, rebounds, threept")
+        raise ValueError(
+            "stat_type must be one of: points, assists, rebounds, threept, threepa"
+        )
 
     threshold_type = _threshold_type_for_stat(stat_type)
 

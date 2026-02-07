@@ -121,10 +121,13 @@ def update_prediction_actuals(engine, stat_type: str):
         "rebounds": "rebounds",
         "minutes": "minutes",
         "threept": "fg3m",
+        "threepa": "fg3a",
     }.get(stat_type)
 
     if not stat_column:
-        raise ValueError("stat_type must be one of: points, assists, rebounds, minutes")
+        raise ValueError(
+            "stat_type must be one of: points, assists, rebounds, minutes, threept, threepa"
+        )
 
     with engine.begin() as conn:
         result = conn.execute(

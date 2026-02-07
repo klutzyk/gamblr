@@ -110,7 +110,7 @@ def main():
     since_date = prompt("Ingest since date (YYYY-MM-DD, empty to skip)", default_since)
     update_actuals = prompt_yes_no("Update prediction actuals (/ml/evaluate/all)", True)
     recalc_under_risk = prompt_yes_no("Recalculate under-risk metrics", True)
-    run_backtests = prompt_yes_no("Run backtests (assists/rebounds/threept)", False)
+    run_backtests = prompt_yes_no("Run backtests (assists/rebounds/threept/threepa)", False)
 
     if since_date:
         try:
@@ -176,7 +176,7 @@ def main():
 
         if run_backtests:
             print("Running backtests...")
-            for stat in ("points", "assists", "rebounds", "threept"):
+            for stat in ("points", "assists", "rebounds", "threept", "threepa"):
                 call_api(
                     client,
                     "POST",

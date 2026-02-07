@@ -1135,7 +1135,7 @@ async def recalc_under_risk_all(
     """
     Recalculate under-risk for all supported stat types.
     """
-    stat_types = ["points", "assists", "rebounds", "threept"]
+    stat_types = ["points", "assists", "rebounds", "threept", "threepa"]
     results = {}
 
     for stat_type in stat_types:

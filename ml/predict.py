@@ -19,6 +19,7 @@ from .utils import (
     REBOUNDS_FEATURES,
     MINUTES_FEATURES,
     THREEPT_FEATURES,
+    THREEPA_FEATURES,
     compute_prediction_features,
 )
 from datetime import datetime, timedelta
@@ -313,6 +314,23 @@ def predict_threept(
         THREEPT_FEATURES,
         "xgb_threes_ensemble_",
         "threept",
+        models_dir,
+        rolling_path,
+    )
+
+
+def predict_threepa(
+    engine,
+    day: str = "today",
+    models_dir: Path = MODELS_DIR,
+    rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+):
+    return _predict_stat(
+        engine,
+        day,
+        THREEPA_FEATURES,
+        "xgb_threepa_ensemble_",
+        "threepa",
         models_dir,
         rolling_path,
     )

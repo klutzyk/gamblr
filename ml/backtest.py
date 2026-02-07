@@ -17,6 +17,7 @@ from .utils import (
     ASSISTS_FEATURES,
     REBOUNDS_FEATURES,
     THREEPT_FEATURES,
+    THREEPA_FEATURES,
     add_player_rolling_features,
     build_team_game_features,
     build_lineup_team_features,
@@ -33,7 +34,11 @@ def _get_features_for_stat(stat_type: str):
         return REBOUNDS_FEATURES
     if stat_type == "threept":
         return THREEPT_FEATURES
-    raise ValueError("stat_type must be one of: points, assists, rebounds, threept")
+    if stat_type == "threepa":
+        return THREEPA_FEATURES
+    raise ValueError(
+        "stat_type must be one of: points, assists, rebounds, threept, threepa"
+    )
 
 
 def walk_forward_backtest(
@@ -43,7 +48,12 @@ def walk_forward_backtest(
     max_dates: int | None = None,
 ):
     features = _get_features_for_stat(stat_type)
-    target_col = "fg3m" if stat_type == "threept" else stat_type
+    if stat_type == "threept":
+        target_col = "fg3m"
+    elif stat_type == "threepa":
+        target_col = "fg3a"
+    else:
+        target_col = stat_type
 
     df_raw = pd.read_sql(
         """

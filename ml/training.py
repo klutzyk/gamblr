@@ -17,6 +17,7 @@ from .utils import (
     REBOUNDS_FEATURES,
     MINUTES_FEATURES,
     THREEPT_FEATURES,
+    THREEPA_FEATURES,
     add_player_rolling_features,
     build_team_game_features,
     build_lineup_team_features,
@@ -288,6 +289,18 @@ def train_threept_model(engine=None, database_url: Optional[str] = None) -> dict
         "fg3m",
         THREEPT_FEATURES,
         "xgb_threes_ensemble_",
+        use_minutes_model=True,
+        use_ensemble=True,
+    )
+
+
+def train_threepa_model(engine=None, database_url: Optional[str] = None) -> dict:
+    engine = _get_engine(engine, database_url)
+    return _train_model(
+        engine,
+        "fg3a",
+        THREEPA_FEATURES,
+        "xgb_threepa_ensemble_",
         use_minutes_model=True,
         use_ensemble=True,
     )
