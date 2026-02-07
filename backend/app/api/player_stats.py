@@ -388,6 +388,8 @@ async def predict_points_api(
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
+    df_preds = _apply_lineup_filters(df_preds, day)
+
     under_risk = fetch_under_risk(
         sync_engine, "points", df_preds["player_id"].tolist()
     )
@@ -441,6 +443,8 @@ async def predict_assists_api(
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
+
+    df_preds = _apply_lineup_filters(df_preds, day)
 
     under_risk = fetch_under_risk(
         sync_engine, "assists", df_preds["player_id"].tolist()
@@ -496,6 +500,8 @@ async def predict_rebounds_api(
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
+    df_preds = _apply_lineup_filters(df_preds, day)
+
     under_risk = fetch_under_risk(
         sync_engine, "rebounds", df_preds["player_id"].tolist()
     )
@@ -550,6 +556,8 @@ async def predict_threept_api(
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
+    df_preds = _apply_lineup_filters(df_preds, day)
+
     under_risk = fetch_under_risk(
         sync_engine, "threept", df_preds["player_id"].tolist()
     )
@@ -603,6 +611,8 @@ async def predict_threepa_api(
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
+
+    df_preds = _apply_lineup_filters(df_preds, day)
 
     under_risk = fetch_under_risk(
         sync_engine, "threepa", df_preds["player_id"].tolist()
@@ -678,9 +688,128 @@ def _injury_multiplier(injury_tag: str | None):
         return 0.9
     if tag == "ques":
         return 0.75
+    if tag == "doubt":
+        return 0.4
     if tag in {"out", "ofs"}:
         return 0.0
     return 1.0
+
+
+def _build_lineup_injury_index(day: str, df_preds: pd.DataFrame):
+    if df_preds.empty:
+        return {}
+    rotowire_day = day if day in {"today", "tomorrow", "yesterday"} else None
+    try:
+        raw_lineups = rotowire_lineups_client.fetch_lineups(day=rotowire_day)
+    except Exception:
+        return {}
+    if not raw_lineups or (raw_lineups.get("games_count") or 0) == 0:
+        return {}
+
+    lineups = lineup_resolver.enrich_rotowire_payload(raw_lineups)
+    lineups = attach_schedule_metadata(lineups)
+    if not lineups.get("games"):
+        return {}
+
+    def severity(tag: str | None) -> int:
+        t = (tag or "").lower()
+        if t in {"out", "ofs"}:
+            return 4
+        if t == "doubt":
+            return 3
+        if t == "ques":
+            return 2
+        if t == "prob":
+            return 1
+        return 0
+
+    game_index: dict[str, dict[int, dict]] = {}
+    for game in lineups.get("games", []):
+        game_id = game.get("game_id")
+        if not game_id:
+            continue
+        game_key = str(game_id)
+        per_game = game_index.setdefault(game_key, {})
+        for team_key in ["away", "home"]:
+            team = game.get(team_key, {})
+            team_status = team.get("status")
+            for group in ("starters", "may_not_play"):
+                for player in team.get(group, []) or []:
+                    pid = player.get("resolved_player_id")
+                    if pid is None:
+                        continue
+                    try:
+                        pid = int(pid)
+                    except (TypeError, ValueError):
+                        continue
+                    injury_tag = player.get("injury_tag")
+                    play_pct = player.get("play_pct")
+                    existing = per_game.get(pid)
+                    if existing is None or severity(injury_tag) > severity(
+                        existing.get("injury_tag")
+                    ):
+                        per_game[pid] = {
+                            "injury_tag": injury_tag,
+                            "play_pct": play_pct,
+                            "lineup_status": team_status,
+                        }
+                    elif existing and existing.get("play_pct") is None and play_pct is not None:
+                        existing["play_pct"] = play_pct
+
+    pred_game_ids = {
+        str(gid)
+        for gid in df_preds["game_id"].tolist()
+        if pd.notnull(gid)
+    }
+    return {gid: info for gid, info in game_index.items() if gid in pred_game_ids}
+
+
+def _apply_lineup_filters(df_preds: pd.DataFrame, day: str):
+    if df_preds.empty:
+        return df_preds
+    injury_index = _build_lineup_injury_index(day, df_preds)
+    if not injury_index:
+        return df_preds
+
+    adjusted_rows = []
+    for _, row in df_preds.iterrows():
+        game_id = row.get("game_id")
+        pid = row.get("player_id")
+        if pd.isnull(game_id) or pd.isnull(pid):
+            adjusted_rows.append(row)
+            continue
+        game_info = injury_index.get(str(game_id))
+        if not game_info:
+            adjusted_rows.append(row)
+            continue
+        info = game_info.get(int(pid))
+        if not info:
+            adjusted_rows.append(row)
+            continue
+
+        injury_tag = info.get("injury_tag")
+        play_pct = info.get("play_pct")
+        mult = _injury_multiplier(injury_tag)
+        if play_pct is not None:
+            try:
+                mult *= float(play_pct) / 100.0
+            except (TypeError, ValueError):
+                pass
+
+        if mult <= 0:
+            continue
+
+        for col in ["pred_value", "pred_p10", "pred_p50", "pred_p90"]:
+            val = row.get(col)
+            if pd.notnull(val):
+                row[col] = float(val) * mult
+
+        row["lineup_injury_tag"] = injury_tag
+        row["lineup_play_pct"] = play_pct
+        row["lineup_status"] = info.get("lineup_status")
+        adjusted_rows.append(row)
+
+    return pd.DataFrame(adjusted_rows)
 
 
 TEAM_ABBR_ALIAS = {

@@ -154,6 +154,7 @@ class LineupResolver:
                 team_abbr = game.get(side_key)
                 team = game.get(team_key, {})
                 starters = team.get("starters", [])
+                may_not_play = team.get("may_not_play", [])
                 team_resolved = 0
                 team["team_id"] = team_map.get((team_abbr or "").upper())
 
@@ -165,6 +166,11 @@ class LineupResolver:
                     if match["resolved_player_id"] is not None:
                         resolved += 1
                         team_resolved += 1
+
+                for player in may_not_play:
+                    match = self._resolve_one(player.get("name") or "", team_abbr or "")
+                    player.update(match)
+                    player["team_id"] = team["team_id"]
 
                 team["resolved_starters"] = team_resolved
                 team["all_starters_resolved"] = team_resolved == 5

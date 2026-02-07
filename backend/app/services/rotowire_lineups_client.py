@@ -43,34 +43,49 @@ class RotoWireLineupsClient:
         status_text = status_el.get_text(" ", strip=True) if status_el else None
         status = "confirmed" if status_text and "confirmed" in status_text.lower() else "expected"
 
-        players = []
-        for player_el in team_list.select("li.lineup__player"):
-            link_el = player_el.select_one("a[href*='/basketball/player/']")
+        starters = []
+        may_not_play = []
+        all_players = []
+        section = "starters"
+
+        for li in team_list.find_all("li", recursive=False):
+            classes = li.get("class", [])
+            if "lineup__title" in classes and "may not play" in li.get_text(" ", strip=True).lower():
+                section = "may_not_play"
+                continue
+
+            if "lineup__player" not in classes:
+                continue
+
+            link_el = li.select_one("a[href*='/basketball/player/']")
             if link_el is None:
                 continue
 
             name = link_el.get("title") or link_el.get_text(strip=True)
-            pos_el = player_el.select_one(".lineup__pos")
-            injury_el = player_el.select_one(".lineup__inj")
+            pos_el = li.select_one(".lineup__pos")
+            injury_el = li.select_one(".lineup__inj")
             href = link_el.get("href")
+            player = {
+                "name": name,
+                "position": pos_el.get_text(strip=True) if pos_el else None,
+                "injury_tag": injury_el.get_text(strip=True) if injury_el else None,
+                "play_pct": _extract_play_pct(li.get("class", [])),
+                "rotowire_player_id": _extract_rotowire_player_id(href),
+                "rotowire_href": href,
+            }
 
-            players.append(
-                {
-                    "name": name,
-                    "position": pos_el.get_text(strip=True) if pos_el else None,
-                    "injury_tag": injury_el.get_text(strip=True) if injury_el else None,
-                    "play_pct": _extract_play_pct(player_el.get("class", [])),
-                    "rotowire_player_id": _extract_rotowire_player_id(href),
-                    "rotowire_href": href,
-                }
-            )
+            all_players.append(player)
+            if section == "may_not_play":
+                may_not_play.append(player)
+            elif len(starters) < 5:
+                starters.append(player)
 
-        # The first five lineup__player entries are starters on this page.
         return {
             "status": status,
             "status_text": status_text,
-            "starters": players[:5],
-            "all_listed_players": players,
+            "starters": starters,
+            "may_not_play": may_not_play,
+            "all_listed_players": all_players,
         }
 
     def _parse(self, html: str) -> list[dict[str, Any]]:
