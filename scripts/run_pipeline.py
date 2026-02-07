@@ -33,6 +33,21 @@ def prompt_yes_no(text: str, default: bool = False) -> bool:
     return value in {"y", "yes"}
 
 
+def prompt_ingest_since(default: str | None) -> str:
+    if default:
+        value = input(
+            "Ingest since date (YYYY-MM-DD, Enter to skip, 'y' for suggested "
+            f"{default}): "
+        ).strip()
+        if not value:
+            return ""
+        if value.lower() in {"y", "yes"}:
+            return default
+        return value
+    value = input("Ingest since date (YYYY-MM-DD, Enter to skip): ").strip()
+    return value
+
+
 def call_api(
     client: httpx.Client,
     method: str,
@@ -107,7 +122,7 @@ def main():
             default_since = ""
     if last_ingest:
         print(f"Last ingest date: {last_ingest}")
-    since_date = prompt("Ingest since date (YYYY-MM-DD, empty to skip)", default_since)
+    since_date = prompt_ingest_since(default_since or None)
     refresh_player_teams = prompt_yes_no(
         "Refresh active player teams (/db/players/refresh-team-abbr)", True
     )
