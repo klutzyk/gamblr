@@ -108,6 +108,9 @@ def main():
     if last_ingest:
         print(f"Last ingest date: {last_ingest}")
     since_date = prompt("Ingest since date (YYYY-MM-DD, empty to skip)", default_since)
+    refresh_player_teams = prompt_yes_no(
+        "Refresh active player teams (/db/players/refresh-team-abbr)", True
+    )
     update_actuals = prompt_yes_no("Update prediction actuals (/ml/evaluate/all)", True)
     recalc_under_risk = prompt_yes_no("Recalculate under-risk metrics", True)
     run_backtests = prompt_yes_no("Run backtests (assists/rebounds/threept/threepa)", False)
@@ -157,6 +160,10 @@ def main():
             call_api(client, "POST", "/db/team-games/update")
         else:
             print("Skipping ingest step.")
+
+        if refresh_player_teams:
+            print("Refreshing player team abbreviations...")
+            call_api(client, "POST", "/db/players/refresh-team-abbr")
 
         if update_actuals:
             print("Updating prediction actuals...")

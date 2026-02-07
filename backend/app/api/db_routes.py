@@ -773,6 +773,79 @@ async def backfill_player_team_abbr(
     }
 
 
+@router.post("/players/refresh-team-abbr")
+async def refresh_player_team_abbr(
+    db: AsyncSession = Depends(get_db),
+    limit: int | None = None,
+):
+    """
+    Refresh team_abbreviation for all active players using NBA API player info.
+    Updates existing players and creates missing records when possible.
+    """
+    active_players = players.get_active_players()
+    if limit:
+        active_players = active_players[:limit]
+
+    updated = 0
+    unchanged = 0
+    created = 0
+    skipped = 0
+    failed = 0
+
+    for p in active_players:
+        player_id = p["id"]
+        player_name = p["full_name"]
+        for attempt in range(3):
+            try:
+                async with throttler:
+                    info_df, _ = nba_client.fetch_player_info(player_id)
+                if not info_df.empty and "TEAM_ABBREVIATION" in info_df.columns:
+                    team_abbr = info_df.iloc[0]["TEAM_ABBREVIATION"]
+                else:
+                    team_abbr = None
+
+                if not team_abbr:
+                    skipped += 1
+                    break
+
+                player = await db.get(Player, player_id)
+                if not player:
+                    player = Player(
+                        id=player_id,
+                        full_name=player_name,
+                        team_abbreviation=team_abbr,
+                    )
+                    db.add(player)
+                    created += 1
+                elif player.team_abbreviation != team_abbr:
+                    player.team_abbreviation = team_abbr
+                    updated += 1
+                else:
+                    unchanged += 1
+                break
+            except Exception as e:
+                logger.warning(
+                    f"Attempt {attempt + 1} failed for player info {player_name}: {e}"
+                )
+                await asyncio.sleep(0.5)
+        else:
+            failed += 1
+
+        await asyncio.sleep(0.05)
+
+    await db.commit()
+
+    return {
+        "status": "completed",
+        "players_targeted": len(active_players),
+        "players_updated": updated,
+        "players_unchanged": unchanged,
+        "players_created": created,
+        "players_skipped": skipped,
+        "players_failed": failed,
+    }
+
+
 @router.post("/team-games/backfill-shooting")
 async def backfill_team_shooting_stats(
     season: str = "2025-26",
