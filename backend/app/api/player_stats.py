@@ -698,7 +698,7 @@ def _injury_multiplier(injury_tag: str | None):
 def _build_lineup_injury_index(day: str, df_preds: pd.DataFrame):
     if df_preds.empty:
         return {}
-    rotowire_day = day if day in {"today", "tomorrow", "yesterday"} else None
+    rotowire_day = _rotowire_day_for_prediction_day(day)
     try:
         raw_lineups = rotowire_lineups_client.fetch_lineups(day=rotowire_day)
     except Exception:
@@ -762,6 +762,33 @@ def _build_lineup_injury_index(day: str, df_preds: pd.DataFrame):
         if pd.notnull(gid)
     }
     return {gid: info for gid, info in game_index.items() if gid in pred_game_ids}
+
+
+def _rotowire_day_for_prediction_day(day: str) -> str | None:
+    if ZoneInfo:
+        base_date = datetime.now(ZoneInfo("America/New_York")).date()
+    else:
+        base_date = datetime.now().date()
+
+    if day == "auto":
+        if ZoneInfo:
+            aus_hour = datetime.now(ZoneInfo("Australia/Sydney")).hour
+            target_date = base_date if aus_hour >= 17 else base_date - timedelta(days=1)
+        else:
+            target_date = base_date
+    elif day in {"today", "tomorrow", "yesterday"}:
+        target_date = _target_et_date_for_day(day)
+    else:
+        target_date = base_date
+
+    diff_days = (target_date - base_date).days
+    if diff_days == -1:
+        return "yesterday"
+    if diff_days == 0:
+        return "today"
+    if diff_days == 1:
+        return "tomorrow"
+    return None
 
 
 def _apply_lineup_filters(df_preds: pd.DataFrame, day: str):
