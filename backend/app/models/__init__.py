@@ -10,3 +10,4 @@ from .prediction_log import PredictionLog
 from .player_under_risk import PlayerUnderRisk
 from .first_basket_label import FirstBasketLabel
 from .first_basket_prediction_log import FirstBasketPredictionLog
+from .ingestion_run import IngestionRun

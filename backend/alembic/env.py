@@ -19,6 +19,7 @@ from app.models import (
     lineup_stat,
     first_basket_label,
     first_basket_prediction_log,
+    ingestion_run,
 )
 
 

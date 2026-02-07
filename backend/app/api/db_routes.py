@@ -18,6 +18,7 @@ from app.models.player_game_stat import PlayerGameStat
 from app.models.team_game_stat import TeamGameStat
 from app.models.player import Player
 from app.models.game_schedule import GameSchedule
+from app.models.ingestion_run import IngestionRun
 import logging
 import asyncio
 import httpx
@@ -36,6 +37,33 @@ nba_client = NBAClient()
 #  throttler to prevent hammering NBA API. rate limiting to 5 requests/sec
 throttler = Throttler(rate_limit=5, period=1)
 update_jobs: dict[str, dict] = {}
+
+
+async def _record_ingest_run(
+    db: AsyncSession,
+    since_date,
+    season: str,
+    result: dict,
+    status: str,
+    note: str | None = None,
+):
+    try:
+        run = IngestionRun(
+            ingest_type="last_n_update",
+            since_date=since_date,
+            season=season,
+            status=status,
+            note=note or result.get("note"),
+            players_total=int(result.get("players_total") or 0),
+            players_saved=int(result.get("players_saved") or 0),
+            players_skipped=int(result.get("players_skipped") or 0),
+            players_failed=int(result.get("players_failed") or 0),
+            total_new_games_inserted=int(result.get("total_new_games_inserted") or 0),
+        )
+        db.add(run)
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to record ingestion run: {e}")
 
 
 # store player points props for a single event (game)
@@ -352,7 +380,7 @@ async def _run_last_n_update(
         logger.info(
             "update_last_n_games_since: no scheduled games in range; skipping player sync"
         )
-        return {
+        result = {
             "status": "completed",
             "players_total": 0,
             "players_saved": 0,
@@ -363,6 +391,8 @@ async def _run_last_n_update(
             "season": season,
             "note": "No games found in game_schedule for the requested date range.",
         }
+        await _record_ingest_run(db, since_date, season, result, "no_games")
+        return result
 
     if game_rows:
         for game_id, _game_date, home_abbr, away_abbr in game_rows:
@@ -417,7 +447,7 @@ async def _run_last_n_update(
                 if pid is not None
             ]
             if not active_players:
-                return {
+                result = {
                     "status": "completed",
                     "players_total": 0,
                     "players_saved": 0,
@@ -428,11 +458,13 @@ async def _run_last_n_update(
                     "season": season,
                     "note": "No players found for teams in schedule window.",
                 }
+                await _record_ingest_run(db, since_date, season, result, "no_players")
+                return result
         else:
             logger.warning(
                 "update_last_n_games_since: games were found but no team abbreviations resolved"
             )
-            return {
+            result = {
                 "status": "completed",
                 "players_total": 0,
                 "players_saved": 0,
@@ -443,6 +475,8 @@ async def _run_last_n_update(
                 "season": season,
                 "note": "Game rows exist but no teams/players could be resolved.",
             }
+            await _record_ingest_run(db, since_date, season, result, "no_players")
+            return result
     saved = 0
     skipped = 0
     failed = 0
@@ -524,7 +558,7 @@ async def _run_last_n_update(
 
         await asyncio.sleep(0.05)
 
-    return {
+    result = {
         "status": "completed",
         "players_total": len(active_players),
         "players_saved": saved,
@@ -532,7 +566,10 @@ async def _run_last_n_update(
         "players_failed": failed,
         "total_new_games_inserted": total_new_games,
         "since": str(since_date),
+        "season": season,
     }
+    await _record_ingest_run(db, since_date, season, result, "completed")
+    return result
 
 
 @router.post("/last-n/update")
