@@ -28,6 +28,31 @@ import pandas as pd
 from app.core.constants import MAX_GAMES_PER_PLAYER
 from zoneinfo import ZoneInfo
 
+
+def _parse_minutes(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if ":" in text:
+            parts = text.split(":")
+            if len(parts) == 2:
+                try:
+                    minutes = float(parts[0])
+                    seconds = float(parts[1])
+                    return minutes + (seconds / 60.0)
+                except ValueError:
+                    return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -570,6 +595,258 @@ async def _run_last_n_update(
     }
     await _record_ingest_run(db, since_date, season, result, "completed")
     return result
+
+
+@router.post("/games/ingest")
+async def ingest_games_by_date(
+    since: str,
+    until: str | None = None,
+    season: str = "2025-26",
+    include_team_stats: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ingest per-game boxscores for all scheduled games in a date range.
+    Faster than per-player ingestion for daily runs.
+    """
+    try:
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+
+    if until:
+        try:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
+    else:
+        if ZoneInfo:
+            until_date = datetime.now(ZoneInfo("America/New_York")).date()
+        else:
+            until_date = datetime.now().date()
+
+    if since_date > until_date:
+        raise HTTPException(
+            status_code=400, detail="since must be on or before until"
+        )
+
+    schedule_result = await db.execute(
+        select(
+            GameSchedule.game_id,
+            GameSchedule.game_date,
+            GameSchedule.matchup,
+            GameSchedule.home_team_id,
+            GameSchedule.away_team_id,
+            GameSchedule.home_team_abbr,
+            GameSchedule.away_team_abbr,
+        ).where(
+            GameSchedule.game_date >= since_date,
+            GameSchedule.game_date <= until_date,
+            GameSchedule.season == season,
+        )
+    )
+    games = schedule_result.all()
+    if not games:
+        return {
+            "status": "no_games",
+            "since": str(since_date),
+            "until": str(until_date),
+            "season": season,
+            "games_considered": 0,
+        }
+
+    games_processed = 0
+    games_skipped = 0
+    players_inserted = 0
+    players_updated = 0
+    teams_inserted = 0
+    teams_updated = 0
+
+    for game in games:
+        (
+            game_id,
+            game_date,
+            matchup,
+            home_team_id,
+            away_team_id,
+            home_abbr,
+            away_abbr,
+        ) = game
+        if not game_id:
+            games_skipped += 1
+            continue
+
+        for attempt in range(3):
+            try:
+                async with throttler:
+                    players_df, teams_df = nba_client.fetch_game_boxscore(str(game_id))
+                break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for game {game_id}: {e}")
+                await asyncio.sleep(0.5)
+        else:
+            logger.error(f"All retries failed for game {game_id}")
+            games_skipped += 1
+            continue
+
+        if players_df is None or players_df.empty:
+            games_skipped += 1
+            continue
+
+        existing_players_result = await db.execute(
+            select(PlayerGameStat).where(PlayerGameStat.game_id == str(game_id))
+        )
+        existing_players = {
+            int(row.player_id): row for row in existing_players_result.scalars().all()
+        }
+
+        for _, row in players_df.iterrows():
+            player_id = row.get("PLAYER_ID")
+            if player_id is None:
+                continue
+            try:
+                player_id = int(player_id)
+            except (TypeError, ValueError):
+                continue
+
+            player_name = row.get("PLAYER_NAME")
+            team_abbr = row.get("TEAM_ABBREVIATION") or row.get("TEAM_ABBR")
+
+            player = await db.get(Player, player_id)
+            if not player:
+                player = Player(
+                    id=player_id,
+                    full_name=player_name,
+                    team_abbreviation=team_abbr,
+                )
+                db.add(player)
+            elif team_abbr and player.team_abbreviation != team_abbr:
+                player.team_abbreviation = team_abbr
+
+            existing = existing_players.get(player_id)
+            if existing:
+                has_updates = False
+                for col, key in [
+                    ("minutes", "MIN"),
+                    ("points", "PTS"),
+                    ("assists", "AST"),
+                    ("rebounds", "REB"),
+                    ("steals", "STL"),
+                    ("blocks", "BLK"),
+                    ("turnovers", "TOV"),
+                    ("fgm", "FGM"),
+                    ("fga", "FGA"),
+                    ("fg3m", "FG3M"),
+                    ("fg3a", "FG3A"),
+                ]:
+                    value = row.get(key)
+                    if col == "minutes":
+                        value = _parse_minutes(value)
+                    if value is not None and getattr(existing, col) is None:
+                        setattr(existing, col, value)
+                        has_updates = True
+                if has_updates:
+                    players_updated += 1
+                continue
+
+            db.add(
+                PlayerGameStat(
+                    player_id=player_id,
+                    game_id=str(game_id),
+                    game_date=game_date,
+                    matchup=matchup,
+                    minutes=_parse_minutes(row.get("MIN")),
+                    points=row.get("PTS"),
+                    assists=row.get("AST"),
+                    rebounds=row.get("REB"),
+                    steals=row.get("STL"),
+                    blocks=row.get("BLK"),
+                    turnovers=row.get("TOV"),
+                    fgm=row.get("FGM"),
+                    fga=row.get("FGA"),
+                    fg3m=row.get("FG3M"),
+                    fg3a=row.get("FG3A"),
+                )
+            )
+            players_inserted += 1
+
+        if include_team_stats and teams_df is not None and not teams_df.empty:
+            existing_teams_result = await db.execute(
+                select(TeamGameStat).where(TeamGameStat.game_id == str(game_id))
+            )
+            existing_teams = {
+                int(row.team_id): row for row in existing_teams_result.scalars().all()
+                if row.team_id is not None
+            }
+
+            for _, row in teams_df.iterrows():
+                team_id = row.get("TEAM_ID")
+                if team_id is None:
+                    continue
+                try:
+                    team_id = int(team_id)
+                except (TypeError, ValueError):
+                    continue
+
+                team_abbr = row.get("TEAM_ABBREVIATION")
+                existing_team = existing_teams.get(team_id)
+                if existing_team:
+                    has_updates = False
+                    for col, key in [
+                        ("points", "PTS"),
+                        ("assists", "AST"),
+                        ("rebounds", "REB"),
+                        ("turnovers", "TOV"),
+                        ("fgm", "FGM"),
+                        ("fga", "FGA"),
+                        ("fg3m", "FG3M"),
+                        ("fg3a", "FG3A"),
+                    ]:
+                        value = row.get(key)
+                        if value is not None and getattr(existing_team, col) is None:
+                            setattr(existing_team, col, value)
+                            has_updates = True
+                    if has_updates:
+                        teams_updated += 1
+                    continue
+
+                db.add(
+                    TeamGameStat(
+                        team_id=team_id,
+                        team_abbreviation=team_abbr,
+                        game_id=str(game_id),
+                        game_date=game_date,
+                        matchup=matchup,
+                        points=row.get("PTS"),
+                        assists=row.get("AST"),
+                        rebounds=row.get("REB"),
+                        turnovers=row.get("TOV"),
+                        fgm=row.get("FGM"),
+                        fga=row.get("FGA"),
+                        fg3m=row.get("FG3M"),
+                        fg3a=row.get("FG3A"),
+                    )
+                )
+                teams_inserted += 1
+
+        await db.commit()
+        games_processed += 1
+        await asyncio.sleep(0.05)
+
+    return {
+        "status": "completed",
+        "since": str(since_date),
+        "until": str(until_date),
+        "season": season,
+        "games_considered": len(games),
+        "games_processed": games_processed,
+        "games_skipped": games_skipped,
+        "players_inserted": players_inserted,
+        "players_updated": players_updated,
+        "teams_inserted": teams_inserted,
+        "teams_updated": teams_updated,
+        "include_team_stats": include_team_stats,
+    }
 
 
 @router.post("/last-n/update")

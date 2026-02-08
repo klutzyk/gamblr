@@ -7,6 +7,7 @@ from nba_api.stats.endpoints import (
     boxscoretraditionalv2,
 )
 from app.services.cache import cached
+import pandas as pd
 
 
 class NBAClient:
@@ -90,3 +91,16 @@ class NBAClient:
         if not cols:
             return []
         return df[cols].dropna().to_dict(orient="records")
+
+    @cached(ttl_seconds=60 * 10)
+    def fetch_game_boxscore(self, game_id: str):
+        box = boxscoretraditionalv2.BoxScoreTraditionalV2(
+            game_id=game_id,
+            timeout=self.timeout,
+        )
+        frames = box.get_data_frames()
+        if not frames:
+            return pd.DataFrame(), pd.DataFrame()
+        players_df = frames[0] if len(frames) >= 1 else pd.DataFrame()
+        teams_df = frames[1] if len(frames) >= 2 else pd.DataFrame()
+        return players_df, teams_df

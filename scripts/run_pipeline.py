@@ -123,6 +123,16 @@ def main():
     if last_ingest:
         print(f"Last ingest date: {last_ingest}")
     since_date = prompt_ingest_since(default_since or None)
+    use_game_ingest = False
+    update_team_games = True
+    if since_date:
+        use_game_ingest = prompt_yes_no(
+            "Use per-game boxscore ingest (faster)", True
+        )
+        if use_game_ingest:
+            update_team_games = prompt_yes_no(
+                "Also update team game logs (/db/team-games/update)", False
+            )
     refresh_player_teams = prompt_yes_no(
         "Refresh active player teams (/db/players/refresh-team-abbr)", True
     )
@@ -141,41 +151,53 @@ def main():
 
     with httpx.Client(base_url=base_url) as client:
         if since_date:
-            print("Ingesting player game logs since date...")
-            start = call_api(
-                client,
-                "POST",
-                "/db/last-n/update/start",
-                {"since": since_date},
-            )
-            job_id = start["job_id"]
-            print(f"Polling ingest job {job_id}...")
-            while True:
-                status = call_api_with_retry(
+            if use_game_ingest:
+                print("Ingesting games by boxscore (per-game)...")
+                call_api(
                     client,
-                    "GET",
-                    f"/db/jobs/{job_id}",
-                    timeout_seconds=120,
-                    retries=5,
-                    retry_sleep=6,
+                    "POST",
+                    "/db/games/ingest",
+                    {"since": since_date},
                 )
-                state = status.get("status")
-                done = status.get("players_done")
-                total = status.get("players_total")
-                if total:
-                    print(f"   progress: {done}/{total}")
-                else:
-                    print(f"   status: {state}")
+                if update_team_games:
+                    print("Ingesting team game logs since date...")
+                    call_api(client, "POST", "/db/team-games/update")
+            else:
+                print("Ingesting player game logs since date...")
+                start = call_api(
+                    client,
+                    "POST",
+                    "/db/last-n/update/start",
+                    {"since": since_date},
+                )
+                job_id = start["job_id"]
+                print(f"Polling ingest job {job_id}...")
+                while True:
+                    status = call_api_with_retry(
+                        client,
+                        "GET",
+                        f"/db/jobs/{job_id}",
+                        timeout_seconds=120,
+                        retries=5,
+                        retry_sleep=6,
+                    )
+                    state = status.get("status")
+                    done = status.get("players_done")
+                    total = status.get("players_total")
+                    if total:
+                        print(f"   progress: {done}/{total}")
+                    else:
+                        print(f"   status: {state}")
 
-                if state == "completed":
-                    print("Ingest job completed.")
-                    break
-                if state == "failed":
-                    raise SystemExit(f"Ingest job failed: {status.get('error')}")
+                    if state == "completed":
+                        print("Ingest job completed.")
+                        break
+                    if state == "failed":
+                        raise SystemExit(f"Ingest job failed: {status.get('error')}")
 
-                time.sleep(20)
-            print("Ingesting team game logs since date...")
-            call_api(client, "POST", "/db/team-games/update")
+                    time.sleep(20)
+                print("Ingesting team game logs since date...")
+                call_api(client, "POST", "/db/team-games/update")
         else:
             print("Skipping ingest step.")
 
