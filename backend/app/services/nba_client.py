@@ -6,6 +6,10 @@ from nba_api.stats.endpoints import (
     leaguedashlineups,
     boxscoretraditionalv2,
 )
+try:
+    from nba_api.stats.endpoints import boxscoretraditionalv3
+except ImportError:  # pragma: no cover
+    boxscoretraditionalv3 = None
 from app.services.cache import cached
 import pandas as pd
 
@@ -80,8 +84,9 @@ class NBAClient:
 
     @cached(ttl_seconds=60 * 15)
     def fetch_game_players(self, game_id: str):
+        safe_id = str(game_id).zfill(10)
         box = boxscoretraditionalv2.BoxScoreTraditionalV2(
-            game_id=game_id,
+            game_id=safe_id,
             timeout=self.timeout,
         )
         df = box.get_data_frames()[0]
@@ -94,13 +99,153 @@ class NBAClient:
 
     @cached(ttl_seconds=60 * 10)
     def fetch_game_boxscore(self, game_id: str):
-        box = boxscoretraditionalv2.BoxScoreTraditionalV2(
-            game_id=game_id,
-            timeout=self.timeout,
-        )
-        frames = box.get_data_frames()
-        if not frames:
-            return pd.DataFrame(), pd.DataFrame()
-        players_df = frames[0] if len(frames) >= 1 else pd.DataFrame()
-        teams_df = frames[1] if len(frames) >= 2 else pd.DataFrame()
+        safe_id = str(game_id).zfill(10)
+        players_df = pd.DataFrame()
+        teams_df = pd.DataFrame()
+        v3_error = None
+        v2_error = None
+
+        def _select_frames(frames):
+            if not frames:
+                return pd.DataFrame(), pd.DataFrame()
+            players = pd.DataFrame()
+            teams = pd.DataFrame()
+            for frame in frames:
+                if frame is None or frame.empty:
+                    continue
+                cols = set(frame.columns)
+                if (
+                    "personId" in cols
+                    or "playerId" in cols
+                    or "PLAYER_ID" in cols
+                ):
+                    if players.empty:
+                        players = frame
+                if "teamId" in cols or "TEAM_ID" in cols:
+                    if teams.empty:
+                        teams = frame
+            if players.empty:
+                for frame in frames:
+                    if frame is not None and not frame.empty:
+                        players = frame
+                        break
+            if teams.empty and len(frames) > 1:
+                for frame in frames:
+                    if frame is not None and not frame.empty and frame is not players:
+                        teams = frame
+                        break
+            return players, teams
+
+        if boxscoretraditionalv3 is not None:
+            try:
+                box = boxscoretraditionalv3.BoxScoreTraditionalV3(
+                    game_id=safe_id,
+                    start_period=1,
+                    end_period=10,
+                    start_range=0,
+                    end_range=0,
+                    range_type=0,
+                    timeout=self.timeout,
+                )
+                frames = box.get_data_frames()
+                players_df, teams_df = _select_frames(frames)
+            except Exception as e:
+                v3_error = e
+                players_df = pd.DataFrame()
+                teams_df = pd.DataFrame()
+
+        if players_df is None or players_df.empty:
+            try:
+                box = boxscoretraditionalv2.BoxScoreTraditionalV2(
+                    game_id=safe_id,
+                    timeout=self.timeout,
+                )
+                frames = box.get_data_frames()
+                players_df, teams_df = _select_frames(frames)
+            except Exception as e:
+                v2_error = e
+                players_df = pd.DataFrame()
+                teams_df = pd.DataFrame()
+
+        if v2_error is not None:
+            raise v2_error
+
+        if players_df is not None and not players_df.empty and "personId" in players_df.columns:
+            players_df = players_df.copy()
+            name_col = None
+            if "firstName" in players_df.columns and "familyName" in players_df.columns:
+                players_df["PLAYER_NAME"] = (
+                    players_df["firstName"].fillna("").astype(str).str.strip()
+                    + " "
+                    + players_df["familyName"].fillna("").astype(str).str.strip()
+                ).str.strip()
+                name_col = "PLAYER_NAME"
+            elif "nameI" in players_df.columns:
+                players_df["PLAYER_NAME"] = players_df["nameI"]
+                name_col = "PLAYER_NAME"
+            elif "playerSlug" in players_df.columns:
+                players_df["PLAYER_NAME"] = players_df["playerSlug"]
+                name_col = "PLAYER_NAME"
+
+            players_df["PLAYER_ID"] = players_df["personId"]
+            players_df["TEAM_ABBREVIATION"] = players_df.get("teamTricode")
+            players_df["MIN"] = players_df.get("minutes")
+            players_df["PTS"] = players_df.get("points")
+            players_df["AST"] = players_df.get("assists")
+            players_df["REB"] = players_df.get("reboundsTotal")
+            players_df["STL"] = players_df.get("steals")
+            players_df["BLK"] = players_df.get("blocks")
+            players_df["TOV"] = players_df.get("turnovers")
+            players_df["FGM"] = players_df.get("fieldGoalsMade")
+            players_df["FGA"] = players_df.get("fieldGoalsAttempted")
+            players_df["FG3M"] = players_df.get("threePointersMade")
+            players_df["FG3A"] = players_df.get("threePointersAttempted")
+
+            keep_cols = [
+                "PLAYER_ID",
+                "PLAYER_NAME",
+                "TEAM_ABBREVIATION",
+                "MIN",
+                "PTS",
+                "AST",
+                "REB",
+                "STL",
+                "BLK",
+                "TOV",
+                "FGM",
+                "FGA",
+                "FG3M",
+                "FG3A",
+            ]
+            if name_col is None:
+                keep_cols.remove("PLAYER_NAME")
+            players_df = players_df[keep_cols]
+
+        if teams_df is not None and not teams_df.empty and "teamId" in teams_df.columns:
+            teams_df = teams_df.copy()
+            teams_df["TEAM_ID"] = teams_df["teamId"]
+            teams_df["TEAM_ABBREVIATION"] = teams_df.get("teamTricode")
+            teams_df["PTS"] = teams_df.get("points")
+            teams_df["AST"] = teams_df.get("assists")
+            teams_df["REB"] = teams_df.get("reboundsTotal")
+            teams_df["TOV"] = teams_df.get("turnovers")
+            teams_df["FGM"] = teams_df.get("fieldGoalsMade")
+            teams_df["FGA"] = teams_df.get("fieldGoalsAttempted")
+            teams_df["FG3M"] = teams_df.get("threePointersMade")
+            teams_df["FG3A"] = teams_df.get("threePointersAttempted")
+            teams_df = teams_df[
+                [
+                    "TEAM_ID",
+                    "TEAM_ABBREVIATION",
+                    "PTS",
+                    "AST",
+                    "REB",
+                    "TOV",
+                    "FGM",
+                    "FGA",
+                    "FG3M",
+                    "FG3A",
+                ]
+            ]
+
         return players_df, teams_df
