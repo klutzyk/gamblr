@@ -19,6 +19,7 @@ from .utils import (
     THREEPT_FEATURES,
     THREEPA_FEATURES,
     add_player_rolling_features,
+    add_teammate_context_features,
     build_team_game_features,
     build_lineup_team_features,
 )
@@ -71,6 +72,7 @@ def walk_forward_backtest(
     df_raw["game_date"] = pd.to_datetime(df_raw["game_date"])
 
     df_features = add_player_rolling_features(df_raw)
+    df_features = add_teammate_context_features(df_features)
 
     df_team = None
     try:

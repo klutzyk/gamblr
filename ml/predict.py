@@ -52,6 +52,9 @@ def _predict_stat(
     stat_type: str,
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+    expected_players_by_team: dict | None = None,
+    excluded_players_by_team: dict | None = None,
+    bench_minutes_threshold: float | None = 12.0,
 ):
     # Load rolling CSV
     df_rolling = pd.read_csv(rolling_path)
@@ -146,7 +149,13 @@ def _predict_stat(
         df_lineups = None
 
     df_next_features = compute_prediction_features(
-        df_next_players, df_history, df_team, df_lineups
+        df_next_players,
+        df_history,
+        df_team,
+        df_lineups,
+        expected_players_by_team=expected_players_by_team,
+        excluded_players_by_team=excluded_players_by_team,
+        bench_minutes_threshold=bench_minutes_threshold,
     )
 
     if "pred_minutes" in features:
@@ -256,6 +265,9 @@ def predict_points(
     day: str = "today",
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+    expected_players_by_team: dict | None = None,
+    excluded_players_by_team: dict | None = None,
+    bench_minutes_threshold: float | None = 12.0,
 ):
     return _predict_stat(
         engine,
@@ -265,6 +277,9 @@ def predict_points(
         "points",
         models_dir,
         rolling_path,
+        expected_players_by_team,
+        excluded_players_by_team,
+        bench_minutes_threshold,
     )
 
 
@@ -273,6 +288,9 @@ def predict_assists(
     day: str = "today",
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+    expected_players_by_team: dict | None = None,
+    excluded_players_by_team: dict | None = None,
+    bench_minutes_threshold: float | None = 12.0,
 ):
     return _predict_stat(
         engine,
@@ -282,6 +300,9 @@ def predict_assists(
         "assists",
         models_dir,
         rolling_path,
+        expected_players_by_team,
+        excluded_players_by_team,
+        bench_minutes_threshold,
     )
 
 
@@ -290,6 +311,9 @@ def predict_rebounds(
     day: str = "today",
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+    expected_players_by_team: dict | None = None,
+    excluded_players_by_team: dict | None = None,
+    bench_minutes_threshold: float | None = 12.0,
 ):
     return _predict_stat(
         engine,
@@ -299,6 +323,9 @@ def predict_rebounds(
         "rebounds",
         models_dir,
         rolling_path,
+        expected_players_by_team,
+        excluded_players_by_team,
+        bench_minutes_threshold,
     )
 
 
@@ -307,6 +334,9 @@ def predict_threept(
     day: str = "today",
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+    expected_players_by_team: dict | None = None,
+    excluded_players_by_team: dict | None = None,
+    bench_minutes_threshold: float | None = 12.0,
 ):
     return _predict_stat(
         engine,
@@ -316,6 +346,9 @@ def predict_threept(
         "threept",
         models_dir,
         rolling_path,
+        expected_players_by_team,
+        excluded_players_by_team,
+        bench_minutes_threshold,
     )
 
 
@@ -324,6 +357,9 @@ def predict_threepa(
     day: str = "today",
     models_dir: Path = MODELS_DIR,
     rolling_path: Path = DATA_DIR / "player_stats_rolling.csv",
+    expected_players_by_team: dict | None = None,
+    excluded_players_by_team: dict | None = None,
+    bench_minutes_threshold: float | None = 12.0,
 ):
     return _predict_stat(
         engine,
@@ -333,6 +369,9 @@ def predict_threepa(
         "threepa",
         models_dir,
         rolling_path,
+        expected_players_by_team,
+        excluded_players_by_team,
+        bench_minutes_threshold,
     )
 
 def _load_recent_player_errors(

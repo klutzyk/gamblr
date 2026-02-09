@@ -6,6 +6,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.services.rotowire_lineups_client import RotoWireLineupsClient
 from app.services.jedibets_first_basket_client import JediBetsFirstBasketClient
 from app.services.lineup_resolver import LineupResolver
+from app.services.lineup_context import fetch_lineups_payload, build_expected_lineup_sets
 from app.db.store_first_basket import upsert_first_basket_prediction_logs
 import sys
 from pathlib import Path
@@ -383,12 +384,20 @@ async def predict_points_api(
     Predict player points for NBA games.
     day = today | tomorrow | yesterday
     """
-    df_preds = await run_in_threadpool(predict_points, sync_engine, day)
+    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+    df_preds = await run_in_threadpool(
+        predict_points,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
-    df_preds = _apply_lineup_filters(df_preds, day)
+    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "points", df_preds["player_id"].tolist()
@@ -439,12 +448,20 @@ async def predict_assists_api(
     Predict player assists for NBA games.
     day = today | tomorrow | yesterday
     """
-    df_preds = await run_in_threadpool(predict_assists, sync_engine, day)
+    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+    df_preds = await run_in_threadpool(
+        predict_assists,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
-    df_preds = _apply_lineup_filters(df_preds, day)
+    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "assists", df_preds["player_id"].tolist()
@@ -495,12 +512,20 @@ async def predict_rebounds_api(
     Predict player rebounds for NBA games.
     day = today | tomorrow | yesterday
     """
-    df_preds = await run_in_threadpool(predict_rebounds, sync_engine, day)
+    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+    df_preds = await run_in_threadpool(
+        predict_rebounds,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
-    df_preds = _apply_lineup_filters(df_preds, day)
+    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "rebounds", df_preds["player_id"].tolist()
@@ -551,12 +576,20 @@ async def predict_threept_api(
     Predict player made 3-pointers for NBA games.
     day = today | tomorrow | yesterday
     """
-    df_preds = await run_in_threadpool(predict_threept, sync_engine, day)
+    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+    df_preds = await run_in_threadpool(
+        predict_threept,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
-    df_preds = _apply_lineup_filters(df_preds, day)
+    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "threept", df_preds["player_id"].tolist()
@@ -607,12 +640,20 @@ async def predict_threepa_api(
     Predict player 3-point attempts for NBA games.
     day = today | tomorrow | yesterday
     """
-    df_preds = await run_in_threadpool(predict_threepa, sync_engine, day)
+    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+    df_preds = await run_in_threadpool(
+        predict_threepa,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
 
     if df_preds.empty:
         return {"message": f"No games found for {day}", "data": []}
 
-    df_preds = _apply_lineup_filters(df_preds, day)
+    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "threepa", df_preds["player_id"].tolist()
@@ -695,20 +736,26 @@ def _injury_multiplier(injury_tag: str | None):
     return 1.0
 
 
-def _build_lineup_injury_index(day: str, df_preds: pd.DataFrame):
+def _build_lineup_injury_index(
+    day: str,
+    df_preds: pd.DataFrame,
+    lineups_payload: dict | None = None,
+):
     if df_preds.empty:
         return {}
-    rotowire_day = _rotowire_day_for_prediction_day(day)
-    try:
-        raw_lineups = rotowire_lineups_client.fetch_lineups(day=rotowire_day)
-    except Exception:
-        return {}
-    if not raw_lineups or (raw_lineups.get("games_count") or 0) == 0:
-        return {}
+    lineups = lineups_payload
+    if not lineups:
+        rotowire_day = _rotowire_day_for_prediction_day(day)
+        try:
+            raw_lineups = rotowire_lineups_client.fetch_lineups(day=rotowire_day)
+        except Exception:
+            return {}
+        if not raw_lineups or (raw_lineups.get("games_count") or 0) == 0:
+            return {}
 
-    lineups = lineup_resolver.enrich_rotowire_payload(raw_lineups)
-    lineups = attach_schedule_metadata(lineups)
-    if not lineups.get("games"):
+        lineups = lineup_resolver.enrich_rotowire_payload(raw_lineups)
+        lineups = attach_schedule_metadata(lineups)
+    if not lineups or not lineups.get("games"):
         return {}
 
     def severity(tag: str | None) -> int:
@@ -791,10 +838,12 @@ def _rotowire_day_for_prediction_day(day: str) -> str | None:
     return None
 
 
-def _apply_lineup_filters(df_preds: pd.DataFrame, day: str):
+def _apply_lineup_filters(
+    df_preds: pd.DataFrame, day: str, lineups_payload: dict | None = None
+):
     if df_preds.empty:
         return df_preds
-    injury_index = _build_lineup_injury_index(day, df_preds)
+    injury_index = _build_lineup_injury_index(day, df_preds, lineups_payload)
     if not injury_index:
         return df_preds
 
@@ -1231,7 +1280,14 @@ async def predict_first_basket_api(
     except Exception:
         jedibets_stats = None
 
-    df_points = await run_in_threadpool(predict_points, sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups)
+    df_points = await run_in_threadpool(
+        predict_points,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
     source = f"heuristic[{lineups_source}]"
     model_version = None
     try:

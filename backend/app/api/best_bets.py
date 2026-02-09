@@ -16,6 +16,7 @@ from app.models.bookmaker import Bookmaker
 from app.models.event import Event
 from app.models.market import Market
 from app.models.player_prop import PlayerProp
+from app.services.lineup_context import fetch_lineups_payload, build_expected_lineup_sets
 from ml.predict import predict_assists, predict_points, predict_rebounds
 from ml.under_side_model import load_latest_under_side_model, predict_under_probability
 
@@ -46,11 +47,30 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def _build_prediction_index(day: str) -> dict[str, dict[str, dict]]:
+def _build_prediction_index(
+    day: str,
+    expected_players_by_team: dict | None = None,
+    excluded_players_by_team: dict | None = None,
+) -> dict[str, dict[str, dict]]:
     frames = {
-        "points": predict_points(sync_engine, day),
-        "assists": predict_assists(sync_engine, day),
-        "rebounds": predict_rebounds(sync_engine, day),
+        "points": predict_points(
+            sync_engine,
+            day,
+            expected_players_by_team=expected_players_by_team,
+            excluded_players_by_team=excluded_players_by_team,
+        ),
+        "assists": predict_assists(
+            sync_engine,
+            day,
+            expected_players_by_team=expected_players_by_team,
+            excluded_players_by_team=excluded_players_by_team,
+        ),
+        "rebounds": predict_rebounds(
+            sync_engine,
+            day,
+            expected_players_by_team=expected_players_by_team,
+            excluded_players_by_team=excluded_players_by_team,
+        ),
     }
     index: dict[str, dict[str, dict]] = {"points": {}, "assists": {}, "rebounds": {}}
 
@@ -353,7 +373,11 @@ async def get_best_bets(
             status_code=400, detail="day must be one of today, tomorrow, yesterday, auto"
         )
 
-    prediction_index = await run_in_threadpool(_build_prediction_index, day)
+    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+    prediction_index = await run_in_threadpool(
+        _build_prediction_index, day, expected_map, excluded_map
+    )
     under_risk_index: dict[int, dict[str, dict]] = {}
     under_side_model_payload: dict | None = None
     if use_under_overlay or use_under_model:

@@ -22,6 +22,17 @@ POINTS_FEATURES = [
     "team_lineup_pace",
     "team_lineup_ast_pct",
     "team_lineup_reb_pct",
+    "teammate_count",
+    "teammate_avg_points_last5_sum",
+    "teammate_avg_assists_last5_sum",
+    "teammate_avg_rebounds_last5_sum",
+    "teammate_avg_fg3a_last5_sum",
+    "teammate_avg_fga_last5_sum",
+    "teammate_avg_minutes_last5_sum",
+    "teammate_usage_sum_last10",
+    "teammate_top_usage_sum_last10",
+    "team_change_flag",
+    "games_since_team_change",
 ]
 
 ASSISTS_FEATURES = [
@@ -49,6 +60,17 @@ ASSISTS_FEATURES = [
     "team_lineup_pace",
     "team_lineup_ast_pct",
     "team_lineup_reb_pct",
+    "teammate_count",
+    "teammate_avg_points_last5_sum",
+    "teammate_avg_assists_last5_sum",
+    "teammate_avg_rebounds_last5_sum",
+    "teammate_avg_fg3a_last5_sum",
+    "teammate_avg_fga_last5_sum",
+    "teammate_avg_minutes_last5_sum",
+    "teammate_usage_sum_last10",
+    "teammate_top_usage_sum_last10",
+    "team_change_flag",
+    "games_since_team_change",
 ]
 
 REBOUNDS_FEATURES = [
@@ -73,6 +95,17 @@ REBOUNDS_FEATURES = [
     "team_lineup_pace",
     "team_lineup_ast_pct",
     "team_lineup_reb_pct",
+    "teammate_count",
+    "teammate_avg_points_last5_sum",
+    "teammate_avg_assists_last5_sum",
+    "teammate_avg_rebounds_last5_sum",
+    "teammate_avg_fg3a_last5_sum",
+    "teammate_avg_fga_last5_sum",
+    "teammate_avg_minutes_last5_sum",
+    "teammate_usage_sum_last10",
+    "teammate_top_usage_sum_last10",
+    "team_change_flag",
+    "games_since_team_change",
 ]
 
 MINUTES_FEATURES = [
@@ -95,6 +128,17 @@ MINUTES_FEATURES = [
     "team_lineup_pace",
     "team_lineup_ast_pct",
     "team_lineup_reb_pct",
+    "teammate_count",
+    "teammate_avg_points_last5_sum",
+    "teammate_avg_assists_last5_sum",
+    "teammate_avg_rebounds_last5_sum",
+    "teammate_avg_fg3a_last5_sum",
+    "teammate_avg_fga_last5_sum",
+    "teammate_avg_minutes_last5_sum",
+    "teammate_usage_sum_last10",
+    "teammate_top_usage_sum_last10",
+    "team_change_flag",
+    "games_since_team_change",
 ]
 
 THREEPT_FEATURES = [
@@ -126,6 +170,17 @@ THREEPT_FEATURES = [
     "opponent_fg3m_allowed_last5",
     "team_lineup_pace",
     "team_lineup_net_rating",
+    "teammate_count",
+    "teammate_avg_points_last5_sum",
+    "teammate_avg_assists_last5_sum",
+    "teammate_avg_rebounds_last5_sum",
+    "teammate_avg_fg3a_last5_sum",
+    "teammate_avg_fga_last5_sum",
+    "teammate_avg_minutes_last5_sum",
+    "teammate_usage_sum_last10",
+    "teammate_top_usage_sum_last10",
+    "team_change_flag",
+    "games_since_team_change",
 ]
 
 THREEPA_FEATURES = [
@@ -155,6 +210,17 @@ THREEPA_FEATURES = [
     "team_lineup_pace",
     "team_lineup_net_rating",
     "team_lineup_ast_pct",
+    "teammate_count",
+    "teammate_avg_points_last5_sum",
+    "teammate_avg_assists_last5_sum",
+    "teammate_avg_rebounds_last5_sum",
+    "teammate_avg_fg3a_last5_sum",
+    "teammate_avg_fga_last5_sum",
+    "teammate_avg_minutes_last5_sum",
+    "teammate_usage_sum_last10",
+    "teammate_top_usage_sum_last10",
+    "team_change_flag",
+    "games_since_team_change",
 ]
 
 
@@ -442,6 +508,9 @@ def add_player_rolling_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     df["avg_turnovers_last5"] = grouped["turnovers"].transform(
         lambda x: x.rolling(5, min_periods=1).mean().shift(1)
     )
+    df["avg_turnovers_last10"] = grouped["turnovers"].transform(
+        lambda x: x.rolling(10, min_periods=1).mean().shift(1)
+    )
 
     df["avg_fgm_last5"] = grouped["fgm"].transform(
         lambda x: x.rolling(5, min_periods=1).mean().shift(1)
@@ -491,7 +560,246 @@ def add_player_rolling_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     df["is_back_to_back"] = (df["days_since_last_game"] <= 1).astype(int)
     df["games_played_season"] = grouped.cumcount()
     df["is_home"] = df["matchup"].apply(lambda x: 1 if "@" not in x else 0)
+    df["usage_proxy_last10"] = df["avg_fga_last10"] + df["avg_turnovers_last10"]
 
+    df = _add_team_change_features(df)
+
+    return df
+
+
+def _add_team_change_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df = df.sort_values(["player_id", "game_date"])
+    grouped = df.groupby("player_id")
+    df["prev_team"] = grouped["team_abbreviation"].shift(1)
+    df["team_change_flag"] = (
+        (df["team_abbreviation"] != df["prev_team"]) & df["prev_team"].notna()
+    ).astype(int)
+
+    def _since_change(series: pd.Series) -> pd.Series:
+        prev = None
+        count = 0
+        out = []
+        for team in series:
+            if prev is None:
+                out.append(0)
+            else:
+                if team != prev:
+                    count = 0
+                else:
+                    count += 1
+                out.append(count)
+            prev = team
+        return pd.Series(out, index=series.index)
+
+    df["games_since_team_change"] = grouped["team_abbreviation"].apply(
+        _since_change
+    ).reset_index(level=0, drop=True)
+    df = df.drop(columns=["prev_team"])
+    return df
+
+
+def add_teammate_context_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build teammate context features from actual game lineups (players who played).
+    Assumes rolling features are already shifted (no leakage).
+    """
+    df = df.copy()
+    context_cols = [
+        "avg_points_last5",
+        "avg_assists_last5",
+        "avg_rebounds_last5",
+        "avg_fg3a_last5",
+        "avg_fga_last5",
+        "avg_minutes_last5",
+        "usage_proxy_last10",
+    ]
+    for col in context_cols:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    group_cols = ["game_id", "team_abbreviation"]
+    sums = df.groupby(group_cols)[context_cols].transform("sum")
+    for col in context_cols:
+        df[f"teammate_{col}_sum"] = sums[col] - df[col]
+
+    df["teammate_count"] = (
+        df.groupby(group_cols)["player_id"].transform("count") - 1
+    )
+    df["teammate_usage_sum_last10"] = (
+        sums["usage_proxy_last10"] - df["usage_proxy_last10"]
+    )
+
+    df["teammate_top_usage_sum_last10"] = 0.0
+
+    def _top_usage_per_group(group: pd.DataFrame) -> pd.Series:
+        usage = group["usage_proxy_last10"].to_numpy()
+        if usage.size == 0:
+            return pd.Series([0.0] * len(group), index=group.index)
+        order = usage.argsort()[::-1]
+        top3_idx = order[:3]
+        top3_sum = float(usage[top3_idx].sum())
+        fourth_val = float(usage[order[3]]) if usage.size > 3 else 0.0
+        top3_set = set(group.index[top3_idx])
+        out = []
+        for idx, val in zip(group.index, usage):
+            if idx in top3_set:
+                out.append(top3_sum - float(val) + fourth_val)
+            else:
+                out.append(top3_sum)
+        return pd.Series(out, index=group.index)
+
+    df["teammate_top_usage_sum_last10"] = (
+        df.groupby(group_cols, group_keys=False).apply(_top_usage_per_group)
+    )
+    return df
+
+
+def add_expected_teammate_context_features(
+    df_next: pd.DataFrame,
+    expected_players_by_team: Optional[dict[str, set[int]]] = None,
+    excluded_players_by_team: Optional[dict[str, set[int]]] = None,
+    bench_minutes_threshold: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Build teammate context features for prediction time using expected lineups.
+    If expected_players_by_team is None/empty, falls back to all players in df_next.
+    """
+    df = df_next.copy()
+    expected_players_by_team = expected_players_by_team or {}
+    excluded_players_by_team = excluded_players_by_team or {}
+    def _is_expected(row):
+        pid = row.get("player_id")
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return 0
+        team_key = str(row.get("team_abbreviation") or "").upper()
+        if pid in excluded_players_by_team.get(team_key, set()):
+            return 0
+        if pid in expected_players_by_team.get(team_key, set()):
+            return 1
+        if bench_minutes_threshold is not None:
+            try:
+                if float(row.get("avg_minutes_last5") or 0) >= float(
+                    bench_minutes_threshold
+                ):
+                    return 1
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    df["expected_active"] = df.apply(_is_expected, axis=1)
+    if not expected_players_by_team and bench_minutes_threshold is None:
+        df["expected_active"] = 1
+
+    context_cols = [
+        "avg_points_last5",
+        "avg_assists_last5",
+        "avg_rebounds_last5",
+        "avg_fg3a_last5",
+        "avg_fga_last5",
+        "avg_minutes_last5",
+        "usage_proxy_last10",
+    ]
+    for col in context_cols:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    group_cols = ["game_id", "team_abbreviation"]
+    active_df = df[df["expected_active"] == 1]
+    if active_df.empty:
+        df["teammate_count"] = 0
+        for col in context_cols:
+            df[f"teammate_{col}_sum"] = 0.0
+        df["teammate_usage_sum_last10"] = 0.0
+        df["teammate_top_usage_sum_last10"] = 0.0
+        return df
+
+    active_sums = (
+        active_df.groupby(group_cols)[context_cols]
+        .sum()
+        .rename(columns={c: f"active_sum_{c}" for c in context_cols})
+        .reset_index()
+    )
+    active_counts = (
+        active_df.groupby(group_cols)["player_id"]
+        .count()
+        .reset_index()
+        .rename(columns={"player_id": "active_count"})
+    )
+    df = df.merge(active_sums, on=group_cols, how="left")
+    df = df.merge(active_counts, on=group_cols, how="left")
+
+    for col in context_cols:
+        sum_col = f"active_sum_{col}"
+        df[sum_col] = pd.to_numeric(df[sum_col], errors="coerce").fillna(0)
+        df[f"teammate_{col}_sum"] = df[sum_col] - df[col] * df["expected_active"]
+
+    df["active_count"] = pd.to_numeric(df["active_count"], errors="coerce").fillna(0)
+    df["teammate_count"] = df["active_count"] - df["expected_active"]
+    df["teammate_usage_sum_last10"] = (
+        df["active_sum_usage_proxy_last10"]
+        - df["usage_proxy_last10"] * df["expected_active"]
+    )
+
+    def _top_usage_info(group: pd.DataFrame) -> pd.Series:
+        usage = group["usage_proxy_last10"].to_numpy()
+        ids = group["player_id"].to_numpy()
+        if usage.size == 0:
+            return pd.Series(
+                {"active_top3_sum": 0.0, "active_fourth_usage": 0.0, "active_top3_ids": tuple()}
+            )
+        order = usage.argsort()[::-1]
+        top3_idx = order[:3]
+        top3_sum = float(usage[top3_idx].sum())
+        fourth_val = float(usage[order[3]]) if usage.size > 3 else 0.0
+        top3_ids = tuple(int(ids[i]) for i in top3_idx)
+        return pd.Series(
+            {
+                "active_top3_sum": top3_sum,
+                "active_fourth_usage": fourth_val,
+                "active_top3_ids": top3_ids,
+            }
+        )
+
+    top_info = (
+        active_df.groupby(group_cols)
+        .apply(_top_usage_info)
+        .reset_index()
+    )
+    df = df.merge(top_info, on=group_cols, how="left")
+
+    def _teammate_top_usage(row):
+        base = row.get("active_top3_sum")
+        if base is None:
+            return 0.0
+        if int(row.get("expected_active") or 0) != 1:
+            return float(base)
+        top_ids = row.get("active_top3_ids") or tuple()
+        pid = row.get("player_id")
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return float(base)
+        if pid in top_ids:
+            return float(base) - float(row.get("usage_proxy_last10") or 0) + float(
+                row.get("active_fourth_usage") or 0
+            )
+        return float(base)
+
+    df["teammate_top_usage_sum_last10"] = df.apply(_teammate_top_usage, axis=1)
+
+    df = df.drop(
+        columns=[
+            c
+            for c in df.columns
+            if c.startswith("active_sum_") or c.startswith("active_")
+        ],
+        errors="ignore",
+    )
     return df
 
 
@@ -585,6 +893,9 @@ def compute_prediction_features(
     df_history: pd.DataFrame,
     df_team_game: Optional[pd.DataFrame] = None,
     df_lineup_team: Optional[pd.DataFrame] = None,
+    expected_players_by_team: Optional[dict[str, set[int]]] = None,
+    excluded_players_by_team: Optional[dict[str, set[int]]] = None,
+    bench_minutes_threshold: Optional[float] = None,
 ) -> pd.DataFrame:
     """
     Build full feature set for upcoming games.
@@ -640,6 +951,9 @@ def compute_prediction_features(
     df_next["avg_turnovers_last5"] = df_next["player_id"].map(
         grouped["turnovers"].apply(lambda x: x.tail(5).mean())
     )
+    df_next["avg_turnovers_last10"] = df_next["player_id"].map(
+        grouped["turnovers"].apply(lambda x: x.tail(10).mean())
+    )
 
     df_next["avg_fgm_last5"] = df_next["player_id"].map(
         grouped["fgm"].apply(lambda x: x.tail(5).mean())
@@ -693,6 +1007,30 @@ def compute_prediction_features(
     df_next["is_back_to_back"] = (df_next["days_since_last_game"] <= 1).astype(int)
     df_next["games_played_season"] = df_next["player_id"].map(grouped.size())
     df_next["is_home"] = df_next["matchup"].apply(lambda x: 1 if "@" not in x else 0)
+    df_next["usage_proxy_last10"] = df_next["avg_fga_last10"] + df_next["avg_turnovers_last10"]
+
+    last_team = grouped["team_abbreviation"].apply(lambda x: x.tail(1).iloc[0])
+    last_team_map = df_next["player_id"].map(last_team)
+    df_next["team_change_flag"] = (
+        df_next["team_abbreviation"].ne(last_team_map)
+    ).astype(int)
+    df_next.loc[last_team_map.isna(), "team_change_flag"] = 0
+
+    def _team_streak(series: pd.Series) -> int:
+        if series.empty:
+            return 0
+        last_team = series.iloc[-1]
+        streak = 0
+        for team in reversed(series.tolist()):
+            if team == last_team:
+                streak += 1
+            else:
+                break
+        return max(0, streak - 1)
+
+    streak_map = grouped["team_abbreviation"].apply(_team_streak)
+    df_next["games_since_team_change"] = df_next["player_id"].map(streak_map).fillna(0)
+    df_next.loc[df_next["team_change_flag"] == 1, "games_since_team_change"] = 0
 
     team_game = build_team_game_features(df_history, df_team_game)
     team_game = team_game.sort_values(["team_abbreviation", "game_date"])
@@ -782,5 +1120,12 @@ def compute_prediction_features(
         df_next["team_lineup_reb_pct"] = df_next["team_abbreviation"].map(
             lineup_team["team_lineup_reb_pct"]
         )
+
+    df_next = add_expected_teammate_context_features(
+        df_next,
+        expected_players_by_team=expected_players_by_team,
+        excluded_players_by_team=excluded_players_by_team,
+        bench_minutes_threshold=bench_minutes_threshold,
+    )
 
     return df_next
