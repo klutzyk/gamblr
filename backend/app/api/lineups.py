@@ -38,4 +38,6 @@ def get_jedibets_first_basket_stats():
     try:
         return jedi_client.fetch_stats()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch JediBets stats: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch JediBets stats: {exc}"
+        )

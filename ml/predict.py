@@ -44,6 +44,16 @@ def load_latest_model(models_dir: Path, prefix: str, return_path: bool = False):
     return (model, path) if return_path else model
 
 
+def _safe_to_datetime(series: pd.Series) -> pd.Series:
+    """
+    Parse mixed datetime formats safely without raising.
+    """
+    try:
+        return pd.to_datetime(series, format="mixed", errors="coerce")
+    except (TypeError, ValueError):
+        return pd.to_datetime(series, errors="coerce")
+
+
 def _predict_stat(
     engine,
     day: str,
@@ -58,7 +68,10 @@ def _predict_stat(
 ):
     # Load rolling CSV
     df_rolling = pd.read_csv(rolling_path)
-    df_rolling["game_date"] = pd.to_datetime(df_rolling["game_date"], dayfirst=True)
+    df_rolling["game_date"] = _safe_to_datetime(df_rolling["game_date"])
+    df_rolling["team_abbreviation"] = (
+        df_rolling["team_abbreviation"].astype(str).str.upper()
+    )
 
     # Load all historical games
     df_history = pd.read_sql(
@@ -75,7 +88,7 @@ def _predict_stat(
 
     # Get upcoming games from schedule
     df_schedule = pd.read_sql("SELECT * FROM game_schedule", engine)
-    df_schedule["game_date"] = pd.to_datetime(df_schedule["game_date"], dayfirst=True)
+    df_schedule["game_date"] = _safe_to_datetime(df_schedule["game_date"])
 
     if ZoneInfo:
         base_date = datetime.now(ZoneInfo("America/New_York")).date()
@@ -108,13 +121,25 @@ def _predict_stat(
 
     rows = []
     for _, game in df_next_games.iterrows():
-        for team_abbr in [game["home_team_abbr"], game["away_team_abbr"]]:
+        home_abbr = str(game.get("home_team_abbr") or "").upper()
+        away_abbr = str(game.get("away_team_abbr") or "").upper()
+        if not home_abbr or not away_abbr:
+            continue
+
+        team_contexts = [
+            (home_abbr, away_abbr, f"{home_abbr} vs. {away_abbr}"),
+            (away_abbr, home_abbr, f"{away_abbr} @ {home_abbr}"),
+        ]
+        for team_abbr, opp_abbr, matchup in team_contexts:
             players = df_rolling[df_rolling["team_abbreviation"] == team_abbr].copy()
-            players["matchup"] = game["matchup"]
+            players["matchup"] = matchup
+            players["opponent_team"] = opp_abbr
             players["game_date"] = game["game_date"]
             players["game_id"] = game.get("game_id")
             rows.append(players)
 
+    if not rows:
+        return pd.DataFrame()
     df_next_players = pd.concat(rows, ignore_index=True)
 
     df_team = None

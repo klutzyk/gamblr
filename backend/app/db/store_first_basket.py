@@ -79,6 +79,7 @@ def upsert_first_basket_prediction_logs(engine, rows: list[dict], model_version:
         return 0
 
     now = datetime.now(timezone.utc)
+    pred_date = now.date()
     stmt = text(
         """
         INSERT INTO first_basket_prediction_logs (

@@ -1,5 +1,5 @@
-import math
 import re
+import math
 from datetime import datetime, timedelta
 from itertools import combinations
 from zoneinfo import ZoneInfo
@@ -153,6 +153,7 @@ def _compose_prediction_row(
         "pred_p50": _sum_or_none("pred_p50"),
         "pred_p90": _sum_or_none("pred_p90"),
         "confidence": confidence,
+        "stats_count": len(rows),
         "player_id": rows[0].get("player_id"),
         "full_name": rows[0].get("full_name"),
         "team_abbreviation": rows[0].get("team_abbreviation"),
@@ -172,6 +173,10 @@ def _model_probability(row: dict, line: float, side: str) -> tuple[float, float]
         sigma = (float(p90) - float(p10)) / 2.563
     else:
         sigma = max(1.0, abs(float(center)) * 0.18)
+    # Combo markets (e.g., PRA) need wider uncertainty than simple summed bands.
+    stats_count = int(row.get("stats_count") or 1)
+    if stats_count > 1:
+        sigma *= 1.0 + 0.22 * float(stats_count - 1)
     sigma = max(sigma, 0.35)
 
     z = (float(line) - float(center)) / sigma
@@ -340,6 +345,72 @@ def _combo_product(values: list[float]) -> float:
     return result
 
 
+def _build_fair_prob_index(rows: list[tuple]) -> dict[tuple, dict[str, float]]:
+    grouped: dict[tuple, dict[str, float]] = {}
+    for row in rows:
+        event_id = row[0]
+        market_key = row[5]
+        player_name = row[6]
+        side = str(row[7] or "").lower()
+        line = row[8]
+        price = row[9]
+        if line is None or price is None:
+            continue
+        try:
+            line_key = round(float(line), 3)
+            price_val = float(price)
+        except (TypeError, ValueError):
+            continue
+        if price_val <= 1.0 or side not in {"over", "under"}:
+            continue
+        key = (str(event_id), str(market_key), _normalize_name(player_name or ""), line_key)
+        grouped.setdefault(key, {})[side] = price_val
+
+    out: dict[tuple, dict[str, float]] = {}
+    for key, sides in grouped.items():
+        over_price = sides.get("over")
+        under_price = sides.get("under")
+        if not over_price or not under_price:
+            continue
+        over_imp = 1.0 / float(over_price)
+        under_imp = 1.0 / float(under_price)
+        total = over_imp + under_imp
+        if total <= 0:
+            continue
+        out[key] = {
+            "over": over_imp / total,
+            "under": under_imp / total,
+            "market_hold": max(0.0, total - 1.0),
+        }
+    return out
+
+
+def _pairwise_corr_proxy(leg_a: dict, leg_b: dict) -> float:
+    if leg_a.get("event_id") != leg_b.get("event_id"):
+        return 0.0
+    corr = 0.08
+    if str(leg_a.get("player_name", "")).lower() == str(leg_b.get("player_name", "")).lower():
+        corr += 0.24
+    if leg_a.get("market") == leg_b.get("market"):
+        corr += 0.12
+    if leg_a.get("stat_type") == leg_b.get("stat_type"):
+        corr += 0.08
+    if str(leg_a.get("side", "")).lower() == str(leg_b.get("side", "")).lower():
+        corr += 0.04
+    return _clamp(corr, 0.0, 0.45)
+
+
+def _combined_probability_with_penalty(legs: list[dict]) -> tuple[float, float, float]:
+    base_prob = _combo_product([float(leg["model_prob"]) for leg in legs])
+    corr_sum = 0.0
+    for i in range(len(legs)):
+        for j in range(i + 1, len(legs)):
+            corr_sum += _pairwise_corr_proxy(legs[i], legs[j])
+    penalty = math.exp(-0.55 * corr_sum)
+    combined = _clamp(base_prob * penalty, 0.0001, 0.9999)
+    return combined, corr_sum, penalty
+
+
 @router.get("/best")
 async def get_best_bets(
     target_multiplier: float = 2.0,
@@ -442,6 +513,7 @@ async def get_best_bets(
             "message": "No stored props found for the selected bookmaker.",
             "bookmaker": bookmaker,
         }
+    fair_prob_index = _build_fair_prob_index(rows)
 
     candidates = []
     skipped_no_prediction = 0
@@ -507,7 +579,22 @@ async def get_best_bets(
             )
             if under_model_meta is not None:
                 under_model_applied += 1
-        implied_prob = 1.0 / float(price)
+        fair_key = (
+            str(event_id),
+            str(market_key),
+            normalized,
+            round(float(line), 3),
+        )
+        fair_market = fair_prob_index.get(fair_key)
+        side_key = str(side or "").lower()
+        if fair_market and side_key in {"over", "under"}:
+            implied_prob = float(fair_market[side_key])
+            market_hold = float(fair_market["market_hold"])
+            implied_source = "de_vig"
+        else:
+            implied_prob = 1.0 / float(price)
+            market_hold = None
+            implied_source = "raw"
         edge = model_prob - implied_prob
         if model_prob < min_prob or edge < min_edge:
             skipped_low_edge += 1
@@ -528,6 +615,8 @@ async def get_best_bets(
                 "line": float(line),
                 "price_decimal": float(price),
                 "implied_prob": round(implied_prob, 4),
+                "implied_prob_source": implied_source,
+                "market_hold": round(market_hold, 4) if market_hold is not None else None,
                 "model_prob_raw": round(raw_prob, 4),
                 "model_prob": round(model_prob, 4),
                 "edge": round(edge, 4),
@@ -620,13 +709,17 @@ async def get_best_bets(
                 continue
 
             combined_odds = _combo_product([leg["price_decimal"] for leg in combo])
-            combined_prob = _combo_product([leg["model_prob"] for leg in combo])
+            combined_prob, corr_sum, corr_penalty = _combined_probability_with_penalty(
+                list(combo)
+            )
             expected_value = combined_prob * (combined_odds - 1.0) - (1.0 - combined_prob)
             parlay_payload = {
                 "legs": list(combo),
                 "leg_count": active_leg_count,
                 "combined_odds": round(combined_odds, 4),
                 "combined_probability": round(combined_prob, 4),
+                "correlation_proxy_sum": round(corr_sum, 4),
+                "correlation_penalty": round(corr_penalty, 4),
                 "expected_value_per_unit": round(expected_value, 4),
                 "meets_target": combined_odds >= target_multiplier,
             }

@@ -771,6 +771,11 @@ async def ingest_games_by_date(
             players_inserted += 1
 
         if include_team_stats and teams_df is not None and not teams_df.empty:
+            teams_df = teams_df.copy()
+            if "TEAM_ID" in teams_df.columns:
+                teams_df = teams_df.dropna(subset=["TEAM_ID"]).drop_duplicates(
+                    subset=["TEAM_ID"], keep="first"
+                )
             existing_teams_result = await db.execute(
                 select(TeamGameStat).where(TeamGameStat.game_id == str(game_id))
             )
@@ -828,8 +833,15 @@ async def ingest_games_by_date(
                     )
                 )
                 teams_inserted += 1
+                existing_teams[team_id] = True
 
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.warning(f"Commit failed for game {game_id}: {e}")
+            games_skipped += 1
+            continue
         games_processed += 1
         await asyncio.sleep(0.05)
 

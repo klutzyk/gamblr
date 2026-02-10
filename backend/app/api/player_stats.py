@@ -289,7 +289,14 @@ def fetch_good_player_ids(engine, stat_type: str):
     return stat_ids.intersection(min_ids)
 
 
-def apply_under_risk_boost(df, stat_type: str, good_ids: set[int]):
+def apply_under_risk_boost(
+    df,
+    stat_type: str,
+    good_ids: set[int],
+    enable: bool = False,
+):
+    if not enable:
+        return
     boosts = {
         "points": 0.026,
         "assists": 0.055,

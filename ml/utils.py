@@ -225,6 +225,8 @@ THREEPA_FEATURES = [
 
 
 def parse_opponent_team(matchup: str) -> Optional[str]:
+    if not matchup:
+        return None
     if " vs. " in matchup:
         return matchup.split(" vs. ")[1]
     if " @ " in matchup:
@@ -1082,7 +1084,16 @@ def compute_prediction_features(
         team_features["team_missed_fg_avg_last5"]
     )
 
-    df_next["opponent_team"] = df_next["matchup"].apply(parse_opponent_team)
+    if "opponent_team" in df_next.columns:
+        df_next["opponent_team"] = df_next["opponent_team"].fillna(
+            df_next["matchup"].apply(parse_opponent_team)
+        )
+    else:
+        df_next["opponent_team"] = df_next["matchup"].apply(parse_opponent_team)
+    df_next["opponent_team"] = df_next["opponent_team"].astype(str).str.upper()
+    df_next.loc[
+        df_next["opponent_team"].isin(["", "NAN", "NONE"]), "opponent_team"
+    ] = pd.NA
     df_next["opponent_points_allowed_last5"] = df_next["opponent_team"].map(
         team_features["opponent_points_allowed_last5"]
     )

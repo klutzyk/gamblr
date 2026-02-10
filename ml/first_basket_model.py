@@ -40,6 +40,14 @@ PLAYER_FEATURES = [
     "team_tip_win_rate_20",
 ]
 
+PLAYER_PRIOR_BASE = 0.05
+
+
+def _ema_update(previous: float | None, hit: int, alpha: float, base: float) -> float:
+    if previous is None:
+        previous = base
+    return (1.0 - alpha) * float(previous) + alpha * float(hit)
+
 
 def _rolling_team_rates(labels: pd.DataFrame, window: int = 20):
     rows = []
@@ -133,12 +141,79 @@ def _parse_ids(raw: str | None):
     return [int(x) for x in arr if str(x).isdigit()]
 
 
+def _load_first_basket_labels_for_priors(engine) -> pd.DataFrame:
+    labels = pd.read_sql(
+        """
+        SELECT game_id, game_date, home_team_id, away_team_id,
+               first_scoring_team_id, first_scorer_player_id,
+               home_starter_ids_json, away_starter_ids_json
+        FROM first_basket_labels
+        WHERE is_valid_label = TRUE
+          AND first_scoring_team_id IS NOT NULL
+          AND first_scorer_player_id IS NOT NULL
+          AND game_date IS NOT NULL
+        ORDER BY game_date ASC
+        """,
+        engine,
+    )
+    if labels.empty:
+        return labels
+    labels["game_date"] = pd.to_datetime(labels["game_date"])
+    return labels
+
+
+def _build_player_first_basket_priors(
+    labels: pd.DataFrame,
+    window: int = 20,
+) -> tuple[dict[int, float], dict[tuple[int, int], float]]:
+    if labels.empty:
+        return {}, {}
+
+    alpha = 1.0 / float(max(1, window))
+    player_rates: dict[int, float] = {}
+    player_team_rates: dict[tuple[int, int], float] = {}
+
+    for _, row in labels.sort_values("game_date").iterrows():
+        home_id = int(row["home_team_id"])
+        away_id = int(row["away_team_id"])
+        first_scorer = int(row["first_scorer_player_id"])
+        first_team = int(row["first_scoring_team_id"])
+        home_starters = _parse_ids(row.get("home_starter_ids_json"))
+        away_starters = _parse_ids(row.get("away_starter_ids_json"))
+
+        for pid in dict.fromkeys(home_starters + away_starters):
+            player_rates[pid] = _ema_update(
+                player_rates.get(pid),
+                1 if pid == first_scorer else 0,
+                alpha,
+                PLAYER_PRIOR_BASE,
+            )
+
+        for pid in home_starters:
+            player_team_rates[(pid, home_id)] = _ema_update(
+                player_team_rates.get((pid, home_id)),
+                1 if (pid == first_scorer and first_team == home_id) else 0,
+                alpha,
+                PLAYER_PRIOR_BASE,
+            )
+        for pid in away_starters:
+            player_team_rates[(pid, away_id)] = _ema_update(
+                player_team_rates.get((pid, away_id)),
+                1 if (pid == first_scorer and first_team == away_id) else 0,
+                alpha,
+                PLAYER_PRIOR_BASE,
+            )
+
+    return player_rates, player_team_rates
+
+
 def _build_training_frames(engine):
     labels = pd.read_sql(
         """
         SELECT game_id, game_date, home_team_id, away_team_id,
                first_scoring_team_id, first_scorer_player_id,
-               winning_jump_ball_team_id, home_starter_ids_json, away_starter_ids_json
+               winning_jump_ball_team_id, jump_ball_home_player_id, jump_ball_away_player_id,
+               home_starter_ids_json, away_starter_ids_json
         FROM first_basket_labels
         WHERE is_valid_label = TRUE
           AND first_scoring_team_id IS NOT NULL
@@ -188,46 +263,80 @@ def _build_training_frames(engine):
     team_train = pd.DataFrame(team_rows)
 
     # Player-level candidate set
-    player_rates = {}
-    player_team_rates = {}
+    player_rates: dict[int, float] = {}
+    player_team_rates: dict[tuple[int, int], float] = {}
     player_rows = []
     sorted_labels = labels.sort_values("game_date")
+    alpha = 1.0 / 20.0
     for _, row in sorted_labels.iterrows():
         game_id = row["game_id"]
         home_id = int(row["home_team_id"])
         away_id = int(row["away_team_id"])
+        first_team = int(row["first_scoring_team_id"])
         first_scorer = int(row["first_scorer_player_id"])
+        home_jump_pid = (
+            int(row["jump_ball_home_player_id"])
+            if pd.notnull(row.get("jump_ball_home_player_id"))
+            else None
+        )
+        away_jump_pid = (
+            int(row["jump_ball_away_player_id"])
+            if pd.notnull(row.get("jump_ball_away_player_id"))
+            else None
+        )
+        home_starters = _parse_ids(row["home_starter_ids_json"])
+        away_starters = _parse_ids(row["away_starter_ids_json"])
 
-        def add_candidates(starter_ids: list[int], team_id: int):
+        def add_candidates(
+            starter_ids: list[int], team_id: int, jump_ball_pid: int | None
+        ):
             for idx, pid in enumerate(starter_ids):
+                is_center = 1 if (jump_ball_pid is not None and pid == jump_ball_pid) else 0
+                if jump_ball_pid is None and idx == 4:
+                    is_center = 1
                 player_rows.append(
                     {
                         "game_id": game_id,
                         "game_date": row["game_date"],
                         "team_id": team_id,
                         "player_id": pid,
-                        "is_center": 1 if idx == 4 else 0,
+                        "is_center": is_center,
                         "starter_slot": float(idx + 1),
                         "target_is_first_scorer": 1 if pid == first_scorer else 0,
-                        "player_first_basket_rate_20": player_rates.get(pid, np.nan),
-                        "player_first_basket_rate_on_team_20": player_team_rates.get((pid, team_id), np.nan),
+                        "player_first_basket_rate_20": player_rates.get(
+                            pid, PLAYER_PRIOR_BASE
+                        ),
+                        "player_first_basket_rate_on_team_20": player_team_rates.get(
+                            (pid, team_id), PLAYER_PRIOR_BASE
+                        ),
                     }
                 )
 
-        add_candidates(_parse_ids(row["home_starter_ids_json"]), home_id)
-        add_candidates(_parse_ids(row["away_starter_ids_json"]), away_id)
+        add_candidates(home_starters, home_id, home_jump_pid)
+        add_candidates(away_starters, away_id, away_jump_pid)
 
         # Update rates after creating current-row features.
-        player_rates[first_scorer] = (
-            (player_rates.get(first_scorer, 0.0) * 19.0 + 1.0) / 20.0
-            if first_scorer in player_rates
-            else 1.0
-        )
-        player_team_rates[(first_scorer, int(row["first_scoring_team_id"]))] = (
-            (player_team_rates.get((first_scorer, int(row["first_scoring_team_id"])), 0.0) * 19.0 + 1.0) / 20.0
-            if (first_scorer, int(row["first_scoring_team_id"])) in player_team_rates
-            else 1.0
-        )
+        for pid in dict.fromkeys(home_starters + away_starters):
+            player_rates[pid] = _ema_update(
+                player_rates.get(pid),
+                1 if pid == first_scorer else 0,
+                alpha,
+                PLAYER_PRIOR_BASE,
+            )
+        for pid in home_starters:
+            player_team_rates[(pid, home_id)] = _ema_update(
+                player_team_rates.get((pid, home_id)),
+                1 if (pid == first_scorer and first_team == home_id) else 0,
+                alpha,
+                PLAYER_PRIOR_BASE,
+            )
+        for pid in away_starters:
+            player_team_rates[(pid, away_id)] = _ema_update(
+                player_team_rates.get((pid, away_id)),
+                1 if (pid == first_scorer and first_team == away_id) else 0,
+                alpha,
+                PLAYER_PRIOR_BASE,
+            )
 
     player_train = pd.DataFrame(player_rows)
     if not player_train.empty:
@@ -372,6 +481,11 @@ def predict_first_basket_with_models(
     team_features = meta["team_features"]
     player_features = meta["player_features"]
 
+    prior_labels = _load_first_basket_labels_for_priors(engine)
+    player_prior_map, player_team_prior_map = _build_player_first_basket_priors(
+        prior_labels, window=20
+    )
+
     team_rates = pd.read_sql(
         """
         SELECT team_id, AVG(team_won_tip::int) AS tip_win_rate_20, AVG(team_scored_first::int) AS first_score_rate_20
@@ -509,8 +623,12 @@ def predict_first_basket_with_models(
                     "starter_slot": float(idx + 1),
                     "player_points_avg_10": float(pred_points),
                     "player_minutes_avg_10": float(recent["minutes"]),
-                    "player_first_basket_rate_20": 0.05,
-                    "player_first_basket_rate_on_team_20": 0.05,
+                    "player_first_basket_rate_20": float(
+                        player_prior_map.get(pid, PLAYER_PRIOR_BASE)
+                    ),
+                    "player_first_basket_rate_on_team_20": float(
+                        player_team_prior_map.get((pid, team_id), PLAYER_PRIOR_BASE)
+                    ),
                     "team_first_score_rate_20": tr_home["first"] if side == "home" else tr_away["first"],
                     "opp_points_allowed_avg_10": team_points_map.get(
                         int(away_team_id if side == "home" else home_team_id), 110.0
