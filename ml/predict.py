@@ -1,4 +1,5 @@
 # ml/predict.py
+import logging
 import pandas as pd
 import numpy as np
 from app.core.constants import (
@@ -33,6 +34,101 @@ except ImportError:  # Python < 3.9
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
+LOGGER = logging.getLogger(__name__)
+
+
+def _to_datetime_mixed(series: pd.Series, dayfirst: bool = False) -> pd.Series:
+    raw = pd.Series(series)
+    try:
+        parsed = pd.to_datetime(
+            raw, format="mixed", errors="coerce", dayfirst=dayfirst
+        )
+        # Older pandas may treat "mixed" as a literal format and return all NaT.
+        if parsed.notna().any() or raw.isna().all():
+            return parsed
+    except (TypeError, ValueError):
+        pass
+    return pd.to_datetime(raw, errors="coerce", dayfirst=dayfirst)
+
+
+def _parse_game_date_series(series: pd.Series) -> pd.Series:
+    raw = pd.Series(series)
+    text = raw.astype("string")
+
+    year_first_mask = text.str.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$", na=False)
+    day_first_mask = text.str.match(r"^\d{1,2}[-/]\d{1,2}[-/]\d{4}$", na=False)
+
+    parsed = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
+    if year_first_mask.any():
+        parsed.loc[year_first_mask] = pd.to_datetime(
+            raw.loc[year_first_mask], errors="coerce", dayfirst=False
+        )
+    if day_first_mask.any():
+        parsed.loc[day_first_mask] = pd.to_datetime(
+            raw.loc[day_first_mask], errors="coerce", dayfirst=True
+        )
+
+    remaining = ~(year_first_mask | day_first_mask)
+    if remaining.any():
+        parsed_remaining = _to_datetime_mixed(raw.loc[remaining], dayfirst=False)
+        if parsed_remaining.isna().any():
+            parsed_remaining = parsed_remaining.fillna(
+                _to_datetime_mixed(raw.loc[remaining], dayfirst=True)
+            )
+        parsed.loc[remaining] = parsed_remaining
+
+    return parsed
+
+
+def _expected_model_features(model) -> list[str] | None:
+    if model is None:
+        return None
+
+    # Optional metadata schema for wrapped model artifacts.
+    if isinstance(model, dict):
+        features = model.get("features")
+        if isinstance(features, list) and features:
+            return [str(col) for col in features]
+        wrapped = model.get("models")
+        if isinstance(wrapped, list) and wrapped:
+            return _expected_model_features(wrapped[0])
+        return None
+
+    feature_names_in = getattr(model, "feature_names_in_", None)
+    if feature_names_in is not None and len(feature_names_in):
+        return [str(col) for col in feature_names_in]
+
+    get_booster = getattr(model, "get_booster", None)
+    if callable(get_booster):
+        try:
+            booster = get_booster()
+            feature_names = getattr(booster, "feature_names", None)
+            if feature_names:
+                return [str(col) for col in feature_names]
+        except Exception:
+            return None
+
+    return None
+
+
+def _align_features_for_model(
+    df: pd.DataFrame, fallback_features: list[str], model
+) -> pd.DataFrame:
+    expected = _expected_model_features(model) or list(fallback_features)
+    if not expected:
+        raise ValueError("No model feature schema available for inference.")
+
+    missing = [col for col in expected if col not in df.columns]
+    if missing:
+        for col in missing:
+            df[col] = 0
+        LOGGER.info(
+            "Added %d missing inference features for model: %s",
+            len(missing),
+            ", ".join(missing[:8]) + ("..." if len(missing) > 8 else ""),
+        )
+
+    return df[expected].apply(pd.to_numeric, errors="coerce").fillna(0)
 
 
 def load_latest_model(models_dir: Path, prefix: str, return_path: bool = False):
@@ -58,7 +154,7 @@ def _predict_stat(
 ):
     # Load rolling CSV
     df_rolling = pd.read_csv(rolling_path)
-    df_rolling["game_date"] = pd.to_datetime(df_rolling["game_date"], dayfirst=True)
+    df_rolling["game_date"] = _parse_game_date_series(df_rolling["game_date"])
 
     # Load all historical games
     df_history = pd.read_sql(
@@ -75,7 +171,7 @@ def _predict_stat(
 
     # Get upcoming games from schedule
     df_schedule = pd.read_sql("SELECT * FROM game_schedule", engine)
-    df_schedule["game_date"] = pd.to_datetime(df_schedule["game_date"], dayfirst=True)
+    df_schedule["game_date"] = _parse_game_date_series(df_schedule["game_date"])
 
     if ZoneInfo:
         base_date = datetime.now(ZoneInfo("America/New_York")).date()
@@ -160,25 +256,28 @@ def _predict_stat(
 
     if "pred_minutes" in features:
         minutes_model = load_latest_model(models_dir, "xgb_minutes_model_")
-        df_next_features["pred_minutes"] = minutes_model.predict(
-            df_next_features[MINUTES_FEATURES]
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0)
+        minutes_X = _align_features_for_model(
+            df_next_features, MINUTES_FEATURES, minutes_model
         )
+        df_next_features["pred_minutes"] = minutes_model.predict(minutes_X)
 
-    df_next_features[features] = (
-        df_next_features[features].apply(pd.to_numeric, errors="coerce").fillna(0)
-    )
+    for col in features:
+        if col not in df_next_features.columns:
+            df_next_features[col] = 0
+    df_next_features[features] = df_next_features[features].apply(
+        pd.to_numeric, errors="coerce"
+    ).fillna(0)
 
     model, model_path = load_latest_model(models_dir, model_prefix, return_path=True)
 
     if isinstance(model, dict) and "models" in model:
         models = model["models"]
         preds_stack = np.column_stack(
-            [m.predict(df_next_features[features]) for m in models]
+            [m.predict(_align_features_for_model(df_next_features, features, m)) for m in models]
         )
         pred_p50 = np.percentile(preds_stack, 50, axis=1)
         df_next_features["pred_p50"] = pred_p50
+        df_next_features["confidence"] = CONFIDENCE_DEFAULT
 
         calibration = model.get("calibration")
         if calibration and calibration.get("abs_error_q") is not None:
@@ -217,7 +316,14 @@ def _predict_stat(
         df_next_features["pred_value"] = pred_p50
         df_next_features["model_version"] = model_path.name
     else:
-        df_next_features["pred_value"] = model.predict(df_next_features[features])
+        pred_values = model.predict(
+            _align_features_for_model(df_next_features, features, model)
+        )
+        df_next_features["pred_value"] = pred_values
+        df_next_features["pred_p50"] = pred_values
+        df_next_features["pred_p10"] = pred_values
+        df_next_features["pred_p90"] = pred_values
+        df_next_features["confidence"] = CONFIDENCE_DEFAULT
         df_next_features["model_version"] = model_path.name
 
     df_players = pd.read_sql(
