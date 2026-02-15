@@ -53,6 +53,19 @@ def _parse_minutes(value):
             return None
     return None
 
+
+def _normalize_text(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    text = str(value).strip()
+    return text or None
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -696,9 +709,13 @@ async def ingest_games_by_date(
         existing_players_result = await db.execute(
             select(PlayerGameStat).where(PlayerGameStat.game_id == str(game_id))
         )
-        existing_players = {
-            int(row.player_id): row for row in existing_players_result.scalars().all()
-        }
+        existing_players = {}
+        for row in existing_players_result.scalars().all():
+            try:
+                pid = int(row.player_id)
+            except (TypeError, ValueError):
+                continue
+            existing_players[pid] = row
 
         for _, row in players_df.iterrows():
             player_id = row.get("PLAYER_ID")
@@ -709,17 +726,21 @@ async def ingest_games_by_date(
             except (TypeError, ValueError):
                 continue
 
-            player_name = row.get("PLAYER_NAME")
-            team_abbr = row.get("TEAM_ABBREVIATION") or row.get("TEAM_ABBR")
+            player_name = _normalize_text(row.get("PLAYER_NAME"))
+            team_abbr = _normalize_text(
+                row.get("TEAM_ABBREVIATION") or row.get("TEAM_ABBR")
+            )
 
             player = await db.get(Player, player_id)
             if not player:
                 player = Player(
                     id=player_id,
-                    full_name=player_name,
+                    full_name=player_name or f"Player {player_id}",
                     team_abbreviation=team_abbr,
                 )
                 db.add(player)
+            elif player_name and not player.full_name:
+                player.full_name = player_name
             elif team_abbr and player.team_abbreviation != team_abbr:
                 player.team_abbreviation = team_abbr
 
@@ -788,7 +809,7 @@ async def ingest_games_by_date(
                 except (TypeError, ValueError):
                     continue
 
-                team_abbr = row.get("TEAM_ABBREVIATION")
+                team_abbr = _normalize_text(row.get("TEAM_ABBREVIATION"))
                 existing_team = existing_teams.get(team_id)
                 if existing_team:
                     has_updates = False
@@ -829,7 +850,13 @@ async def ingest_games_by_date(
                 )
                 teams_inserted += 1
 
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.exception(f"Failed committing game {game_id}: {e}")
+            games_skipped += 1
+            continue
         games_processed += 1
         await asyncio.sleep(0.05)
 

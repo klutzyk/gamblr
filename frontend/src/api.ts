@@ -325,54 +325,66 @@ export function getOddsEventProps(
 // Predictions endpoint (cached for 5 minutes since predictions may update)
 const PREDICTIONS_TTL = 5 * 60 * 1000;
 
+type PredictionResponsePayload = PredictionRow[] | { data?: PredictionRow[] };
+
+function normalizePredictionRows(payload: PredictionResponsePayload): PredictionRow[] {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  if (payload && Array.isArray(payload.data)) {
+    return payload.data;
+  }
+  return [];
+}
+
 export function getPointsPredictions(
   day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
 ): Promise<PredictionRow[]> {
-  return fetchWithCache<PredictionRow[]>(
+  return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/points",
     { day },
     PREDICTIONS_TTL
-  );
+  ).then(normalizePredictionRows);
 }
 
 export function getAssistsPredictions(
   day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
 ): Promise<PredictionRow[]> {
-  return fetchWithCache<PredictionRow[]>(
+  return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/assists",
     { day },
     PREDICTIONS_TTL
-  );
+  ).then(normalizePredictionRows);
 }
 
 export function getReboundsPredictions(
   day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
 ): Promise<PredictionRow[]> {
-  return fetchWithCache<PredictionRow[]>(
+  return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/rebounds",
     { day },
     PREDICTIONS_TTL
-  );
+  ).then(normalizePredictionRows);
 }
 
 export function getThreeptPredictions(
   day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
 ): Promise<PredictionRow[]> {
-  return fetchWithCache<PredictionRow[]>(
+  return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/threept",
     { day },
     PREDICTIONS_TTL
-  );
+  ).then(normalizePredictionRows);
 }
 
 export function getThreepaPredictions(
   day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
 ): Promise<PredictionRow[]> {
-  return fetchWithCache<PredictionRow[]>(
+  return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/threepa",
     { day },
     PREDICTIONS_TTL
-  );
+  ).then(normalizePredictionRows);
 }
 
 export function getFirstBasketPredictions(
