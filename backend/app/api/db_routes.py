@@ -409,12 +409,11 @@ async def store_last_n_games_all_players(
 
 async def _run_last_n_update(
     since_date,
+    until_date,
     season: str,
     db: AsyncSession,
     job_id: str | None = None,
 ):
-    # Use NBA league day boundary (US Eastern) to avoid AU/UTC date drift.
-    today = datetime.now(ZoneInfo("America/New_York")).date()
     schedule_result = await db.execute(
         select(
             GameSchedule.game_id,
@@ -423,7 +422,7 @@ async def _run_last_n_update(
             GameSchedule.away_team_abbr,
         ).where(
             GameSchedule.game_date >= since_date,
-            GameSchedule.game_date <= today,
+            GameSchedule.game_date <= until_date,
         )
     )
     game_rows = schedule_result.all()
@@ -442,6 +441,7 @@ async def _run_last_n_update(
             "players_failed": 0,
             "total_new_games_inserted": 0,
             "since": str(since_date),
+            "until": str(until_date),
             "season": season,
             "note": "No games found in game_schedule for the requested date range.",
         }
@@ -509,6 +509,7 @@ async def _run_last_n_update(
                     "players_failed": 0,
                     "total_new_games_inserted": 0,
                     "since": str(since_date),
+                    "until": str(until_date),
                     "season": season,
                     "note": "No players found for teams in schedule window.",
                 }
@@ -526,6 +527,7 @@ async def _run_last_n_update(
                 "players_failed": 0,
                 "total_new_games_inserted": 0,
                 "since": str(since_date),
+                "until": str(until_date),
                 "season": season,
                 "note": "Game rows exist but no teams/players could be resolved.",
             }
@@ -620,6 +622,7 @@ async def _run_last_n_update(
         "players_failed": failed,
         "total_new_games_inserted": total_new_games,
         "since": str(since_date),
+        "until": str(until_date),
         "season": season,
     }
     await _record_ingest_run(db, since_date, season, result, "completed")
@@ -904,6 +907,7 @@ async def ingest_games_by_date(
 @router.post("/last-n/update")
 async def update_last_n_games_since(
     since: str,
+    until: str | None = None,
     season: str = "2025-26",
     db: AsyncSession = Depends(get_db),
 ):
@@ -915,15 +919,35 @@ async def update_last_n_games_since(
         since_date = datetime.strptime(since, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
-    return await _run_last_n_update(since_date, season, db)
+    if until:
+        try:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
+    else:
+        # Use NBA league day boundary (US Eastern) to avoid AU/UTC date drift.
+        until_date = datetime.now(ZoneInfo("America/New_York")).date()
+
+    if since_date > until_date:
+        raise HTTPException(status_code=400, detail="since must be on or before until")
+
+    return await _run_last_n_update(since_date, until_date, season, db)
 
 
-async def _run_last_n_update_job(job_id: str, since: str, season: str):
+async def _run_last_n_update_job(
+    job_id: str, since: str, until: str | None, season: str
+):
     try:
         since_date = datetime.strptime(since, "%Y-%m-%d").date()
+        if until:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        else:
+            until_date = datetime.now(ZoneInfo("America/New_York")).date()
         update_jobs[job_id]["status"] = "running"
         async with AsyncSessionLocal() as db:
-            result = await _run_last_n_update(since_date, season, db, job_id=job_id)
+            result = await _run_last_n_update(
+                since_date, until_date, season, db, job_id=job_id
+            )
         update_jobs[job_id]["status"] = "completed"
         update_jobs[job_id]["result"] = result
         update_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
@@ -937,15 +961,26 @@ async def _run_last_n_update_job(job_id: str, since: str, season: str):
 @router.post("/last-n/update/start")
 async def start_update_last_n_games_since(
     since: str,
+    until: str | None = None,
     season: str = "2025-26",
 ):
     """
     Start last-n update in the background and return a job id for polling.
     """
     try:
-        datetime.strptime(since, "%Y-%m-%d").date()
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+    if until:
+        try:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
+    else:
+        until_date = datetime.now(ZoneInfo("America/New_York")).date()
+
+    if since_date > until_date:
+        raise HTTPException(status_code=400, detail="since must be on or before until")
 
     job_id = str(uuid.uuid4())
     update_jobs[job_id] = {
@@ -953,6 +988,7 @@ async def start_update_last_n_games_since(
         "type": "last_n_update",
         "status": "queued",
         "since": since,
+        "until": until or str(until_date),
         "season": season,
         "players_done": 0,
         "players_total": None,
@@ -960,7 +996,7 @@ async def start_update_last_n_games_since(
         "result": None,
         "error": None,
     }
-    asyncio.create_task(_run_last_n_update_job(job_id, since, season))
+    asyncio.create_task(_run_last_n_update_job(job_id, since, until, season))
     return {"status": "queued", "job_id": job_id}
 
 
