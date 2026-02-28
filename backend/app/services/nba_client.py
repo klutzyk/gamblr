@@ -110,14 +110,17 @@ class NBAClient:
                 if frame is None or frame.empty:
                     continue
                 cols = set(frame.columns)
-                if (
+                has_player_cols = (
                     "personId" in cols
                     or "playerId" in cols
                     or "PLAYER_ID" in cols
-                ):
+                )
+                has_team_cols = "teamId" in cols or "TEAM_ID" in cols
+                if has_player_cols:
                     if players.empty:
                         players = frame
-                if "teamId" in cols or "TEAM_ID" in cols:
+                # Prefer dedicated team summary frames, not player rows that also include teamId.
+                if has_team_cols and not has_player_cols:
                     if teams.empty:
                         teams = frame
             if players.empty:

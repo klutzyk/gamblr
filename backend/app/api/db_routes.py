@@ -72,9 +72,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 odds_client = TheOddsClient()
 nba_client = NBAClient()
+# Dedicated client for per-game boxscore ingest.
+nba_boxscore_client = NBAClient(timeout=60)
 
 # Throttle NBA API calls conservatively to reduce upstream timeouts.
 throttler = Throttler(rate_limit=2, period=1)
+# Boxscore endpoint is more fragile; keep this much slower.
+boxscore_throttler = Throttler(rate_limit=1, period=30)
 update_jobs: dict[str, dict] = {}
 
 GAME_INGEST_MAX_ATTEMPTS = 4
@@ -710,8 +714,10 @@ async def ingest_games_by_date(
 
         for attempt in range(GAME_INGEST_MAX_ATTEMPTS):
             try:
-                async with throttler:
-                    players_df, teams_df = nba_client.fetch_game_boxscore(str(game_id))
+                async with boxscore_throttler:
+                    players_df, teams_df = nba_boxscore_client.fetch_game_boxscore(
+                        str(game_id)
+                    )
                 break
             except Exception as e:
                 if attempt + 1 >= GAME_INGEST_MAX_ATTEMPTS:
@@ -820,6 +826,11 @@ async def ingest_games_by_date(
             players_inserted += 1
 
         if include_team_stats and teams_df is not None and not teams_df.empty:
+            teams_df = teams_df.copy()
+            if "TEAM_ID" in teams_df.columns:
+                teams_df = teams_df.dropna(subset=["TEAM_ID"]).drop_duplicates(
+                    subset=["TEAM_ID"], keep="first"
+                )
             existing_teams_result = await db.execute(
                 select(TeamGameStat).where(TeamGameStat.game_id == str(game_id))
             )
