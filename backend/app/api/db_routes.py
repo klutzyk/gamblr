@@ -23,6 +23,7 @@ import logging
 import asyncio
 import httpx
 import uuid
+import random
 from asyncio_throttle import Throttler
 import pandas as pd
 from app.core.constants import MAX_GAMES_PER_PLAYER
@@ -72,9 +73,24 @@ router = APIRouter()
 odds_client = TheOddsClient()
 nba_client = NBAClient()
 
-#  throttler to prevent hammering NBA API. rate limiting to 5 requests/sec
-throttler = Throttler(rate_limit=5, period=1)
+# Throttle NBA API calls conservatively to reduce upstream timeouts.
+throttler = Throttler(rate_limit=2, period=1)
 update_jobs: dict[str, dict] = {}
+
+GAME_INGEST_MAX_ATTEMPTS = 4
+GAME_INGEST_BACKOFF_BASE_SECONDS = 1.0
+GAME_INGEST_BACKOFF_CAP_SECONDS = 8.0
+GAME_INGEST_BACKOFF_JITTER_SECONDS = 0.4
+
+
+def _retry_backoff_seconds(
+    attempt_index: int,
+    base_seconds: float = GAME_INGEST_BACKOFF_BASE_SECONDS,
+    cap_seconds: float = GAME_INGEST_BACKOFF_CAP_SECONDS,
+    jitter_seconds: float = GAME_INGEST_BACKOFF_JITTER_SECONDS,
+) -> float:
+    delay = min(cap_seconds, base_seconds * (2 ** attempt_index))
+    return delay + random.uniform(0.0, jitter_seconds)
 
 
 async def _record_ingest_run(
@@ -689,14 +705,23 @@ async def ingest_games_by_date(
             games_skipped += 1
             continue
 
-        for attempt in range(3):
+        for attempt in range(GAME_INGEST_MAX_ATTEMPTS):
             try:
                 async with throttler:
                     players_df, teams_df = nba_client.fetch_game_boxscore(str(game_id))
                 break
             except Exception as e:
-                logger.warning(f"Attempt {attempt + 1} failed for game {game_id}: {e}")
-                await asyncio.sleep(0.5)
+                if attempt + 1 >= GAME_INGEST_MAX_ATTEMPTS:
+                    logger.warning(
+                        f"Attempt {attempt + 1}/{GAME_INGEST_MAX_ATTEMPTS} failed for game {game_id}: {e}"
+                    )
+                    continue
+                wait_seconds = _retry_backoff_seconds(attempt)
+                logger.warning(
+                    f"Attempt {attempt + 1}/{GAME_INGEST_MAX_ATTEMPTS} failed for game {game_id}: {e}. "
+                    f"Retrying in {wait_seconds:.2f}s"
+                )
+                await asyncio.sleep(wait_seconds)
         else:
             logger.error(f"All retries failed for game {game_id}")
             games_skipped += 1

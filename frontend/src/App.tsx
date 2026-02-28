@@ -67,6 +67,12 @@ function formatNumber(value: unknown, digits = 1): string {
   return value.toFixed(digits);
 }
 
+function getPlayerStatsSearchUrl(playerName: string): string {
+  const url = new URL("https://www.google.com/search");
+  url.searchParams.set("q", `${playerName} stats`);
+  return url.toString();
+}
+
 function normalizeOddsEventProps(payload: OddsEventPropsResponse["data"]): NormalizedPropRow[] {
   const rows: NormalizedPropRow[] = [];
   for (const book of payload.bookmakers ?? []) {
@@ -119,7 +125,16 @@ function PlayerTable({ rows }: { rows: PlayerRow[] }) {
               <td>
                 <div className="d-flex px-2 py-1">
                   <div className="d-flex flex-column justify-content-center">
-                    <h6 className="mb-0 text-sm">{row.PLAYER_NAME}</h6>
+                    <h6 className="mb-0 text-sm">
+                      <a
+                        href={getPlayerStatsSearchUrl(row.PLAYER_NAME)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="player-name-link"
+                      >
+                        {row.PLAYER_NAME}
+                      </a>
+                    </h6>
                   </div>
                 </div>
               </td>
@@ -313,7 +328,16 @@ function PredictionsGrid({
                   </span>
                 </div>
                 <div>
-                  <h5 className="mb-1">{pred.full_name}</h5>
+                  <h5 className="mb-1">
+                    <a
+                      href={getPlayerStatsSearchUrl(pred.full_name)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="player-name-link"
+                    >
+                      {pred.full_name}
+                    </a>
+                  </h5>
                   <span className="badge badge-sm bg-gradient-primary mb-2">
                     {pred.team_abbreviation}
                   </span>
@@ -427,7 +451,16 @@ function FirstBasketGrid({ rows }: { rows: FirstBasketPredictionRow[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={`${row.game_id ?? row.matchup}-${row.player_id}`}>
-              <td className="text-sm">{row.full_name}</td>
+              <td className="text-sm">
+                <a
+                  href={getPlayerStatsSearchUrl(row.full_name)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="player-name-link"
+                >
+                  {row.full_name}
+                </a>
+              </td>
               <td className="text-sm">{row.team_abbreviation}</td>
               <td className="text-sm">{row.matchup}</td>
               <td className="text-sm">{row.tipoff_au ?? row.tipoff_et ?? "-"}</td>
@@ -1103,7 +1136,16 @@ function App() {
                             {rows.map((row, index) => (
                               <tr key={`${row.eventId}-${row.player}-${row.marketKey}-${row.outcomeType}-${row.line}-${index}`}>
                                 <td className="text-sm">{row.matchup}</td>
-                                <td className="text-sm">{row.player}</td>
+                                <td className="text-sm">
+                                  <a
+                                    href={getPlayerStatsSearchUrl(row.player)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="player-name-link"
+                                  >
+                                    {row.player}
+                                  </a>
+                                </td>
                                 <td className="text-sm">{row.marketKey}</td>
                                 <td className="text-sm">{row.outcomeType}</td>
                                 <td className="text-sm">
@@ -1386,7 +1428,14 @@ function App() {
                                 <li
                                   key={`${leg.event_id}-${leg.player_name}-${leg.market}-${leg.side}-${leg.line}`}
                                 >
-                                  {leg.player_name}
+                                  <a
+                                    href={getPlayerStatsSearchUrl(leg.player_name)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="player-name-link"
+                                  >
+                                    {leg.player_name}
+                                  </a>
                                   {leg.prediction.team_abbreviation
                                     ? ` (${leg.prediction.team_abbreviation})`
                                     : ""}{" "}
@@ -1419,7 +1468,14 @@ function App() {
                               key={`${leg.event_id}-${leg.player_name}-${leg.market}-${leg.side}-${leg.line}`}
                             >
                               <td className="text-sm">
-                                {leg.player_name}
+                                <a
+                                  href={getPlayerStatsSearchUrl(leg.player_name)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="player-name-link"
+                                >
+                                  {leg.player_name}
+                                </a>
                                 {leg.prediction.team_abbreviation
                                   ? ` (${leg.prediction.team_abbreviation})`
                                   : ""}
@@ -1821,7 +1877,15 @@ function App() {
                         key={`best-${row.game_id ?? row.matchup}-${row.player_id}`}
                         className="badge bg-gradient-success"
                       >
-                        {row.full_name} ({row.team_abbreviation}) -{" "}
+                        <a
+                          href={getPlayerStatsSearchUrl(row.full_name)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="player-name-link"
+                        >
+                          {row.full_name}
+                        </a>{" "}
+                        ({row.team_abbreviation}) -{" "}
                         {(row.first_basket_prob * 100).toFixed(1)}%
                       </span>
                     ))}

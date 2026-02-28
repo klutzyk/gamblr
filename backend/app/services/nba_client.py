@@ -100,10 +100,6 @@ class NBAClient:
     @cached(ttl_seconds=60 * 10)
     def fetch_game_boxscore(self, game_id: str):
         safe_id = str(game_id).zfill(10)
-        players_df = pd.DataFrame()
-        teams_df = pd.DataFrame()
-        v3_error = None
-        v2_error = None
 
         def _select_frames(frames):
             if not frames:
@@ -136,39 +132,20 @@ class NBAClient:
                         break
             return players, teams
 
-        if boxscoretraditionalv3 is not None:
-            try:
-                box = boxscoretraditionalv3.BoxScoreTraditionalV3(
-                    game_id=safe_id,
-                    start_period=1,
-                    end_period=10,
-                    start_range=0,
-                    end_range=0,
-                    range_type=0,
-                    timeout=self.timeout,
-                )
-                frames = box.get_data_frames()
-                players_df, teams_df = _select_frames(frames)
-            except Exception as e:
-                v3_error = e
-                players_df = pd.DataFrame()
-                teams_df = pd.DataFrame()
+        if boxscoretraditionalv3 is None:
+            raise RuntimeError("BoxScoreTraditionalV3 is not available in installed nba_api")
 
-        if players_df is None or players_df.empty:
-            try:
-                box = boxscoretraditionalv2.BoxScoreTraditionalV2(
-                    game_id=safe_id,
-                    timeout=self.timeout,
-                )
-                frames = box.get_data_frames()
-                players_df, teams_df = _select_frames(frames)
-            except Exception as e:
-                v2_error = e
-                players_df = pd.DataFrame()
-                teams_df = pd.DataFrame()
-
-        if v2_error is not None:
-            raise v2_error
+        box = boxscoretraditionalv3.BoxScoreTraditionalV3(
+            game_id=safe_id,
+            start_period=1,
+            end_period=10,
+            start_range=0,
+            end_range=0,
+            range_type=0,
+            timeout=self.timeout,
+        )
+        frames = box.get_data_frames()
+        players_df, teams_df = _select_frames(frames)
 
         if players_df is not None and not players_df.empty and "personId" in players_df.columns:
             players_df = players_df.copy()

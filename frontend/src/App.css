@@ -709,6 +709,16 @@
   color: var(--brand-dark);
 }
 
+.player-name-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.player-name-link:hover {
+  color: #1a73e8;
+}
+
 @media (max-width: 991px) {
   .hero-header {
     padding-bottom: 3rem;
