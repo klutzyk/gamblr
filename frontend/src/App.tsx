@@ -67,6 +67,12 @@ function formatNumber(value: unknown, digits = 1): string {
   return value.toFixed(digits);
 }
 
+function getPlayerStatsSearchUrl(playerName: string): string {
+  const url = new URL("https://www.google.com/search");
+  url.searchParams.set("q", `${playerName} stats`);
+  return url.toString();
+}
+
 function normalizeOddsEventProps(payload: OddsEventPropsResponse["data"]): NormalizedPropRow[] {
   const rows: NormalizedPropRow[] = [];
   for (const book of payload.bookmakers ?? []) {
@@ -119,7 +125,16 @@ function PlayerTable({ rows }: { rows: PlayerRow[] }) {
               <td>
                 <div className="d-flex px-2 py-1">
                   <div className="d-flex flex-column justify-content-center">
-                    <h6 className="mb-0 text-sm">{row.PLAYER_NAME}</h6>
+                    <h6 className="mb-0 text-sm">
+                      <a
+                        href={getPlayerStatsSearchUrl(row.PLAYER_NAME)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="player-name-link"
+                      >
+                        {row.PLAYER_NAME}
+                      </a>
+                    </h6>
                   </div>
                 </div>
               </td>
@@ -313,7 +328,16 @@ function PredictionsGrid({
                   </span>
                 </div>
                 <div>
-                  <h5 className="mb-1">{pred.full_name}</h5>
+                  <h5 className="mb-1">
+                    <a
+                      href={getPlayerStatsSearchUrl(pred.full_name)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="player-name-link"
+                    >
+                      {pred.full_name}
+                    </a>
+                  </h5>
                   <span className="badge badge-sm bg-gradient-primary mb-2">
                     {pred.team_abbreviation}
                   </span>
@@ -427,7 +451,16 @@ function FirstBasketGrid({ rows }: { rows: FirstBasketPredictionRow[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={`${row.game_id ?? row.matchup}-${row.player_id}`}>
-              <td className="text-sm">{row.full_name}</td>
+              <td className="text-sm">
+                <a
+                  href={getPlayerStatsSearchUrl(row.full_name)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="player-name-link"
+                >
+                  {row.full_name}
+                </a>
+              </td>
               <td className="text-sm">{row.team_abbreviation}</td>
               <td className="text-sm">{row.matchup}</td>
               <td className="text-sm">{row.tipoff_au ?? row.tipoff_et ?? "-"}</td>
@@ -1103,7 +1136,16 @@ function App() {
                             {rows.map((row, index) => (
                               <tr key={`${row.eventId}-${row.player}-${row.marketKey}-${row.outcomeType}-${row.line}-${index}`}>
                                 <td className="text-sm">{row.matchup}</td>
-                                <td className="text-sm">{row.player}</td>
+                                <td className="text-sm">
+                                  <a
+                                    href={getPlayerStatsSearchUrl(row.player)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="player-name-link"
+                                  >
+                                    {row.player}
+                                  </a>
+                                </td>
                                 <td className="text-sm">{row.marketKey}</td>
                                 <td className="text-sm">{row.outcomeType}</td>
                                 <td className="text-sm">
@@ -1386,7 +1428,14 @@ function App() {
                                 <li
                                   key={`${leg.event_id}-${leg.player_name}-${leg.market}-${leg.side}-${leg.line}`}
                                 >
-                                  {leg.player_name}
+                                  <a
+                                    href={getPlayerStatsSearchUrl(leg.player_name)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="player-name-link"
+                                  >
+                                    {leg.player_name}
+                                  </a>
                                   {leg.prediction.team_abbreviation
                                     ? ` (${leg.prediction.team_abbreviation})`
                                     : ""}{" "}
@@ -1419,7 +1468,14 @@ function App() {
                               key={`${leg.event_id}-${leg.player_name}-${leg.market}-${leg.side}-${leg.line}`}
                             >
                               <td className="text-sm">
-                                {leg.player_name}
+                                <a
+                                  href={getPlayerStatsSearchUrl(leg.player_name)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="player-name-link"
+                                >
+                                  {leg.player_name}
+                                </a>
                                 {leg.prediction.team_abbreviation
                                   ? ` (${leg.prediction.team_abbreviation})`
                                   : ""}
@@ -1821,7 +1877,15 @@ function App() {
                         key={`best-${row.game_id ?? row.matchup}-${row.player_id}`}
                         className="badge bg-gradient-success"
                       >
-                        {row.full_name} ({row.team_abbreviation}) -{" "}
+                        <a
+                          href={getPlayerStatsSearchUrl(row.full_name)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="player-name-link"
+                        >
+                          {row.full_name}
+                        </a>{" "}
+                        ({row.team_abbreviation}) -{" "}
                         {(row.first_basket_prob * 100).toFixed(1)}%
                       </span>
                     ))}
@@ -1854,98 +1918,23 @@ function App() {
         <div className="hero-glow"></div>
         <div className="container position-relative">
           <nav className="navbar navbar-expand-lg navbar-dark py-4 px-0">
-            <div className="d-flex align-items-center gap-2">
-              <img src={logo} alt="Gamblr logo" className="brand-logo me-2" />
-              <div>
-                <h6 className="mb-0 text-white">Gamblr</h6>
-                <span className="text-xs text-white opacity-8">NBA Analytics Hub</span>
-              </div>
-            </div>
-            <div className="ms-auto d-flex align-items-center gap-2">
-              <span className="badge badge-sm bg-gradient-success">Live</span>
-              <button
-                className="btn btn-sm bg-white text-dark mb-0"
-                onClick={() => jumpToTab("predictions", handleLoadPredictions)}
-              >
-                <i className="material-symbols-rounded me-2">auto_graph</i>
-                Run Models
-              </button>
+            <div className="brand-hero text-center mx-auto">
+              <img src={logo} alt="Gamblr logo" className="brand-logo brand-logo-xl mb-2" />
+              <h2 className="mb-1 text-white brand-title">Gamblr</h2>
+              <span className="text-sm text-white opacity-8">NBA Analytics Hub</span>
             </div>
           </nav>
 
-          <div className="row align-items-center">
-            <div className="col-lg-7">
+          <div className="row">
+            <div className="col-lg-10 col-xl-8">
               <div className="hero-copy">
                 <h1 className="display-4 text-white mb-3">
-                  Prediction command center for NBA props.
+                  Investing, not gambling.
                 </h1>
                 <p className="lead text-white opacity-8 mb-4">
-                  Focused points, assists, and rebounds forecasts with matchup-ready context.
+                  Model-backed reads for points, assists, rebounds and threes. Scan fast, pick smart,
+                  and move to your card with confidence.
                 </p>
-                <div className="d-flex flex-wrap gap-2">
-                  <button
-                    className="btn bg-gradient-primary mb-0"
-                    onClick={() => jumpToTab("predictions", handleLoadPredictions)}
-                  >
-                    <i className="material-symbols-rounded me-2">emoji_events</i>
-                    View Predictions
-                  </button>
-                  <button
-                    className="btn btn-outline-white mb-0"
-                    onClick={() => jumpToTab("props")}
-                  >
-                    <i className="material-symbols-rounded me-2">casino</i>
-                    View Props
-                  </button>
-                  <button
-                    className="btn btn-outline-white mb-0"
-                    onClick={() => jumpToTab("best_bets")}
-                  >
-                    <i className="material-symbols-rounded me-2">paid</i>
-                    Best Bets
-                  </button>
-                </div>
-                <div className="hero-tags mt-4">
-                  <span className="badge badge-sm bg-white text-dark">Realtime APIs</span>
-                  <span className="badge badge-sm bg-white text-dark">Sharp UI</span>
-                  <span className="badge badge-sm bg-white text-dark">Pro insights</span>
-                </div>
-              </div>
-            </div>
-            <div className="col-lg-5 mt-4 mt-lg-0">
-              <div className="hero-cards">
-                <div className="card glass-card mb-3">
-                  <div className="card-body">
-                    <div className="d-flex align-items-center justify-content-between mb-3">
-                      <div>
-                        <p className="text-sm text-white opacity-8 mb-1">Confidence Index</p>
-                        <h3 className="text-white mb-0">89.4</h3>
-                      </div>
-                      <span className="icon-shape icon-lg bg-gradient-primary shadow-primary text-white">
-                        <i className="material-symbols-rounded">psychology</i>
-                      </span>
-                    </div>
-                    <p className="text-sm text-white opacity-7 mb-0">
-                      Model outputs tuned to recent form and matchup context.
-                    </p>
-                  </div>
-                </div>
-                <div className="card glass-card">
-                  <div className="card-body">
-                    <div className="d-flex align-items-center justify-content-between mb-3">
-                      <div>
-                        <p className="text-sm text-white opacity-8 mb-1">Markets Tracked</p>
-                        <h3 className="text-white mb-0">1,240+</h3>
-                      </div>
-                      <span className="icon-shape icon-lg bg-gradient-info shadow-info text-white">
-                        <i className="material-symbols-rounded">track_changes</i>
-                      </span>
-                    </div>
-                    <p className="text-sm text-white opacity-7 mb-0">
-                      Player props and game totals refreshed on demand.
-                    </p>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
@@ -1964,25 +1953,54 @@ function App() {
                       Filtered views of league leaders and market context.
                     </p>
                   </div>
-                  <div className="d-flex flex-wrap gap-2">
-                    <button
-                      className="btn btn-sm bg-gradient-primary mb-0"
-                      onClick={() => jumpToTab("recent", handleLoadRecent)}
-                    >
-                      <i className="material-symbols-rounded me-2">trending_up</i>
-                      Recent Form
-                    </button>
-                    <button
-                      className="btn btn-sm btn-outline-dark mb-0"
-                      onClick={() => jumpToTab("guards", handleLoadGuards)}
-                    >
-                      <i className="material-symbols-rounded me-2">person</i>
-                      Guard Lens
-                    </button>
-                  </div>
+                  <div className="d-flex flex-wrap gap-2"></div>
                 </div>
                 <div className="nav-wrapper position-relative mt-4">
-                  <ul className="nav nav-pills nav-fill flex-row p-1 tab-pills" role="tablist">
+                  <ul className="nav nav-pills flex-wrap p-1 tab-pills" role="tablist">
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "predictions" ? "active" : ""}`}
+                        onClick={() => setActiveTab("predictions")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">psychology</i>
+                        Predictions
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "best_bets" ? "active" : ""}`}
+                        onClick={() => setActiveTab("best_bets")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">paid</i>
+                        Best Bets
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "first_basket" ? "active" : ""}`}
+                        onClick={() => setActiveTab("first_basket")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">sports</i>
+                        First Basket
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "props" ? "active" : ""}`}
+                        onClick={() => setActiveTab("props")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">casino</i>
+                        Player Props
+                      </a>
+                    </li>
                     <li className="nav-item">
                       <a
                         className={`nav-link mb-0 px-0 py-1 ${activeTab === "top_scorers" ? "active" : ""}`}
@@ -2014,72 +2032,6 @@ function App() {
                       >
                         <i className="material-symbols-rounded me-2">sports_basketball</i>
                         Rebounds
-                      </a>
-                    </li>
-                    <li className="nav-item">
-                      <a
-                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "guards" ? "active" : ""}`}
-                        onClick={() => setActiveTab("guards")}
-                        role="tab"
-                        style={{ cursor: "pointer" }}
-                      >
-                        <i className="material-symbols-rounded me-2">person</i>
-                        Guards
-                      </a>
-                    </li>
-                    <li className="nav-item">
-                      <a
-                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "recent" ? "active" : ""}`}
-                        onClick={() => setActiveTab("recent")}
-                        role="tab"
-                        style={{ cursor: "pointer" }}
-                      >
-                        <i className="material-symbols-rounded me-2">trending_up</i>
-                        Recent
-                      </a>
-                    </li>
-                    <li className="nav-item">
-                      <a
-                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "props" ? "active" : ""}`}
-                        onClick={() => setActiveTab("props")}
-                        role="tab"
-                        style={{ cursor: "pointer" }}
-                      >
-                        <i className="material-symbols-rounded me-2">casino</i>
-                        Player Props
-                      </a>
-                    </li>
-                    <li className="nav-item">
-                      <a
-                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "best_bets" ? "active" : ""}`}
-                        onClick={() => setActiveTab("best_bets")}
-                        role="tab"
-                        style={{ cursor: "pointer" }}
-                      >
-                        <i className="material-symbols-rounded me-2">paid</i>
-                        Best Bets
-                      </a>
-                    </li>
-                    <li className="nav-item">
-                      <a
-                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "predictions" ? "active" : ""}`}
-                        onClick={() => setActiveTab("predictions")}
-                        role="tab"
-                        style={{ cursor: "pointer" }}
-                      >
-                        <i className="material-symbols-rounded me-2">psychology</i>
-                        Predictions
-                      </a>
-                    </li>
-                    <li className="nav-item">
-                      <a
-                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "first_basket" ? "active" : ""}`}
-                        onClick={() => setActiveTab("first_basket")}
-                        role="tab"
-                        style={{ cursor: "pointer" }}
-                      >
-                        <i className="material-symbols-rounded me-2">sports</i>
-                        First Basket
                       </a>
                     </li>
                   </ul>
@@ -2127,37 +2079,17 @@ function App() {
                   <h5 className="mb-0">Model Notes</h5>
                 </div>
                 <div className="card-body">
+                  <p className="text-sm text-secondary mb-2">
+                    Confidence is direction, not certainty. Prioritize edges where model confidence,
+                    line value, and role stability align.
+                  </p>
                   <p className="text-sm text-secondary mb-3">
-                    Blend matchup pace, recent usage rate, and on/off defensive data.
+                    Recheck projections after lineup/injury updates and before lock. Volatile minutes
+                    are the fastest way to break a good read.
                   </p>
                   <div className="d-flex align-items-center justify-content-between">
-                    <span className="text-sm text-secondary">Next refresh</span>
+                    <span className="text-sm text-secondary">Refresh cadence</span>
                     <span className="badge badge-sm bg-gradient-info">Every 5 min</span>
-                  </div>
-                </div>
-              </div>
-              <div className="card shadow-lg border-radius-xl">
-                <div className="card-header pb-0">
-                  <h5 className="mb-0">Focus Checklist</h5>
-                </div>
-                <div className="card-body">
-                  <div className="d-flex align-items-start mb-3">
-                    <span className="icon-shape icon-xs bg-gradient-success me-2">
-                      <i className="material-symbols-rounded">check</i>
-                    </span>
-                    <p className="text-sm text-secondary mb-0">Compare pace vs. opponent.</p>
-                  </div>
-                  <div className="d-flex align-items-start mb-3">
-                    <span className="icon-shape icon-xs bg-gradient-warning me-2">
-                      <i className="material-symbols-rounded">schedule</i>
-                    </span>
-                    <p className="text-sm text-secondary mb-0">Monitor minutes volatility.</p>
-                  </div>
-                  <div className="d-flex align-items-start">
-                    <span className="icon-shape icon-xs bg-gradient-info me-2">
-                      <i className="material-symbols-rounded">insights</i>
-                    </span>
-                    <p className="text-sm text-secondary mb-0">Track books with best lines.</p>
                   </div>
                 </div>
               </div>

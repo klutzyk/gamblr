@@ -23,6 +23,7 @@ import logging
 import asyncio
 import httpx
 import uuid
+import random
 from asyncio_throttle import Throttler
 import pandas as pd
 from app.core.constants import MAX_GAMES_PER_PLAYER
@@ -53,15 +54,47 @@ def _parse_minutes(value):
             return None
     return None
 
+
+def _normalize_text(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    text = str(value).strip()
+    return text or None
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 odds_client = TheOddsClient()
 nba_client = NBAClient()
+# Dedicated client for per-game boxscore ingest.
+nba_boxscore_client = NBAClient(timeout=60)
 
-#  throttler to prevent hammering NBA API. rate limiting to 5 requests/sec
-throttler = Throttler(rate_limit=5, period=1)
+# Throttle NBA API calls conservatively to reduce upstream timeouts.
+throttler = Throttler(rate_limit=2, period=1)
+# Boxscore endpoint is more fragile; keep this much slower.
+boxscore_throttler = Throttler(rate_limit=1, period=30)
 update_jobs: dict[str, dict] = {}
+
+GAME_INGEST_MAX_ATTEMPTS = 4
+GAME_INGEST_BACKOFF_BASE_SECONDS = 1.0
+GAME_INGEST_BACKOFF_CAP_SECONDS = 8.0
+GAME_INGEST_BACKOFF_JITTER_SECONDS = 0.4
+
+
+def _retry_backoff_seconds(
+    attempt_index: int,
+    base_seconds: float = GAME_INGEST_BACKOFF_BASE_SECONDS,
+    cap_seconds: float = GAME_INGEST_BACKOFF_CAP_SECONDS,
+    jitter_seconds: float = GAME_INGEST_BACKOFF_JITTER_SECONDS,
+) -> float:
+    delay = min(cap_seconds, base_seconds * (2 ** attempt_index))
+    return delay + random.uniform(0.0, jitter_seconds)
 
 
 async def _record_ingest_run(
@@ -380,12 +413,11 @@ async def store_last_n_games_all_players(
 
 async def _run_last_n_update(
     since_date,
+    until_date,
     season: str,
     db: AsyncSession,
     job_id: str | None = None,
 ):
-    # Use NBA league day boundary (US Eastern) to avoid AU/UTC date drift.
-    today = datetime.now(ZoneInfo("America/New_York")).date()
     schedule_result = await db.execute(
         select(
             GameSchedule.game_id,
@@ -394,7 +426,7 @@ async def _run_last_n_update(
             GameSchedule.away_team_abbr,
         ).where(
             GameSchedule.game_date >= since_date,
-            GameSchedule.game_date <= today,
+            GameSchedule.game_date <= until_date,
         )
     )
     game_rows = schedule_result.all()
@@ -413,6 +445,7 @@ async def _run_last_n_update(
             "players_failed": 0,
             "total_new_games_inserted": 0,
             "since": str(since_date),
+            "until": str(until_date),
             "season": season,
             "note": "No games found in game_schedule for the requested date range.",
         }
@@ -480,6 +513,7 @@ async def _run_last_n_update(
                     "players_failed": 0,
                     "total_new_games_inserted": 0,
                     "since": str(since_date),
+                    "until": str(until_date),
                     "season": season,
                     "note": "No players found for teams in schedule window.",
                 }
@@ -497,6 +531,7 @@ async def _run_last_n_update(
                 "players_failed": 0,
                 "total_new_games_inserted": 0,
                 "since": str(since_date),
+                "until": str(until_date),
                 "season": season,
                 "note": "Game rows exist but no teams/players could be resolved.",
             }
@@ -591,6 +626,7 @@ async def _run_last_n_update(
         "players_failed": failed,
         "total_new_games_inserted": total_new_games,
         "since": str(since_date),
+        "until": str(until_date),
         "season": season,
     }
     await _record_ingest_run(db, since_date, season, result, "completed")
@@ -676,14 +712,25 @@ async def ingest_games_by_date(
             games_skipped += 1
             continue
 
-        for attempt in range(3):
+        for attempt in range(GAME_INGEST_MAX_ATTEMPTS):
             try:
-                async with throttler:
-                    players_df, teams_df = nba_client.fetch_game_boxscore(str(game_id))
+                async with boxscore_throttler:
+                    players_df, teams_df = nba_boxscore_client.fetch_game_boxscore(
+                        str(game_id)
+                    )
                 break
             except Exception as e:
-                logger.warning(f"Attempt {attempt + 1} failed for game {game_id}: {e}")
-                await asyncio.sleep(0.5)
+                if attempt + 1 >= GAME_INGEST_MAX_ATTEMPTS:
+                    logger.warning(
+                        f"Attempt {attempt + 1}/{GAME_INGEST_MAX_ATTEMPTS} failed for game {game_id}: {e}"
+                    )
+                    continue
+                wait_seconds = _retry_backoff_seconds(attempt)
+                logger.warning(
+                    f"Attempt {attempt + 1}/{GAME_INGEST_MAX_ATTEMPTS} failed for game {game_id}: {e}. "
+                    f"Retrying in {wait_seconds:.2f}s"
+                )
+                await asyncio.sleep(wait_seconds)
         else:
             logger.error(f"All retries failed for game {game_id}")
             games_skipped += 1
@@ -696,9 +743,13 @@ async def ingest_games_by_date(
         existing_players_result = await db.execute(
             select(PlayerGameStat).where(PlayerGameStat.game_id == str(game_id))
         )
-        existing_players = {
-            int(row.player_id): row for row in existing_players_result.scalars().all()
-        }
+        existing_players = {}
+        for row in existing_players_result.scalars().all():
+            try:
+                pid = int(row.player_id)
+            except (TypeError, ValueError):
+                continue
+            existing_players[pid] = row
 
         for _, row in players_df.iterrows():
             player_id = row.get("PLAYER_ID")
@@ -709,17 +760,21 @@ async def ingest_games_by_date(
             except (TypeError, ValueError):
                 continue
 
-            player_name = row.get("PLAYER_NAME")
-            team_abbr = row.get("TEAM_ABBREVIATION") or row.get("TEAM_ABBR")
+            player_name = _normalize_text(row.get("PLAYER_NAME"))
+            team_abbr = _normalize_text(
+                row.get("TEAM_ABBREVIATION") or row.get("TEAM_ABBR")
+            )
 
             player = await db.get(Player, player_id)
             if not player:
                 player = Player(
                     id=player_id,
-                    full_name=player_name,
+                    full_name=player_name or f"Player {player_id}",
                     team_abbreviation=team_abbr,
                 )
                 db.add(player)
+            elif player_name and not player.full_name:
+                player.full_name = player_name
             elif team_abbr and player.team_abbreviation != team_abbr:
                 player.team_abbreviation = team_abbr
 
@@ -771,6 +826,11 @@ async def ingest_games_by_date(
             players_inserted += 1
 
         if include_team_stats and teams_df is not None and not teams_df.empty:
+            teams_df = teams_df.copy()
+            if "TEAM_ID" in teams_df.columns:
+                teams_df = teams_df.dropna(subset=["TEAM_ID"]).drop_duplicates(
+                    subset=["TEAM_ID"], keep="first"
+                )
             existing_teams_result = await db.execute(
                 select(TeamGameStat).where(TeamGameStat.game_id == str(game_id))
             )
@@ -788,7 +848,7 @@ async def ingest_games_by_date(
                 except (TypeError, ValueError):
                     continue
 
-                team_abbr = row.get("TEAM_ABBREVIATION")
+                team_abbr = _normalize_text(row.get("TEAM_ABBREVIATION"))
                 existing_team = existing_teams.get(team_id)
                 if existing_team:
                     has_updates = False
@@ -829,7 +889,13 @@ async def ingest_games_by_date(
                 )
                 teams_inserted += 1
 
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.exception(f"Failed committing game {game_id}: {e}")
+            games_skipped += 1
+            continue
         games_processed += 1
         await asyncio.sleep(0.05)
 
@@ -852,6 +918,7 @@ async def ingest_games_by_date(
 @router.post("/last-n/update")
 async def update_last_n_games_since(
     since: str,
+    until: str | None = None,
     season: str = "2025-26",
     db: AsyncSession = Depends(get_db),
 ):
@@ -863,15 +930,35 @@ async def update_last_n_games_since(
         since_date = datetime.strptime(since, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
-    return await _run_last_n_update(since_date, season, db)
+    if until:
+        try:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
+    else:
+        # Use NBA league day boundary (US Eastern) to avoid AU/UTC date drift.
+        until_date = datetime.now(ZoneInfo("America/New_York")).date()
+
+    if since_date > until_date:
+        raise HTTPException(status_code=400, detail="since must be on or before until")
+
+    return await _run_last_n_update(since_date, until_date, season, db)
 
 
-async def _run_last_n_update_job(job_id: str, since: str, season: str):
+async def _run_last_n_update_job(
+    job_id: str, since: str, until: str | None, season: str
+):
     try:
         since_date = datetime.strptime(since, "%Y-%m-%d").date()
+        if until:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        else:
+            until_date = datetime.now(ZoneInfo("America/New_York")).date()
         update_jobs[job_id]["status"] = "running"
         async with AsyncSessionLocal() as db:
-            result = await _run_last_n_update(since_date, season, db, job_id=job_id)
+            result = await _run_last_n_update(
+                since_date, until_date, season, db, job_id=job_id
+            )
         update_jobs[job_id]["status"] = "completed"
         update_jobs[job_id]["result"] = result
         update_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
@@ -885,15 +972,26 @@ async def _run_last_n_update_job(job_id: str, since: str, season: str):
 @router.post("/last-n/update/start")
 async def start_update_last_n_games_since(
     since: str,
+    until: str | None = None,
     season: str = "2025-26",
 ):
     """
     Start last-n update in the background and return a job id for polling.
     """
     try:
-        datetime.strptime(since, "%Y-%m-%d").date()
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+    if until:
+        try:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
+    else:
+        until_date = datetime.now(ZoneInfo("America/New_York")).date()
+
+    if since_date > until_date:
+        raise HTTPException(status_code=400, detail="since must be on or before until")
 
     job_id = str(uuid.uuid4())
     update_jobs[job_id] = {
@@ -901,6 +999,7 @@ async def start_update_last_n_games_since(
         "type": "last_n_update",
         "status": "queued",
         "since": since,
+        "until": until or str(until_date),
         "season": season,
         "players_done": 0,
         "players_total": None,
@@ -908,7 +1007,7 @@ async def start_update_last_n_games_since(
         "result": None,
         "error": None,
     }
-    asyncio.create_task(_run_last_n_update_job(job_id, since, season))
+    asyncio.create_task(_run_last_n_update_job(job_id, since, until, season))
     return {"status": "queued", "job_id": job_id}
 
 

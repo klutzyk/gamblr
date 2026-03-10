@@ -1,4 +1,5 @@
 import sys
+import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 import time
@@ -108,7 +109,18 @@ def get_last_ingest_date(engine) -> str | None:
     return None
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run Gamblr pipeline tasks.")
+    parser.add_argument(
+        "--skip-training",
+        action="store_true",
+        help="Skip /ml/train/all and reuse existing model files.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     print("Gamblr pipeline runner")
     base_url = prompt("API base URL", "http://127.0.0.1:8000")
     engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
@@ -141,6 +153,11 @@ def main():
     )
     update_actuals = prompt_yes_no("Update prediction actuals (/ml/evaluate/all)", True)
     recalc_under_risk = prompt_yes_no("Recalculate under-risk metrics", True)
+    run_training = (
+        False
+        if args.skip_training
+        else prompt_yes_no("Train models (/ml/train/all)", True)
+    )
     run_backtests = prompt_yes_no("Run backtests (assists/rebounds/threept/threepa)", False)
 
     if since_date:
@@ -223,8 +240,11 @@ def main():
             print("Recalculating under-risk metrics...")
             call_api(client, "POST", "/db/under-risk/recalc-all")
 
-        print("Training models...")
-        call_api(client, "POST", "/ml/train/all")
+        if run_training:
+            print("Training models...")
+            call_api(client, "POST", "/ml/train/all")
+        else:
+            print("Skipping model training. Reusing existing model artifacts.")
 
         if run_backtests:
             print("Running backtests...")
