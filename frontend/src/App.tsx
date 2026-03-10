@@ -15,6 +15,7 @@ import {
   getThreeptPredictions,
   getThreepaPredictions,
   getFirstBasketPredictions,
+  getDoublesPredictions,
   getBestBets,
   syncPlayerPropsWindow,
   type PlayerRow,
@@ -22,6 +23,7 @@ import {
   type OddsEventPropsResponse,
   type PredictionRow,
   type FirstBasketPredictionRow,
+  type DoubleTriplePredictionRow,
   type BestBetsResponse,
 } from "./api";
 
@@ -46,7 +48,8 @@ type TabKey =
   | "props"
   | "predictions"
   | "best_bets"
-  | "first_basket";
+  | "first_basket"
+  | "double_triple";
 
 type ApiState<T> = {
   loading: boolean;
@@ -480,6 +483,64 @@ function FirstBasketGrid({ rows }: { rows: FirstBasketPredictionRow[] }) {
   );
 }
 
+function DoubleTripleGrid({ rows }: { rows: DoubleTriplePredictionRow[] }) {
+  if (!rows.length) {
+    return (
+      <div className="text-center py-5">
+        <p className="text-secondary">No double-double or triple-double data available.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-responsive">
+      <table className="table align-items-center mb-0">
+        <thead>
+          <tr>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Team</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Matchup</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Proj (P/R/A)</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Double-Double</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Triple-Double</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={`${row.game_id ?? row.matchup}-${row.player_id}`}>
+              <td className="text-sm">
+                <a
+                  href={getPlayerStatsSearchUrl(row.full_name)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="player-name-link"
+                >
+                  {row.full_name}
+                </a>
+              </td>
+              <td className="text-sm">{row.team_abbreviation}</td>
+              <td className="text-sm">{row.matchup}</td>
+              <td className="text-sm">
+                {`${formatNumber(row.pts_pred)} / ${formatNumber(row.reb_pred)} / ${formatNumber(row.ast_pred)}`}
+              </td>
+              <td className="text-sm text-primary font-weight-bold">
+                {typeof row.double_double_prob === "number"
+                  ? `${(row.double_double_prob * 100).toFixed(1)}%`
+                  : "-"}
+              </td>
+              <td className="text-sm text-success font-weight-bold">
+                {typeof row.triple_double_prob === "number"
+                  ? `${(row.triple_double_prob * 100).toFixed(1)}%`
+                  : "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("predictions");
 
@@ -511,6 +572,8 @@ function App() {
     useState<ApiState<PredictionRow[]>>(initialState);
   const [firstBasketPredictionsState, setFirstBasketPredictionsState] =
     useState<ApiState<FirstBasketPredictionRow[]>>(initialState);
+  const [doubleTripleState, setDoubleTripleState] =
+    useState<ApiState<DoubleTriplePredictionRow[]>>(initialState);
   const [bestBetsState, setBestBetsState] =
     useState<ApiState<BestBetsResponse>>(initialState);
   const [predictionDay, setPredictionDay] = useState<
@@ -795,6 +858,15 @@ function App() {
       force
     );
 
+  const handleLoadDoubleTriple = (force = false) =>
+    safeLoad(
+      doubleTripleState,
+      setDoubleTripleState,
+      () => getDoublesPredictions(predictionDay, 40),
+      5 * 60 * 1000,
+      force
+    );
+
   useEffect(() => {
     handleLoadPredictions(true);
   }, [predictionDay, predictionStat]);
@@ -802,6 +874,9 @@ function App() {
   useEffect(() => {
     if (activeTab === "first_basket") {
       void handleLoadFirstBasketPredictions(true);
+    }
+    if (activeTab === "double_triple") {
+      void handleLoadDoubleTriple(true);
     }
   }, [activeTab, predictionDay]);
 
@@ -1742,6 +1817,124 @@ function App() {
             )}
           </div>
         );
+      case "double_triple":
+        const dtSearch = predictionSearch.trim().toLowerCase();
+        const dtRows = doubleTripleState.data
+          ? doubleTripleState.data.filter((row) => {
+              if (
+                predictionTeams.length > 0 &&
+                !predictionTeams.includes(row.team_abbreviation ?? "")
+              ) {
+                return false;
+              }
+              if (!dtSearch) return true;
+              return (
+                row.full_name.toLowerCase().includes(dtSearch) ||
+                row.team_abbreviation.toLowerCase().includes(dtSearch)
+              );
+            })
+          : [];
+        const dtTeamOptions = doubleTripleState.data
+          ? Array.from(
+              new Set(
+                doubleTripleState.data
+                  .map((row) => row.team_abbreviation)
+                  .filter((team): team is string => Boolean(team))
+              )
+            ).sort()
+          : [];
+        return (
+          <div className="card card-body border-radius-xl shadow-lg prediction-focus">
+            <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
+              <div>
+                <h4 className="mb-1">Double-Double and Triple-Double Outlook</h4>
+              </div>
+              <div className="d-flex flex-wrap gap-2 align-items-center">
+                <div className="prediction-select-group">
+                  <select
+                    className="form-select form-select-sm"
+                    value={predictionDay}
+                    onChange={(e) =>
+                      setPredictionDay(
+                        e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                      )
+                    }
+                  >
+                    <option value="auto">Auto (ET)</option>
+                    <option value="today">Today (ET)</option>
+                    <option value="tomorrow">Tomorrow (ET)</option>
+                    <option value="yesterday">Yesterday (ET)</option>
+                  </select>
+                </div>
+                <button
+                  className="btn btn-sm bg-gradient-primary mb-0"
+                  onClick={() => {
+                    void handleLoadDoubleTriple();
+                  }}
+                  disabled={doubleTripleState.loading}
+                >
+                  Get DD/TD
+                </button>
+              </div>
+            </div>
+            <div className="prediction-filters mb-4">
+              <div className="prediction-search">
+                <i className="material-symbols-rounded">search</i>
+                <input
+                  type="search"
+                  placeholder="Search player or team"
+                  value={predictionSearch}
+                  onChange={(e) => setPredictionSearch(e.target.value)}
+                />
+              </div>
+              <div className="prediction-team-chips">
+                <button
+                  className={`team-chip ${predictionTeams.length === 0 ? "active" : ""}`}
+                  onClick={() => setPredictionTeams([])}
+                >
+                  All teams
+                </button>
+                {dtTeamOptions.map((team) => (
+                  <button
+                    key={team}
+                    className={`team-chip ${predictionTeams.includes(team) ? "active" : ""}`}
+                    onClick={() =>
+                      setPredictionTeams((prev) =>
+                        prev.includes(team)
+                          ? prev.filter((t) => t !== team)
+                          : [...prev, team]
+                      )
+                    }
+                  >
+                    {team}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {doubleTripleState.error && (
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {doubleTripleState.error}
+              </div>
+            )}
+            {doubleTripleState.loading && !doubleTripleState.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading DD/TD outlook...</p>
+              </div>
+            )}
+            {doubleTripleState.data && (
+              <DoubleTripleGrid
+                rows={[...dtRows].sort((a, b) => {
+                  const dd = (b.double_double_prob ?? 0) - (a.double_double_prob ?? 0);
+                  if (dd !== 0) return dd;
+                  return (b.triple_double_prob ?? 0) - (a.triple_double_prob ?? 0);
+                })}
+              />
+            )}
+          </div>
+        );
       case "first_basket":
         const fbTeamOptions = firstBasketPredictionsState.data
           ? Array.from(
@@ -1988,6 +2181,17 @@ function App() {
                       >
                         <i className="material-symbols-rounded me-2">sports</i>
                         First Basket
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "double_triple" ? "active" : ""}`}
+                        onClick={() => setActiveTab("double_triple")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">query_stats</i>
+                        DD/TD
                       </a>
                     </li>
                     <li className="nav-item">

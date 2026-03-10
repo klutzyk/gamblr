@@ -696,6 +696,165 @@ async def predict_threepa_api(
     return df_to_dict(df_preds)
 
 
+@router.get("/predictions/doubles")
+async def predict_doubles_api(
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    top_n: int = Query(30, ge=1, le=200),
+):
+    """
+    Rank players by estimated double-double / triple-double probability
+    using points, rebounds, and assists prediction intervals.
+    """
+    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+
+    df_points = await run_in_threadpool(
+        predict_points,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
+    df_assists = await run_in_threadpool(
+        predict_assists,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
+    df_rebounds = await run_in_threadpool(
+        predict_rebounds,
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
+
+    if df_points.empty or df_assists.empty or df_rebounds.empty:
+        return {"message": f"No games found for {day}", "data": []}
+
+    df_points = _apply_lineup_filters(df_points, day, lineups_payload=lineups_payload)
+    df_assists = _apply_lineup_filters(df_assists, day, lineups_payload=lineups_payload)
+    df_rebounds = _apply_lineup_filters(df_rebounds, day, lineups_payload=lineups_payload)
+
+    key_cols = ["player_id", "game_id"]
+    points_cols = [
+        "player_id",
+        "game_id",
+        "full_name",
+        "team_id",
+        "team_abbreviation",
+        "matchup",
+        "game_date",
+        "pred_value",
+        "pred_p10",
+        "pred_p50",
+        "pred_p90",
+    ]
+    stat_cols = ["player_id", "game_id", "pred_value", "pred_p10", "pred_p50", "pred_p90"]
+
+    merged = (
+        df_points[points_cols]
+        .merge(
+            df_rebounds[stat_cols].rename(
+                columns={
+                    "pred_value": "reb_pred",
+                    "pred_p10": "reb_p10",
+                    "pred_p50": "reb_p50",
+                    "pred_p90": "reb_p90",
+                }
+            ),
+            on=key_cols,
+            how="inner",
+        )
+        .merge(
+            df_assists[stat_cols].rename(
+                columns={
+                    "pred_value": "ast_pred",
+                    "pred_p10": "ast_p10",
+                    "pred_p50": "ast_p50",
+                    "pred_p90": "ast_p90",
+                }
+            ),
+            on=key_cols,
+            how="inner",
+        )
+    )
+
+    if merged.empty:
+        return {"message": f"No overlapping predictions found for {day}", "data": []}
+
+    merged = merged.rename(
+        columns={
+            "pred_value": "pts_pred",
+            "pred_p10": "pts_p10",
+            "pred_p50": "pts_p50",
+            "pred_p90": "pts_p90",
+        }
+    )
+
+    merged["p_pts_ge_10"] = merged.apply(
+        lambda r: _prob_ge_threshold(r.get("pts_p10"), r.get("pts_p50"), r.get("pts_p90"), r.get("pts_pred"), 10.0),
+        axis=1,
+    )
+    merged["p_reb_ge_10"] = merged.apply(
+        lambda r: _prob_ge_threshold(r.get("reb_p10"), r.get("reb_p50"), r.get("reb_p90"), r.get("reb_pred"), 10.0),
+        axis=1,
+    )
+    merged["p_ast_ge_10"] = merged.apply(
+        lambda r: _prob_ge_threshold(r.get("ast_p10"), r.get("ast_p50"), r.get("ast_p90"), r.get("ast_pred"), 10.0),
+        axis=1,
+    )
+
+    p_pts = merged["p_pts_ge_10"]
+    p_reb = merged["p_reb_ge_10"]
+    p_ast = merged["p_ast_ge_10"]
+
+    # Independence approximation using marginal probabilities.
+    p_exact2 = (
+        p_pts * p_reb * (1.0 - p_ast)
+        + p_pts * (1.0 - p_reb) * p_ast
+        + (1.0 - p_pts) * p_reb * p_ast
+    )
+    p_exact3 = p_pts * p_reb * p_ast
+
+    merged["double_double_prob"] = (p_exact2 + p_exact3).clip(0.0, 1.0)
+    merged["triple_double_prob"] = p_exact3.clip(0.0, 1.0)
+    merged["double_double_pct"] = (merged["double_double_prob"] * 100.0).round(1)
+    merged["triple_double_pct"] = (merged["triple_double_prob"] * 100.0).round(1)
+
+    merged = merged.sort_values(
+        ["double_double_prob", "triple_double_prob", "pts_pred"],
+        ascending=[False, False, False],
+    ).head(top_n)
+
+    return {
+        "data": df_to_dict(
+            merged[
+                [
+                    "player_id",
+                    "full_name",
+                    "team_id",
+                    "team_abbreviation",
+                    "matchup",
+                    "game_date",
+                    "game_id",
+                    "pts_pred",
+                    "reb_pred",
+                    "ast_pred",
+                    "double_double_prob",
+                    "triple_double_prob",
+                    "double_double_pct",
+                    "triple_double_pct",
+                    "p_pts_ge_10",
+                    "p_reb_ge_10",
+                    "p_ast_ge_10",
+                ]
+            ]
+        )
+    }
+
+
 def fetch_recent_points_avgs(engine, player_ids: list[int], n_games: int = 10):
     if not player_ids:
         return {}
@@ -734,6 +893,40 @@ def _injury_multiplier(injury_tag: str | None):
     if tag in {"out", "ofs"}:
         return 0.0
     return 1.0
+
+
+def _normal_cdf(x: float, mean: float, std: float) -> float:
+    if std <= 0:
+        return 1.0 if x >= mean else 0.0
+    z = (x - mean) / (std * math.sqrt(2.0))
+    return 0.5 * (1.0 + math.erf(z))
+
+
+def _prob_ge_threshold(
+    p10: float | None,
+    p50: float | None,
+    p90: float | None,
+    pred_value: float | None,
+    threshold: float = 10.0,
+) -> float:
+    center = p50 if p50 is not None and pd.notnull(p50) else pred_value
+    if center is None or pd.isnull(center):
+        return 0.0
+
+    if (
+        p10 is not None
+        and p90 is not None
+        and pd.notnull(p10)
+        and pd.notnull(p90)
+        and float(p90) > float(p10)
+    ):
+        # 10-90 interval ~= +/- 1.28155 sigma for normal distribution.
+        sigma = (float(p90) - float(p10)) / (2.0 * 1.2815515655446004)
+    else:
+        sigma = max(1.5, abs(float(center)) * 0.2)
+
+    prob = 1.0 - _normal_cdf(float(threshold), float(center), float(sigma))
+    return float(min(1.0, max(0.0, prob)))
 
 
 def _build_lineup_injury_index(

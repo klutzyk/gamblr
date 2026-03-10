@@ -109,6 +109,26 @@ export type FirstBasketPredictionRow = {
   jedibets_team_first_fg_pct?: number;
 };
 
+export type DoubleTriplePredictionRow = {
+  player_id: number;
+  full_name: string;
+  team_id?: number;
+  team_abbreviation: string;
+  matchup: string;
+  game_date: string;
+  game_id?: string;
+  pts_pred: number;
+  reb_pred: number;
+  ast_pred: number;
+  double_double_prob: number;
+  triple_double_prob: number;
+  double_double_pct?: number;
+  triple_double_pct?: number;
+  p_pts_ge_10?: number;
+  p_reb_ge_10?: number;
+  p_ast_ge_10?: number;
+};
+
 export type BestBetLeg = {
   event_id: string;
   commence_time: string;
@@ -404,6 +424,33 @@ export function getFirstBasketPredictions(
       return (await res.json()) as { data?: FirstBasketPredictionRow[] };
     })
     .then((payload) => payload.data ?? []);
+}
+
+type DoubleTripleResponsePayload =
+  | DoubleTriplePredictionRow[]
+  | { data?: DoubleTriplePredictionRow[] };
+
+function normalizeDoubleTripleRows(
+  payload: DoubleTripleResponsePayload
+): DoubleTriplePredictionRow[] {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  if (payload && Array.isArray(payload.data)) {
+    return payload.data;
+  }
+  return [];
+}
+
+export function getDoublesPredictions(
+  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto",
+  top_n = 30
+): Promise<DoubleTriplePredictionRow[]> {
+  return fetchWithCache<DoubleTripleResponsePayload>(
+    "/players/predictions/doubles",
+    { day, top_n },
+    PREDICTIONS_TTL
+  ).then(normalizeDoubleTripleRows);
 }
 
 export function syncPlayerPropsWindow(
