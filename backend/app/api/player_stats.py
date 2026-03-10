@@ -811,7 +811,8 @@ def _apply_lineup_filters(df_preds: pd.DataFrame, day: str):
             continue
         info = game_info.get(int(pid))
         if not info:
-            adjusted_rows.append(row)
+            # If lineup data exists for this game and player is not listed,
+            # treat them as unavailable for this slate.
             continue
 
         injury_tag = info.get("injury_tag")
