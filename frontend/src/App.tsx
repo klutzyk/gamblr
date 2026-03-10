@@ -1353,7 +1353,7 @@ function App() {
                   ? "Syncing props..."
                   : bestBetsState.loading
                     ? "Working..."
-                    : "Sync Props + Build Bets"}
+                    : "Build Bets"}
               </button>
               <button
                 className="btn btn-sm btn-outline-dark mb-0"

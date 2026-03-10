@@ -44,6 +44,30 @@ def load_latest_model(models_dir: Path, prefix: str, return_path: bool = False):
     return (model, path) if return_path else model
 
 
+def _build_model_input(
+    df_features: pd.DataFrame, fallback_features: list[str], model
+) -> pd.DataFrame:
+    """Align inference columns to the exact feature schema a model was trained with."""
+    trained_features = None
+
+    if hasattr(model, "get_booster"):
+        try:
+            trained_features = model.get_booster().feature_names
+        except Exception:
+            trained_features = None
+
+    if not trained_features and hasattr(model, "feature_names_in_"):
+        try:
+            trained_features = list(model.feature_names_in_)
+        except Exception:
+            trained_features = None
+
+    feature_cols = list(trained_features) if trained_features else list(fallback_features)
+    return df_features.reindex(columns=feature_cols, fill_value=0).apply(
+        pd.to_numeric, errors="coerce"
+    ).fillna(0)
+
+
 def _predict_stat(
     engine,
     day: str,
@@ -160,11 +184,10 @@ def _predict_stat(
 
     if "pred_minutes" in features:
         minutes_model = load_latest_model(models_dir, "xgb_minutes_model_")
-        df_next_features["pred_minutes"] = minutes_model.predict(
-            df_next_features[MINUTES_FEATURES]
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0)
+        minutes_input = _build_model_input(
+            df_next_features, MINUTES_FEATURES, minutes_model
         )
+        df_next_features["pred_minutes"] = minutes_model.predict(minutes_input)
 
     df_next_features[features] = (
         df_next_features[features].apply(pd.to_numeric, errors="coerce").fillna(0)
@@ -175,7 +198,7 @@ def _predict_stat(
     if isinstance(model, dict) and "models" in model:
         models = model["models"]
         preds_stack = np.column_stack(
-            [m.predict(df_next_features[features]) for m in models]
+            [m.predict(_build_model_input(df_next_features, features, m)) for m in models]
         )
         pred_p50 = np.percentile(preds_stack, 50, axis=1)
         df_next_features["pred_p50"] = pred_p50
@@ -217,7 +240,8 @@ def _predict_stat(
         df_next_features["pred_value"] = pred_p50
         df_next_features["model_version"] = model_path.name
     else:
-        df_next_features["pred_value"] = model.predict(df_next_features[features])
+        model_input = _build_model_input(df_next_features, features, model)
+        df_next_features["pred_value"] = model.predict(model_input)
         df_next_features["model_version"] = model_path.name
 
     df_players = pd.read_sql(
