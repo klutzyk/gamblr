@@ -5,7 +5,11 @@
 
 .hero-header {
   padding: 2.5rem 0 5rem;
-  background: var(--brand-dark);
+  background:
+    linear-gradient(rgba(9, 18, 16, 0.72), rgba(9, 18, 16, 0.78)),
+    url("https://images.unsplash.com/photo-1546519638-68e109498ffc?auto=format&fit=crop&w=1800&q=80");
+  background-size: cover;
+  background-position: center center;
 }
 
 .dashboard-section {
@@ -61,12 +65,15 @@
 .tab-pills {
   background: #f1f0ea;
   border-radius: 1rem;
+  gap: 0.45rem;
+  padding: 0.45rem !important;
 }
 
 .nav-pills .nav-link {
   border-radius: 0.75rem;
   transition: all 0.2s ease;
   font-weight: 600;
+  padding: 0.55rem 0.95rem !important;
 }
 
 .nav-pills .nav-link:hover:not(.active) {
@@ -163,6 +170,24 @@
   object-fit: cover;
   border: 1px solid rgba(255, 255, 255, 0.25);
   box-shadow: 0 10px 24px rgba(11, 25, 22, 0.3);
+}
+
+.brand-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.brand-logo-xl {
+  width: 78px;
+  height: 78px;
+  border-radius: 18px;
+}
+
+.brand-title {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
 }
 
 .bg-gradient-primary {
