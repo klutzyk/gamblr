@@ -154,7 +154,10 @@ async def refresh_player_points_event(
         }
     except Exception as e:
         logger.error(f"Error fetching/storing event {event_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to sync event odds. Please try again later.",
+        )
 
 
 # One-call sync for all upcoming events.
@@ -281,7 +284,10 @@ async def refresh_all_player_points(
         }
     except Exception as e:
         logger.error(f"Error fetching/storing all events: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to sync player props window. Please try again later.",
+        )
 
 
 @router.post("/player-props/sync")
@@ -1595,7 +1601,10 @@ async def load_all_teams(db: AsyncSession = Depends(get_db)):
         return {"status": "success", "message": "Teams loaded/updated"}
     except Exception as e:
         logger.error(f"Error loading teams: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load teams. Please try again later.",
+        )
 
 
 # fetch and store the schedule info for the given season
@@ -1616,7 +1625,10 @@ async def load_season_schedule(
         }
     except Exception as e:
         logger.error(f"Error loading schedule for season {season}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load schedule. Please try again later.",
+        )
 
 
 @router.post("/under-risk/recalc")
@@ -1634,7 +1646,10 @@ async def recalc_under_risk(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error computing under-risk for {stat_type}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to recalculate under-risk. Please try again later.",
+        )
 
 
 @router.post("/under-risk/recalc-all")
@@ -1653,7 +1668,10 @@ async def recalc_under_risk_all(
             results[stat_type] = await compute_under_risk(db, stat_type, window_n)
         except Exception as e:
             logger.error(f"Error computing under-risk for {stat_type}: {e}")
-            results[stat_type] = {"status": "error", "detail": str(e)}
+            results[stat_type] = {
+                "status": "error",
+                "detail": "Failed to compute under-risk.",
+            }
 
     return {
         "status": "completed",
