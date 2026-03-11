@@ -20,6 +20,7 @@ from .utils import (
     THREEPA_FEATURES,
     add_player_rolling_features,
     add_teammate_context_features,
+    add_role_context_interaction_features,
     build_team_game_features,
     build_lineup_team_features,
 )
@@ -99,6 +100,8 @@ def _train_model(
         df_features = df_features.merge(
             lineup_team, on="team_abbreviation", how="left"
         )
+
+    df_features = add_role_context_interaction_features(df_features)
 
     df_features = df_features.dropna(subset=[target])
 

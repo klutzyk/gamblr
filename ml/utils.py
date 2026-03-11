@@ -31,6 +31,15 @@ POINTS_FEATURES = [
     "teammate_avg_minutes_last5_sum",
     "teammate_usage_sum_last10",
     "teammate_top_usage_sum_last10",
+    "points_assists_tradeoff_last5",
+    "points_assists_tradeoff_trend",
+    "assist_usage_rate_last10",
+    "shot_usage_rate_last10",
+    "player_usage_share_expected",
+    "teammate_usage_concentration",
+    "teammate_scoring_density",
+    "teammate_playmaking_density",
+    "opponent_ast_to_pts_allowed_ratio",
     "team_change_flag",
     "games_since_team_change",
 ]
@@ -69,6 +78,15 @@ ASSISTS_FEATURES = [
     "teammate_avg_minutes_last5_sum",
     "teammate_usage_sum_last10",
     "teammate_top_usage_sum_last10",
+    "points_assists_tradeoff_last5",
+    "points_assists_tradeoff_trend",
+    "assist_usage_rate_last10",
+    "shot_usage_rate_last10",
+    "player_usage_share_expected",
+    "teammate_usage_concentration",
+    "teammate_scoring_density",
+    "teammate_playmaking_density",
+    "opponent_ast_to_pts_allowed_ratio",
     "team_change_flag",
     "games_since_team_change",
 ]
@@ -104,6 +122,10 @@ REBOUNDS_FEATURES = [
     "teammate_avg_minutes_last5_sum",
     "teammate_usage_sum_last10",
     "teammate_top_usage_sum_last10",
+    "player_usage_share_expected",
+    "teammate_usage_concentration",
+    "teammate_scoring_density",
+    "teammate_playmaking_density",
     "team_change_flag",
     "games_since_team_change",
 ]
@@ -137,6 +159,15 @@ MINUTES_FEATURES = [
     "teammate_avg_minutes_last5_sum",
     "teammate_usage_sum_last10",
     "teammate_top_usage_sum_last10",
+    "points_assists_tradeoff_last5",
+    "points_assists_tradeoff_trend",
+    "assist_usage_rate_last10",
+    "shot_usage_rate_last10",
+    "player_usage_share_expected",
+    "teammate_usage_concentration",
+    "teammate_scoring_density",
+    "teammate_playmaking_density",
+    "opponent_ast_to_pts_allowed_ratio",
     "team_change_flag",
     "games_since_team_change",
 ]
@@ -596,6 +627,77 @@ def _add_team_change_features(df: pd.DataFrame) -> pd.DataFrame:
         _since_change
     ).reset_index(level=0, drop=True)
     df = df.drop(columns=["prev_team"])
+    return df
+
+
+def _safe_divide(num: pd.Series, den: pd.Series, default: float = 0.0) -> pd.Series:
+    den_clean = den.replace(0, pd.NA)
+    out = num / den_clean
+    return pd.to_numeric(out, errors="coerce").fillna(default)
+
+
+def add_role_context_interaction_features(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add behavior/context features that capture:
+    1) scoring vs playmaking role shifts
+    2) teammate/opponent context impact on role and production
+    """
+    df = df_raw.copy()
+
+    required_cols = [
+        "avg_points_last5",
+        "avg_points_last10",
+        "avg_assists_last5",
+        "avg_assists_last10",
+        "avg_fga_last10",
+        "usage_proxy_last10",
+        "teammate_usage_sum_last10",
+        "teammate_top_usage_sum_last10",
+        "teammate_avg_points_last5_sum",
+        "teammate_avg_assists_last5_sum",
+        "teammate_count",
+        "opponent_points_allowed_last5",
+        "opponent_assists_allowed_last5",
+    ]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = 0.0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    # Positive -> more scorer leaning. Negative -> more playmaker leaning.
+    df["points_assists_tradeoff_last5"] = (
+        df["avg_points_last5"] - 2.0 * df["avg_assists_last5"]
+    )
+    recent_tradeoff = df["avg_points_last5"] - 2.0 * df["avg_assists_last5"]
+    baseline_tradeoff = df["avg_points_last10"] - 2.0 * df["avg_assists_last10"]
+    df["points_assists_tradeoff_trend"] = recent_tradeoff - baseline_tradeoff
+
+    df["assist_usage_rate_last10"] = _safe_divide(
+        df["avg_assists_last10"], df["usage_proxy_last10"], default=0.0
+    )
+    df["shot_usage_rate_last10"] = _safe_divide(
+        df["avg_fga_last10"], df["usage_proxy_last10"], default=0.0
+    )
+
+    total_usage = df["usage_proxy_last10"] + df["teammate_usage_sum_last10"]
+    df["player_usage_share_expected"] = _safe_divide(
+        df["usage_proxy_last10"], total_usage, default=0.0
+    )
+    df["teammate_usage_concentration"] = _safe_divide(
+        df["teammate_top_usage_sum_last10"], df["teammate_usage_sum_last10"], default=0.0
+    )
+
+    teammate_den = df["teammate_count"].clip(lower=1.0)
+    df["teammate_scoring_density"] = _safe_divide(
+        df["teammate_avg_points_last5_sum"], teammate_den, default=0.0
+    )
+    df["teammate_playmaking_density"] = _safe_divide(
+        df["teammate_avg_assists_last5_sum"], teammate_den, default=0.0
+    )
+
+    df["opponent_ast_to_pts_allowed_ratio"] = _safe_divide(
+        df["opponent_assists_allowed_last5"], df["opponent_points_allowed_last5"], default=0.0
+    )
     return df
 
 
@@ -1127,5 +1229,7 @@ def compute_prediction_features(
         excluded_players_by_team=excluded_players_by_team,
         bench_minutes_threshold=bench_minutes_threshold,
     )
+
+    df_next = add_role_context_interaction_features(df_next)
 
     return df_next
