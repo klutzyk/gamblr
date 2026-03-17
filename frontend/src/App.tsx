@@ -1425,7 +1425,7 @@ function App() {
                 disabled={bestBetsState.loading || isSyncingBestBets}
               >
                 {isSyncingBestBets
-                  ? "Syncing props..."
+                  ? "Building bets..."
                   : bestBetsState.loading
                     ? "Working..."
                     : "Build Bets"}
