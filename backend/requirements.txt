@@ -10,3 +10,4 @@ beautifulsoup4
 pandas
 nba_api
 asyncio-throttle
+joblib
