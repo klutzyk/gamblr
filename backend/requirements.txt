@@ -11,3 +11,6 @@ pandas
 nba_api
 asyncio-throttle
 joblib
+scikit-learn
+pandas
+numpy
