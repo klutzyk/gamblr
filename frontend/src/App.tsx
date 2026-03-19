@@ -2114,7 +2114,6 @@ function App() {
             <div className="brand-hero text-center mx-auto">
               <img src={logo} alt="Gamblr logo" className="brand-logo brand-logo-xl mb-2" />
               <h2 className="mb-1 text-white brand-title">Gamblr</h2>
-              <span className="text-sm text-white opacity-8">NBA Analytics Hub</span>
             </div>
           </nav>
 
