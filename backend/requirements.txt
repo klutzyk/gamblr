@@ -14,3 +14,4 @@ joblib
 scikit-learn
 pandas
 numpy
+xgboost
