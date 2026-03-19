@@ -8,6 +8,7 @@ from app.services.jedibets_first_basket_client import JediBetsFirstBasketClient
 from app.services.lineup_resolver import LineupResolver
 from app.services.lineup_context import fetch_lineups_payload, build_expected_lineup_sets
 from app.db.store_first_basket import upsert_first_basket_prediction_logs
+from app.db.url_utils import to_sync_db_url
 import sys
 from pathlib import Path
 import pandas as pd
@@ -38,7 +39,7 @@ from app.db.store_prediction_logs import log_predictions
 
 router = APIRouter()
 client = NBAClient(timeout=15)
-sync_engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
+sync_engine = create_engine(to_sync_db_url(settings.DATABASE_URL))
 rotowire_lineups_client = RotoWireLineupsClient(timeout=20)
 jedi_client = JediBetsFirstBasketClient(timeout=20)
 lineup_resolver = LineupResolver(sync_engine)
