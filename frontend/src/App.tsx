@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-import logo from "./assets/logo.jpg";
+import logo from "./assets/logo2.png";
 import {
   getTopScorers,
   getTopAssists,
@@ -2111,9 +2111,11 @@ function App() {
         <div className="hero-glow"></div>
         <div className="container position-relative">
           <nav className="navbar navbar-expand-lg navbar-dark py-4 px-0">
-            <div className="brand-hero text-center mx-auto">
-              <img src={logo} alt="Gamblr logo" className="brand-logo brand-logo-xl mb-2" />
-              <h2 className="mb-1 text-white brand-title">Gamblr</h2>
+            <div className="brand-hero brand-hero-left">
+              <img src={logo} alt="Gamblr logo" className="brand-logo brand-logo-xl" />
+              <div className="brand-text-wrap">
+                <h2 className="mb-0 text-white brand-title">GAMBLR</h2>
+              </div>
             </div>
           </nav>
 
@@ -2121,11 +2123,15 @@ function App() {
             <div className="col-lg-10 col-xl-8">
               <div className="hero-copy">
                 <h1 className="display-4 text-white mb-3">
-                  Investing, not gambling.
+                  Data Over Luck.
                 </h1>
                 <p className="lead text-white opacity-8 mb-4">
-                  Model-backed reads for points, assists, rebounds and threes. Scan fast, pick smart,
-                  and move to your card with confidence.
+                  I built this to make NBA props easier to read: points, assists, rebounds,
+                  and threes in one place so you can make faster calls.
+                </p>
+                <p className="text-sm text-white opacity-8 mb-0">
+                  This app runs on free-tier hosting, so the first load can take
+                  around 30-60 seconds while services wake up.
                 </p>
               </div>
             </div>
@@ -2276,20 +2282,20 @@ function App() {
               </div>
               <div className="card shadow-lg border-radius-xl mb-4">
                 <div className="card-header pb-0">
-                  <h5 className="mb-0">Model Notes</h5>
+                  <h5 className="mb-0">How to Read This</h5>
                 </div>
                 <div className="card-body">
                   <p className="text-sm text-secondary mb-2">
-                    Confidence is direction, not certainty. Prioritize edges where model confidence,
-                    line value, and role stability align.
+                    Confidence is just a guide, not a guarantee. I usually trust picks more
+                    when confidence, line value, and player role all point the same way.
                   </p>
                   <p className="text-sm text-secondary mb-3">
-                    Recheck projections after lineup/injury updates and before lock. Volatile minutes
-                    are the fastest way to break a good read.
+                    Always recheck after lineup or injury news before lock. Minutes can change
+                    quickly and that is usually what breaks a good pick.
                   </p>
                   <div className="d-flex align-items-center justify-content-between">
-                    <span className="text-sm text-secondary">Refresh cadence</span>
-                    <span className="badge badge-sm bg-gradient-info">Every 5 min</span>
+                    <span className="text-sm text-secondary">Data refresh</span>
+                    <span className="badge badge-sm bg-gradient-info">About every 5 min</span>
                   </div>
                 </div>
               </div>
