@@ -258,6 +258,8 @@
 
 .stat-toggle {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 0.35rem;
   padding: 0.35rem;
   background: rgba(16, 29, 26, 0.06);
@@ -560,6 +562,8 @@
 
 .prediction-select-group {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   gap: 0.35rem;
   padding: 0.25rem;
@@ -774,5 +778,35 @@
 
   .predictions-grid {
     grid-template-columns: 1fr;
+  }
+
+  .stat-toggle {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    border-radius: 0.9rem;
+  }
+
+  .stat-chip {
+    width: 100%;
+    text-align: center;
+    padding: 0.5rem 0.65rem;
+  }
+
+  .prediction-select-group {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+    gap: 0.5rem;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .prediction-select-group .form-select {
+    width: 100%;
+    min-width: 0;
+    border-radius: 0.75rem;
+    padding: 0.5rem 2rem 0.5rem 0.75rem;
   }
 }
