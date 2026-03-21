@@ -1,6 +1,7 @@
 # Main FastAPI application
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import os
 from app.api import (
     health,
     player_stats,
@@ -25,11 +26,11 @@ logging.basicConfig(
 
 app = FastAPI(title="NBA Betting API")
 
-# Allow frontend dev server to call the API for testing (NEED TO CHANGE THIS LATER!!!)
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+cors_origins_env = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
