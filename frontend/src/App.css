@@ -258,8 +258,6 @@
 
 .stat-toggle {
   display: inline-flex;
-  flex-wrap: wrap;
-  max-width: 100%;
   gap: 0.35rem;
   padding: 0.35rem;
   background: rgba(16, 29, 26, 0.06);
@@ -562,8 +560,6 @@
 
 .prediction-select-group {
   display: inline-flex;
-  flex-wrap: wrap;
-  max-width: 100%;
   align-items: center;
   gap: 0.35rem;
   padding: 0.25rem;

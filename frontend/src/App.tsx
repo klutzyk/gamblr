@@ -2139,12 +2139,9 @@ function App() {
             <div className="col-lg-8">
               <div className="section-card mb-4">
                 <div className="section-header d-flex flex-wrap align-items-center justify-content-between">
-                  <div>
+               
                     <h3 className="mb-1">Performance Hub</h3>
-                    <p className="text-sm text-secondary mb-0">
-                      Filtered views of league leaders and market context.
-                    </p>
-                  </div>
+                    
                   <div className="d-flex flex-wrap gap-2"></div>
                 </div>
                 <div className="nav-wrapper position-relative mt-4">
