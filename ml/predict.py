@@ -1,6 +1,9 @@
 # ml/predict.py
 import pandas as pd
 import numpy as np
+from sqlalchemy import text
+import gc
+import os
 from app.core.constants import (
     CONFIDENCE_DEFAULT,
     CONFIDENCE_MIN,
@@ -33,6 +36,13 @@ except ImportError:  # Python < 3.9
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
+# Keep windows broad by default to preserve model behavior accuracy.
+# Memory savings still come from scoping queries to teams on the target slate.
+HISTORY_WINDOW_DAYS = int(os.getenv("PRED_HISTORY_WINDOW_DAYS", "1600"))
+TEAM_STATS_WINDOW_DAYS = int(os.getenv("PRED_TEAM_STATS_WINDOW_DAYS", "1200"))
+_MODEL_CACHE: dict[str, tuple[str, object]] = {}
+_PLAYER_NAME_CACHE: dict[int, str] | None = None
+_TEAM_ID_CACHE: dict[str, int] | None = None
 
 
 def load_latest_model(models_dir: Path, prefix: str, return_path: bool = False):
@@ -40,8 +50,39 @@ def load_latest_model(models_dir: Path, prefix: str, return_path: bool = False):
     if not models:
         raise FileNotFoundError(f"No trained models found for prefix {prefix}.")
     path = models[-1]
-    model = joblib.load(path)
+    cache_key = f"{models_dir.resolve()}::{prefix}"
+    cache_entry = _MODEL_CACHE.get(cache_key)
+    if cache_entry and cache_entry[0] == path.name:
+        model = cache_entry[1]
+    else:
+        model = joblib.load(path)
+        _MODEL_CACHE[cache_key] = (path.name, model)
     return (model, path) if return_path else model
+
+
+def _load_reference_maps(engine):
+    global _PLAYER_NAME_CACHE, _TEAM_ID_CACHE
+    if _PLAYER_NAME_CACHE is None:
+        df_players = pd.read_sql(
+            "SELECT id AS player_id, full_name FROM players",
+            engine,
+        )
+        _PLAYER_NAME_CACHE = {
+            int(r.player_id): str(r.full_name)
+            for r in df_players.itertuples(index=False)
+            if pd.notnull(r.player_id)
+        }
+    if _TEAM_ID_CACHE is None:
+        df_teams = pd.read_sql(
+            "SELECT id AS team_id, abbreviation AS team_abbreviation FROM teams",
+            engine,
+        )
+        _TEAM_ID_CACHE = {
+            str(r.team_abbreviation).upper(): int(r.team_id)
+            for r in df_teams.itertuples(index=False)
+            if pd.notnull(r.team_id) and pd.notnull(r.team_abbreviation)
+        }
+    return _PLAYER_NAME_CACHE, _TEAM_ID_CACHE
 
 
 def _build_model_input(
@@ -82,24 +123,12 @@ def _predict_stat(
 ):
     # Load rolling CSV
     df_rolling = pd.read_csv(rolling_path)
-    df_rolling["game_date"] = pd.to_datetime(df_rolling["game_date"], dayfirst=True)
-
-    # Load all historical games
-    df_history = pd.read_sql(
-        """
-        SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
-               pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
-               pg.fgm, pg.fga, pg.fg3m, pg.fg3a
-        FROM player_game_stats pg
-        JOIN players p ON pg.player_id = p.id
-    """,
-        engine,
+    df_rolling["game_date"] = pd.to_datetime(
+        df_rolling["game_date"], format="%Y-%m-%d", errors="coerce"
     )
-    df_history["game_date"] = pd.to_datetime(df_history["game_date"])
-
-    # Get upcoming games from schedule
-    df_schedule = pd.read_sql("SELECT * FROM game_schedule", engine)
-    df_schedule["game_date"] = pd.to_datetime(df_schedule["game_date"], dayfirst=True)
+    df_rolling["team_abbreviation"] = (
+        df_rolling["team_abbreviation"].astype(str).str.upper()
+    )
 
     if ZoneInfo:
         base_date = datetime.now(ZoneInfo("America/New_York")).date()
@@ -107,10 +136,12 @@ def _predict_stat(
         base_date = datetime.now().date()
 
     if day == "today":
-        target_date = base_date - timedelta(days=1)
-    elif day == "tomorrow":
         target_date = base_date
+    elif day == "tomorrow":
+        target_date = base_date + timedelta(days=1)
     elif day == "yesterday":
+        target_date = base_date - timedelta(days=1)
+    elif day == "two_days_ago":
         target_date = base_date - timedelta(days=2)
     elif day == "auto":
         # If it's afternoon/evening in Australia, switch to NBA "tomorrow" (ET)
@@ -120,15 +151,68 @@ def _predict_stat(
         else:
             target_date = base_date
     else:
-        raise ValueError("day must be one of: today, tomorrow, yesterday, auto")
+        raise ValueError("day must be one of: today, tomorrow, yesterday, two_days_ago, auto")
 
     target_date = pd.to_datetime(target_date)
+    target_date_only = target_date.date()
 
-    df_next_games = df_schedule[df_schedule["game_date"] == target_date]
+    # Get upcoming games from schedule for just the target day.
+    df_next_games = pd.read_sql(
+        text(
+            """
+            SELECT game_id, game_date, matchup, home_team_abbr, away_team_abbr
+            FROM game_schedule
+            WHERE game_date = :target_date
+            """
+        ),
+        engine,
+        params={"target_date": target_date_only},
+    )
+    df_next_games["game_date"] = pd.to_datetime(df_next_games["game_date"])
 
     if df_next_games.empty:
         print(f"No games found for NBA date: {target_date.date()}")
         return pd.DataFrame()
+
+    next_team_abbrs = {
+        str(team_abbr).upper()
+        for col in ("home_team_abbr", "away_team_abbr")
+        for team_abbr in df_next_games[col].tolist()
+        if pd.notnull(team_abbr)
+    }
+    if not next_team_abbrs:
+        return pd.DataFrame()
+
+    team_params = {f"team_{idx}": team for idx, team in enumerate(sorted(next_team_abbrs))}
+    team_placeholders = ", ".join(f":{name}" for name in team_params)
+    history_start_date = (target_date - timedelta(days=HISTORY_WINDOW_DAYS)).date()
+    team_stats_start_date = (target_date - timedelta(days=TEAM_STATS_WINDOW_DAYS)).date()
+
+    # Load historical games only for target-day teams and recent window.
+    df_history = pd.read_sql(
+        text(
+            f"""
+            SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
+                   pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
+                   pg.fgm, pg.fga, pg.fg3m, pg.fg3a
+            FROM player_game_stats pg
+            JOIN players p ON pg.player_id = p.id
+            WHERE pg.game_date < :target_date
+              AND pg.game_date >= :history_start_date
+              AND p.team_abbreviation IN ({team_placeholders})
+            """
+        ),
+        engine,
+        params={
+            "target_date": target_date_only,
+            "history_start_date": history_start_date,
+            **team_params,
+        },
+    )
+    df_history["game_date"] = pd.to_datetime(df_history["game_date"])
+    df_history["team_abbreviation"] = (
+        df_history["team_abbreviation"].astype(str).str.upper()
+    )
 
     rows = []
     for _, game in df_next_games.iterrows():
@@ -144,30 +228,45 @@ def _predict_stat(
     df_team = None
     try:
         df_team = pd.read_sql(
-            """
-            SELECT game_id, team_abbreviation, game_date,
-                   points AS team_points, assists AS team_assists, rebounds AS team_rebounds,
-                   fgm, fga, fg3m, fg3a
-            FROM team_game_stats
-            """,
+            text(
+                f"""
+                SELECT game_id, team_abbreviation, game_date,
+                       points AS team_points, assists AS team_assists, rebounds AS team_rebounds,
+                       fgm, fga, fg3m, fg3a
+                FROM team_game_stats
+                WHERE game_date < :target_date
+                  AND game_date >= :team_stats_start_date
+                  AND team_abbreviation IN ({team_placeholders})
+                """
+            ),
             engine,
+            params={
+                "target_date": target_date_only,
+                "team_stats_start_date": team_stats_start_date,
+                **team_params,
+            },
         )
         if not df_team.empty:
             df_team["game_date"] = pd.to_datetime(df_team["game_date"])
+            df_team["team_abbreviation"] = df_team["team_abbreviation"].astype(str).str.upper()
     except Exception:
         df_team = None
 
     df_lineups = None
     try:
         df_lineups = pd.read_sql(
-            """
-            SELECT ls.team_id, ls.season, ls.lineup_id, ls.minutes, ls.off_rating,
-                   ls.def_rating, ls.net_rating, ls.pace, ls.ast_pct, ls.reb_pct,
-                   t.abbreviation AS team_abbreviation
-            FROM lineup_stats ls
-            JOIN teams t ON ls.team_id = t.id
-            """,
+            text(
+                f"""
+                SELECT ls.team_id, ls.season, ls.lineup_id, ls.minutes, ls.off_rating,
+                       ls.def_rating, ls.net_rating, ls.pace, ls.ast_pct, ls.reb_pct,
+                       t.abbreviation AS team_abbreviation
+                FROM lineup_stats ls
+                JOIN teams t ON ls.team_id = t.id
+                WHERE t.abbreviation IN ({team_placeholders})
+                """
+            ),
             engine,
+            params=team_params,
         )
     except Exception:
         df_lineups = None
@@ -244,28 +343,13 @@ def _predict_stat(
         df_next_features["pred_value"] = model.predict(model_input)
         df_next_features["model_version"] = model_path.name
 
-    df_players = pd.read_sql(
-        "SELECT id AS player_id, full_name FROM players",
-        engine,
+    player_name_map, team_id_map = _load_reference_maps(engine)
+    df_next_features["full_name"] = df_next_features["player_id"].map(player_name_map)
+    df_next_features["team_id"] = (
+        df_next_features["team_abbreviation"].astype(str).str.upper().map(team_id_map)
     )
 
-    df_teams = pd.read_sql(
-        "SELECT id AS team_id, abbreviation AS team_abbreviation FROM teams",
-        engine,
-    )
-
-    df_next_features = df_next_features.merge(
-        df_players,
-        on="player_id",
-        how="left",
-    )
-    df_next_features = df_next_features.merge(
-        df_teams,
-        on="team_abbreviation",
-        how="left",
-    )
-
-    return df_next_features[
+    result = df_next_features[
         [
             "player_id",
             "full_name",
@@ -282,6 +366,9 @@ def _predict_stat(
             "model_version",
         ]
     ]
+    del df_history, df_next_games, df_next_players, df_next_features, df_team, df_lineups
+    gc.collect()
+    return result
 
 
 def predict_points(

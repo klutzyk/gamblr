@@ -3,6 +3,7 @@ import logging
 from sqlalchemy import create_engine
 
 from app.core.config import settings
+from app.db.url_utils import to_sync_db_url
 from app.services.jedibets_first_basket_client import JediBetsFirstBasketClient
 from app.services.lineup_resolver import LineupResolver
 from app.services.rotowire_lineups_client import RotoWireLineupsClient
@@ -11,7 +12,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 client = RotoWireLineupsClient(timeout=20)
 jedi_client = JediBetsFirstBasketClient(timeout=20)
-sync_engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
+sync_engine = create_engine(to_sync_db_url(settings.DATABASE_URL))
 resolver = LineupResolver(sync_engine)
 
 

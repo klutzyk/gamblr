@@ -106,7 +106,9 @@
 
 .table-responsive {
   border-radius: 1rem;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .table thead th {
@@ -178,6 +180,13 @@
   align-items: center;
 }
 
+.brand-hero-left {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.75rem;
+  margin-right: auto;
+}
+
 .brand-logo-xl {
   width: 78px;
   height: 78px;
@@ -185,9 +194,47 @@
 }
 
 .brand-title {
-  font-size: 2rem;
-  font-weight: 800;
-  letter-spacing: 0.01em;
+  font-family: "Nuevo Sydney BC", "Space Grotesk", sans-serif;
+  font-size: 3rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: #f4bf5a !important;
+}
+
+.brand-text-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.region-select {
+  color: #ffffff !important;
+  color-scheme: dark;
+}
+
+.region-select option {
+  background-color: #07141b;
+  color: #ffffff;
+}
+
+.region-select option:checked,
+.region-select option:hover {
+  background-color: #123041;
+  color: #ffffff;
+}
+
+.region-select:focus {
+  border-color: rgba(106, 223, 79, 0.95) !important;
+  box-shadow: 0 0 0 0.18rem rgba(106, 223, 79, 0.35) !important;
+}
+
+.hero-slogan {
+  font-family: "Overlock SC", "Space Grotesk", serif;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: #f4bf5a !important;
+  text-shadow: 0 0 14px rgba(244, 191, 90, 0.2);
 }
 
 .bg-gradient-primary {
@@ -562,9 +609,28 @@
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem;
+  padding: 0.3rem;
   border-radius: 999px;
   background: rgba(16, 29, 26, 0.06);
+}
+
+.prediction-select-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0.2rem 0.25rem 0.25rem;
+  border-radius: 999px;
+}
+
+.prediction-select-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--brand-muted);
+  padding-left: 0.45rem;
+  line-height: 1;
 }
 
 .prediction-select-group .form-select {
@@ -574,6 +640,12 @@
   font-size: 0.75rem;
   font-weight: 600;
   padding: 0.35rem 1.8rem 0.35rem 0.7rem;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .team-chip {
@@ -772,7 +844,51 @@
     font-size: 0.875rem;
   }
 
+  .table-responsive .table {
+    min-width: 720px;
+  }
+
   .predictions-grid {
     grid-template-columns: 1fr;
+  }
+
+  .stat-toggle {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    border-radius: 0.9rem;
+  }
+
+  .stat-chip {
+    width: 100%;
+    text-align: center;
+    padding: 0.5rem 0.65rem;
+  }
+
+  .prediction-select-group {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+    gap: 0.5rem;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .prediction-select-group .form-select {
+    width: 100%;
+    min-width: 0;
+    border-radius: 0.75rem;
+    padding: 0.5rem 2rem 0.5rem 0.75rem;
+  }
+
+  .prediction-select-label {
+    padding-left: 0.2rem;
+  }
+
+  .prediction-select-field {
+    padding: 0;
+    background: transparent;
+    border: none;
   }
 }

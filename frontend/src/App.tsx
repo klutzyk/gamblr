@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-import logo from "./assets/logo.jpg";
+import logo from "./assets/logo2.png";
 import {
   getTopScorers,
   getTopAssists,
@@ -18,6 +18,7 @@ import {
   getDoublesPredictions,
   getBestBets,
   syncPlayerPropsWindow,
+  getApiHealth,
   type PlayerRow,
   type OddsEvent,
   type OddsEventPropsResponse,
@@ -25,6 +26,7 @@ import {
   type FirstBasketPredictionRow,
   type DoubleTriplePredictionRow,
   type BestBetsResponse,
+  type PredictionDayParam,
 } from "./api";
 
 type NormalizedPropRow = {
@@ -51,6 +53,32 @@ type TabKey =
   | "first_basket"
   | "double_triple";
 
+type UserRegion = "au" | "us" | "uk";
+
+const REGION_CONFIG: Record<
+  UserRegion,
+  { label: string; locale: string; timeZone: string; short: string }
+> = {
+  au: {
+    label: "Australia",
+    locale: "en-AU",
+    timeZone: "Australia/Sydney",
+    short: "AET",
+  },
+  us: {
+    label: "USA",
+    locale: "en-US",
+    timeZone: "America/New_York",
+    short: "ET",
+  },
+  uk: {
+    label: "England",
+    locale: "en-GB",
+    timeZone: "Europe/London",
+    short: "UK",
+  },
+};
+
 type ApiState<T> = {
   loading: boolean;
   error: string | null;
@@ -70,9 +98,13 @@ function formatNumber(value: unknown, digits = 1): string {
   return value.toFixed(digits);
 }
 
-function getPlayerStatsSearchUrl(playerName: string): string {
+function getPlayerStatsSearchUrl(playerName: string | null | undefined): string {
+  const safeName =
+    typeof playerName === "string" && playerName.trim().length > 0
+      ? playerName.trim()
+      : "NBA player";
   const url = new URL("https://www.google.com/search");
-  url.searchParams.set("q", `${playerName} stats`);
+  url.searchParams.set("q", `${safeName} stats`);
   return url.toString();
 }
 
@@ -176,11 +208,13 @@ function PredictionsGrid({
   statLabel,
   unitLabel,
   statKey,
+  formatGameDate,
 }: {
   predictions: PredictionRow[];
   statLabel: string;
   unitLabel: string;
   statKey: "points" | "assists" | "rebounds" | "threept" | "threepa";
+  formatGameDate: (dateString: string) => string;
 }) {
   const TEAM_ID_BY_ABBR: Record<string, number> = {
     ATL: 1610612737,
@@ -222,23 +256,14 @@ function PredictionsGrid({
     );
   }
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  };
-
-  const getInitials = (name: string) =>
-    name
+  const getInitials = (name: string | null | undefined) =>
+    (name ?? "")
       .split(" ")
       .filter(Boolean)
       .slice(0, 2)
       .map((part) => part[0])
       .join("")
-      .toUpperCase();
+      .toUpperCase() || "NA";
 
   const getHeadshotUrl = (
     playerId: number,
@@ -361,7 +386,7 @@ function PredictionsGrid({
             </div>
             <div className="d-flex align-items-center">
               <i className="material-symbols-rounded text-secondary me-2">calendar_today</i>
-              <span className="text-sm text-secondary">{formatDate(pred.game_date)}</span>
+              <span className="text-sm text-secondary">{formatGameDate(pred.game_date)}</span>
             </div>
             <div className="prediction-stat-tag mt-3">
               <span className="badge badge-sm bg-gradient-info">{statLabel}</span>
@@ -429,7 +454,13 @@ function PredictionsGrid({
   );
 }
 
-function FirstBasketGrid({ rows }: { rows: FirstBasketPredictionRow[] }) {
+function FirstBasketGrid({
+  rows,
+  userRegion,
+}: {
+  rows: FirstBasketPredictionRow[];
+  userRegion: UserRegion;
+}) {
   if (!rows.length) {
     return (
       <div className="text-center py-5">
@@ -466,7 +497,11 @@ function FirstBasketGrid({ rows }: { rows: FirstBasketPredictionRow[] }) {
               </td>
               <td className="text-sm">{row.team_abbreviation}</td>
               <td className="text-sm">{row.matchup}</td>
-              <td className="text-sm">{row.tipoff_au ?? row.tipoff_et ?? "-"}</td>
+              <td className="text-sm">
+                {userRegion === "au"
+                  ? row.tipoff_au ?? row.tipoff_et ?? "-"
+                  : row.tipoff_et ?? row.tipoff_au ?? "-"}
+              </td>
               <td className="text-sm text-primary font-weight-bold">
                 {`${(row.first_basket_prob * 100).toFixed(1)}%`}
               </td>
@@ -543,6 +578,7 @@ function DoubleTripleGrid({ rows }: { rows: DoubleTriplePredictionRow[] }) {
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("predictions");
+  const [userRegion, setUserRegion] = useState<UserRegion>("au");
 
   const [topScorers, setTopScorers] =
     useState<ApiState<PlayerRow[]>>(initialState);
@@ -602,6 +638,120 @@ function App() {
   const [selectedBestBetEventIds, setSelectedBestBetEventIds] = useState<string[]>([]);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const [isSyncingBestBets, setIsSyncingBestBets] = useState(false);
+  const [backendHealth, setBackendHealth] = useState<
+    "checking" | "up" | "down"
+  >("checking");
+  const [backendCheckedAt, setBackendCheckedAt] = useState<number | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const regionConfig = REGION_CONFIG[userRegion];
+  const dayLabelSuffix =
+    userRegion === "us" ? "(ET)" : `(${regionConfig.short})`;
+  const dayOptions: Array<{
+    value: "auto" | "today" | "tomorrow" | "yesterday";
+    label: string;
+  }> = [
+    { value: "auto", label: `Auto ${dayLabelSuffix}` },
+    { value: "today", label: `Today ${dayLabelSuffix}` },
+    { value: "tomorrow", label: `Tomorrow ${dayLabelSuffix}` },
+    { value: "yesterday", label: `Yesterday ${dayLabelSuffix}` },
+  ];
+
+  const toUtcMidnightMs = (parts: { year: number; month: number; day: number }) =>
+    Date.UTC(parts.year, parts.month - 1, parts.day);
+
+  const getDatePartsInTz = (date: Date, timeZone: string) => {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = formatter.formatToParts(date);
+    const year = Number(parts.find((p) => p.type === "year")?.value);
+    const month = Number(parts.find((p) => p.type === "month")?.value);
+    const day = Number(parts.find((p) => p.type === "day")?.value);
+    return { year, month, day };
+  };
+
+  const mapDayToEtForApi = (
+    selectedDay: "today" | "tomorrow" | "yesterday" | "auto"
+  ): PredictionDayParam => {
+    if (selectedDay === "auto") return "auto";
+
+    // AU users are always ahead of ET by one calendar day in this app context.
+    // Use explicit mapping to avoid timezone/runtime edge cases.
+    if (userRegion === "au") {
+      if (selectedDay === "yesterday") return "two_days_ago";
+      if (selectedDay === "today") return "yesterday";
+      return "today";
+    }
+
+    const selectedOffset: Record<"today" | "tomorrow" | "yesterday", number> = {
+      yesterday: -1,
+      today: 0,
+      tomorrow: 1,
+    };
+
+    const now = new Date();
+    const etToday = getDatePartsInTz(now, "America/New_York");
+    const userToday = getDatePartsInTz(now, regionConfig.timeZone);
+    const userEtDeltaDays = Math.round(
+      (toUtcMidnightMs(userToday) - toUtcMidnightMs(etToday)) / (24 * 60 * 60 * 1000)
+    );
+    const etOffset = selectedOffset[selectedDay] - userEtDeltaDays;
+
+    if (etOffset <= -2) return "two_days_ago";
+    if (etOffset === -1) return "yesterday";
+    if (etOffset === 0) return "today";
+    if (etOffset >= 1) return "tomorrow";
+    return "auto";
+  };
+
+  const predictionApiDay = mapDayToEtForApi(predictionDay);
+
+  const formatDateByRegion = (value: string | Date | number) =>
+    new Date(value).toLocaleDateString(regionConfig.locale, {
+      timeZone: regionConfig.timeZone,
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+
+  const formatSlateDateForRegion = (value: string) => {
+    // `game_date` is an NBA slate date in ET (date-only).
+    // For AU/UK users, that slate usually lands on the next local calendar day.
+    const normalized = String(value).slice(0, 10);
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+    if (!match) return formatDateByRegion(value);
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    const baseUtc = new Date(Date.UTC(year, month, day));
+    const dayShift = userRegion === "us" ? 0 : 1;
+    baseUtc.setUTCDate(baseUtc.getUTCDate() + dayShift);
+    return baseUtc.toLocaleDateString(regionConfig.locale, {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  };
+
+  const formatDateTimeByRegion = (value: string | Date | number) =>
+    new Date(value).toLocaleString(regionConfig.locale, {
+      timeZone: regionConfig.timeZone,
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const formatTimeByRegion = (value: string | Date | number) =>
+    new Date(value).toLocaleTimeString(regionConfig.locale, {
+      timeZone: regionConfig.timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -689,35 +839,35 @@ function App() {
       unit: "pts",
       state: pointsPredictionsState,
       setState: setPointsPredictionsState,
-      loader: () => getPointsPredictions(predictionDay),
+      loader: () => getPointsPredictions(predictionApiDay),
     },
     assists: {
       label: "Assists",
       unit: "ast",
       state: assistsPredictionsState,
       setState: setAssistsPredictionsState,
-      loader: () => getAssistsPredictions(predictionDay),
+      loader: () => getAssistsPredictions(predictionApiDay),
     },
     rebounds: {
       label: "Rebounds",
       unit: "reb",
       state: reboundsPredictionsState,
       setState: setReboundsPredictionsState,
-      loader: () => getReboundsPredictions(predictionDay),
+      loader: () => getReboundsPredictions(predictionApiDay),
     },
     threept: {
       label: "3PT Made",
       unit: "3PM",
       state: threeptPredictionsState,
       setState: setThreeptPredictionsState,
-      loader: () => getThreeptPredictions(predictionDay),
+      loader: () => getThreeptPredictions(predictionApiDay),
     },
     threepa: {
       label: "3PT Attempts",
       unit: "3PA",
       state: threepaPredictionsState,
       setState: setThreepaPredictionsState,
-      loader: () => getThreepaPredictions(predictionDay),
+      loader: () => getThreepaPredictions(predictionApiDay),
     },
   };
 
@@ -769,11 +919,10 @@ function App() {
       const diffDays = Math.round(
         (parseKey(eventKey) - parseKey(nowKey)) / (24 * 60 * 60 * 1000)
       );
-      // The prediction API maps "today" -> ET date minus 1, and "tomorrow" -> ET date.
-      // Align selected event date to that mapping to avoid day mismatches.
-      if (diffDays === 0) return "tomorrow";
-      if (diffDays === -1) return "today";
-      if (diffDays === -2) return "yesterday";
+      // Align selected event date to ET day labels expected by prediction endpoints.
+      if (diffDays === 0) return "today";
+      if (diffDays === 1) return "tomorrow";
+      if (diffDays === -1) return "yesterday";
       return "auto";
     };
 
@@ -853,7 +1002,7 @@ function App() {
     safeLoad(
       firstBasketPredictionsState,
       setFirstBasketPredictionsState,
-      () => getFirstBasketPredictions(predictionDay, 6),
+      () => getFirstBasketPredictions(predictionApiDay, 6),
       5 * 60 * 1000,
       force
     );
@@ -862,14 +1011,33 @@ function App() {
     safeLoad(
       doubleTripleState,
       setDoubleTripleState,
-      () => getDoublesPredictions(predictionDay, 40),
+      () => getDoublesPredictions(predictionApiDay, 40),
       5 * 60 * 1000,
       force
     );
 
+  const checkBackendHealth = async () => {
+    setBackendHealth("checking");
+    try {
+      await getApiHealth();
+      setBackendHealth("up");
+      setBackendError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Health check failed";
+      setBackendHealth("down");
+      setBackendError(
+        message.includes("status")
+          ? "Could not reach the backend right now."
+          : "Backend is sleeping or temporarily unavailable."
+      );
+    } finally {
+      setBackendCheckedAt(Date.now());
+    }
+  };
+
   useEffect(() => {
     handleLoadPredictions(true);
-  }, [predictionDay, predictionStat]);
+  }, [predictionApiDay, predictionStat]);
 
   useEffect(() => {
     if (activeTab === "first_basket") {
@@ -878,7 +1046,7 @@ function App() {
     if (activeTab === "double_triple") {
       void handleLoadDoubleTriple(true);
     }
-  }, [activeTab, predictionDay]);
+  }, [activeTab, predictionApiDay]);
 
   useEffect(() => {
     const defaults: Record<typeof predictionStat, number> = {
@@ -911,6 +1079,14 @@ function App() {
     const validIds = new Set(eventsState.data.map((e) => e.id));
     setSelectedBestBetEventIds((prev) => prev.filter((id) => validIds.has(id)));
   }, [eventsState.data]);
+
+  useEffect(() => {
+    void checkBackendHealth();
+    const interval = setInterval(() => {
+      void checkBackendHealth();
+    }, 45_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -1120,12 +1296,7 @@ function App() {
                   eventsState.data.map((event) => (
                     <option key={event.id} value={event.id}>
                       {event.away_team} @ {event.home_team} |{" "}
-                      {new Date(event.commence_time).toLocaleString("en-AU", {
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                      {formatDateTimeByRegion(event.commence_time)}
                     </option>
                   ))
                 ) : (
@@ -1232,10 +1403,7 @@ function App() {
                                 <td className="text-sm">{row.sportsbook}</td>
                                 <td className="text-sm">
                                   {row.lastUpdate
-                                    ? new Date(row.lastUpdate).toLocaleTimeString("en-AU", {
-                                        hour: "2-digit",
-                                        minute: "2-digit",
-                                      })
+                                    ? formatTimeByRegion(row.lastUpdate)
                                     : "-"}
                                 </td>
                               </tr>
@@ -1257,12 +1425,7 @@ function App() {
         const bestBetMatchupOptions = (eventsState.data ?? []).map((event) => ({
           id: event.id,
           label: `${event.away_team} @ ${event.home_team}`,
-          kickoff: new Date(event.commence_time).toLocaleString("en-AU", {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
+          kickoff: formatDateTimeByRegion(event.commence_time),
         }));
         const selectedMatchupCount =
           selectedBestBetEventIds.length > 0
@@ -1329,7 +1492,7 @@ function App() {
                     }
                     disabled={selectedBestBetEventIds.length > 0}
                   >
-                    <option value="auto">Auto (AU time)</option>
+                    <option value="auto">Auto ({regionConfig.short} time)</option>
                     <option value="night">Night (next slate)</option>
                     <option value="morning">Morning (near tipoff)</option>
                     <option value="all">All upcoming</option>
@@ -1626,7 +1789,10 @@ function App() {
           <div className="card card-body border-radius-xl shadow-lg prediction-focus">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
               <div>
-                <h4 className="mb-1">Prediction Focus</h4>
+                <h4 className="mb-1">Predictions</h4>
+                {/* <p className="text-xs text-secondary mb-0">
+                  Day filter follows NBA slate timing (ET). Displayed dates/times follow your selected region.
+                </p> */}
               </div>
               <div className="d-flex flex-wrap gap-2 align-items-center">
                 <div className="stat-toggle">
@@ -1643,67 +1809,84 @@ function App() {
                   ))}
                 </div>
                 <div className="prediction-select-group">
-                  <select
-                    className="form-select form-select-sm"
-                    value={predictionDay}
-                    onChange={(e) =>
-                      setPredictionDay(
-                        e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
-                      )
-                    }
-                  >
-                    <option value="auto">Auto (ET)</option>
-                    <option value="today">Today (ET)</option>
-                    <option value="tomorrow">Tomorrow (ET)</option>
-                    <option value="yesterday">Yesterday (ET)</option>
-                  </select>
-                  <select
-                    className="form-select form-select-sm"
-                    value={predictionLine}
-                    onChange={(e) => {
-                      const value =
-                        e.target.value === "all"
-                          ? "all"
-                          : Number(e.target.value);
-                      setPredictionLine(value);
-                    }}
-                  >
-                    <option value="all">All lines</option>
-                    {lineOptions[predictionStat].map((line) => (
-                      <option key={line} value={line}>
-                        {line}+
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="form-select form-select-sm"
-                    value={predictionSort}
-                    onChange={(e) =>
-                      setPredictionSort(
-                        e.target.value as
-                          | "pred_value_desc"
-                          | "pred_value_asc"
-                          | "confidence_desc"
-                      )
-                    }
-                  >
-                    <option value="pred_value_desc">Value (High &gt;&gt; Low)</option>
-                    <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
-                    <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
-                  </select>
-                  <select
-                    className="form-select form-select-sm"
-                    value={underRiskSort}
-                    onChange={(e) =>
-                      setUnderRiskSort(
-                        e.target.value as "none" | "under_risk_desc" | "under_risk_asc"
-                      )
-                    }
-                  >
-                    <option value="none">Under Risk (None)</option>
-                    <option value="under_risk_desc">Under Risk (High &gt;&gt; Low)</option>
-                    <option value="under_risk_asc">Under Risk (Low &gt;&gt; High)</option>
-                  </select>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Day</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionDay}
+                      aria-label="Prediction day"
+                      onChange={(e) =>
+                        setPredictionDay(
+                          e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                        )
+                      }
+                    >
+                      {dayOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Line</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionLine}
+                      aria-label="Prediction line filter"
+                      onChange={(e) => {
+                        const value =
+                          e.target.value === "all"
+                            ? "all"
+                            : Number(e.target.value);
+                        setPredictionLine(value);
+                      }}
+                    >
+                      <option value="all">All lines</option>
+                      {lineOptions[predictionStat].map((line) => (
+                        <option key={line} value={line}>
+                          {line}+
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Sort</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionSort}
+                      aria-label="Prediction sort order"
+                      onChange={(e) =>
+                        setPredictionSort(
+                          e.target.value as
+                            | "pred_value_desc"
+                            | "pred_value_asc"
+                            | "confidence_desc"
+                        )
+                      }
+                    >
+                      <option value="pred_value_desc">Value (High &gt;&gt; Low)</option>
+                      <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
+                      <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
+                    </select>
+                  </label>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Under Risk</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={underRiskSort}
+                      aria-label="Under risk sort order"
+                      onChange={(e) =>
+                        setUnderRiskSort(
+                          e.target.value as "none" | "under_risk_desc" | "under_risk_asc"
+                        )
+                      }
+                    >
+                      <option value="none">None</option>
+                      <option value="under_risk_desc">High &gt;&gt; Low</option>
+                      <option value="under_risk_asc">Low &gt;&gt; High</option>
+                    </select>
+                  </label>
                 </div>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
@@ -1813,6 +1996,7 @@ function App() {
                   statLabel={activePrediction.label}
                   unitLabel={activePrediction.unit}
                   statKey={predictionStat}
+                  formatGameDate={formatSlateDateForRegion}
                 />
             )}
           </div>
@@ -1860,10 +2044,11 @@ function App() {
                       )
                     }
                   >
-                    <option value="auto">Auto (ET)</option>
-                    <option value="today">Today (ET)</option>
-                    <option value="tomorrow">Tomorrow (ET)</option>
-                    <option value="yesterday">Yesterday (ET)</option>
+                    {dayOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <button
@@ -1987,10 +2172,11 @@ function App() {
                       )
                     }
                   >
-                    <option value="auto">Auto (ET)</option>
-                    <option value="today">Today (ET)</option>
-                    <option value="tomorrow">Tomorrow (ET)</option>
-                    <option value="yesterday">Yesterday (ET)</option>
+                    {dayOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                   <select
                     className="form-select form-select-sm"
@@ -2090,6 +2276,7 @@ function App() {
                     const pb = b.first_basket_prob ?? 0;
                     return firstBasketSort === "prob_asc" ? pa - pb : pb - pa;
                   })}
+                  userRegion={userRegion}
                 />
               </>
             )}
@@ -2100,21 +2287,32 @@ function App() {
     }
   };
 
-  const jumpToTab = (tab: TabKey, loader?: () => void) => {
-    setActiveTab(tab);
-    if (loader) loader();
-  };
-
   return (
     <div className="app-shell min-vh-100">
       <header className="hero-header position-relative overflow-hidden">
         <div className="hero-glow"></div>
         <div className="container position-relative">
           <nav className="navbar navbar-expand-lg navbar-dark py-4 px-0">
-            <div className="brand-hero text-center mx-auto">
-              <img src={logo} alt="Gamblr logo" className="brand-logo brand-logo-xl mb-2" />
-              <h2 className="mb-1 text-white brand-title">Gamblr</h2>
-              <span className="text-sm text-white opacity-8">NBA Analytics Hub</span>
+            <div className="brand-hero brand-hero-left">
+              <img src={logo} alt="Gamblr logo" className="brand-logo brand-logo-xl" />
+              <div className="brand-text-wrap">
+                <h2 className="mb-0 text-white brand-title">GAMBLR</h2>
+              </div>
+            </div>
+            <div className="ms-auto d-flex align-items-center gap-2">
+              <label className="text-xs text-white opacity-8 mb-0" htmlFor="region-select">
+                Region
+              </label>
+              <select
+                id="region-select"
+                className="form-select form-select-sm region-select"
+                value={userRegion}
+                onChange={(e) => setUserRegion(e.target.value as UserRegion)}
+              >
+                <option value="au">Australia</option>
+                <option value="us">USA</option>
+                <option value="uk">England</option>
+              </select>
             </div>
           </nav>
 
@@ -2122,11 +2320,15 @@ function App() {
             <div className="col-lg-10 col-xl-8">
               <div className="hero-copy">
                 <h1 className="display-4 text-white mb-3">
-                  Investing, not gambling.
+                  Data Over Luck.
                 </h1>
                 <p className="lead text-white opacity-8 mb-4">
-                  Model-backed reads for points, assists, rebounds and threes. Scan fast, pick smart,
-                  and move to your card with confidence.
+                  I built this to make NBA props easier to read: points, assists, rebounds,
+                  and threes in one place so you can make faster calls.
+                </p>
+                <p className="text-sm text-white opacity-8 mb-0">
+                  This app runs on free-tier hosting, so the first load can take
+                  around 30-60 seconds while services wake up.
                 </p>
               </div>
             </div>
@@ -2140,12 +2342,9 @@ function App() {
             <div className="col-lg-8">
               <div className="section-card mb-4">
                 <div className="section-header d-flex flex-wrap align-items-center justify-content-between">
-                  <div>
+               
                     <h3 className="mb-1">Performance Hub</h3>
-                    <p className="text-sm text-secondary mb-0">
-                      Filtered views of league leaders and market context.
-                    </p>
-                  </div>
+                    
                   <div className="d-flex flex-wrap gap-2"></div>
                 </div>
                 <div className="nav-wrapper position-relative mt-4">
@@ -2247,53 +2446,66 @@ function App() {
             <div className="col-lg-4">
               <div className="card shadow-lg border-radius-xl mb-4">
                 <div className="card-header pb-0">
-                  <h5 className="mb-0">Quick Actions</h5>
+                  <h5 className="mb-0">Backend Status</h5>
                 </div>
                 <div className="card-body">
-                  <button
-                    className="btn btn-sm bg-gradient-primary w-100 mb-3"
-                    onClick={handleLoadTopScorers}
-                  >
-                    Refresh Top Scorers
-                  </button>
-                  <button
-                    className="btn btn-sm btn-outline-dark w-100 mb-3"
-                    onClick={handleLoadProps}
-                  >
-                    Fetch Player Props
-                  </button>
-                  <button
-                    className="btn btn-sm btn-outline-dark w-100 mb-3"
-                    onClick={() => jumpToTab("best_bets", handleSyncAndLoadBestBets)}
-                  >
-                    Build Best Bets
-                  </button>
+                  <div className="status-row mb-2">
+                    <span className="text-sm text-secondary">Status</span>
+                    <span
+                      className={`badge badge-sm ${
+                        backendHealth === "up"
+                          ? "bg-gradient-success"
+                          : backendHealth === "down"
+                            ? "bg-gradient-warning"
+                            : "bg-gradient-info"
+                      }`}
+                    >
+                      {backendHealth === "up"
+                        ? "Online"
+                        : backendHealth === "down"
+                          ? "Sleeping / Down"
+                          : "Checking..."}
+                    </span>
+                  </div>
+                  {backendCheckedAt && (
+                    <p className="text-xs text-secondary mb-2">
+                      Last checked: {formatTimeByRegion(backendCheckedAt)}
+                    </p>
+                  )}
+                  {backendError && (
+                    <p className="text-xs text-warning mb-3">
+                      {backendError}
+                    </p>
+                  )}
+                  <p className="text-xs text-secondary mb-3">
+                    Free-tier backend may sleep. First request can take 30-60s while it wakes up.
+                  </p>
                   <button
                     className="btn btn-sm btn-outline-dark w-100"
                     onClick={() => {
-                      void handleLoadPredictions();
+                      void checkBackendHealth();
                     }}
                   >
-                    Update Predictions
+                    Check Backend Now
                   </button>
                 </div>
               </div>
               <div className="card shadow-lg border-radius-xl mb-4">
                 <div className="card-header pb-0">
-                  <h5 className="mb-0">Model Notes</h5>
+                  <h5 className="mb-0">How to Read This</h5>
                 </div>
                 <div className="card-body">
                   <p className="text-sm text-secondary mb-2">
-                    Confidence is direction, not certainty. Prioritize edges where model confidence,
-                    line value, and role stability align.
+                    Confidence is just a guide, not a guarantee. I usually trust picks more
+                    when confidence, line value, and player role all point the same way.
                   </p>
                   <p className="text-sm text-secondary mb-3">
-                    Recheck projections after lineup/injury updates and before lock. Volatile minutes
-                    are the fastest way to break a good read.
+                    Always recheck after lineup or injury news before lock. Minutes can change
+                    quickly and that is usually what breaks a good pick.
                   </p>
                   <div className="d-flex align-items-center justify-content-between">
-                    <span className="text-sm text-secondary">Refresh cadence</span>
-                    <span className="badge badge-sm bg-gradient-info">Every 5 min</span>
+                    <span className="text-sm text-secondary">Data refresh</span>
+                    <span className="badge badge-sm bg-gradient-info">Every Night at 12:00 AM</span>
                   </div>
                 </div>
               </div>

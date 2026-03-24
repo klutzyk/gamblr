@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.db.url_utils import to_sync_db_url
 from app.db.session import get_db
 from app.models.bookmaker import Bookmaker
 from app.models.event import Event
@@ -21,7 +22,7 @@ from ml.predict import predict_assists, predict_points, predict_rebounds
 from ml.under_side_model import load_latest_under_side_model, predict_under_probability
 
 router = APIRouter()
-sync_engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
+sync_engine = create_engine(to_sync_db_url(settings.DATABASE_URL))
 
 MARKET_TO_STATS = {
     "player_points": ("points",),

@@ -22,10 +22,12 @@ def _target_et_date_for_day(day: str):
     else:
         base_date = datetime.now().date()
     if day == "today":
-        return base_date - timedelta(days=1)
-    if day == "tomorrow":
         return base_date
+    if day == "tomorrow":
+        return base_date + timedelta(days=1)
     if day == "yesterday":
+        return base_date - timedelta(days=1)
+    if day == "two_days_ago":
         return base_date - timedelta(days=2)
     return base_date
 
@@ -42,13 +44,13 @@ def _rotowire_day_for_prediction_day(day: str) -> str | None:
             target_date = base_date if aus_hour >= 17 else base_date - timedelta(days=1)
         else:
             target_date = base_date
-    elif day in {"today", "tomorrow", "yesterday"}:
+    elif day in {"today", "tomorrow", "yesterday", "two_days_ago"}:
         target_date = _target_et_date_for_day(day)
     else:
         target_date = base_date
 
     diff_days = (target_date - base_date).days
-    if diff_days == -1:
+    if diff_days <= -1:
         return "yesterday"
     if diff_days == 0:
         return "today"

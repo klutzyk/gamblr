@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import create_engine
 from app.core.config import settings
+from app.db.url_utils import to_sync_db_url
 import sys
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from ml.under_side_model import train_under_side_model
 
 router = APIRouter()
 
-sync_engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
+sync_engine = create_engine(to_sync_db_url(settings.DATABASE_URL))
 
 
 @router.post("/train/points")
