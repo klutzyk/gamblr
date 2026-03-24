@@ -346,6 +346,12 @@ export function getOddsEventProps(
 const PREDICTIONS_TTL = 5 * 60 * 1000;
 
 type PredictionResponsePayload = PredictionRow[] | { data?: PredictionRow[] };
+export type PredictionDayParam =
+  | "today"
+  | "tomorrow"
+  | "yesterday"
+  | "two_days_ago"
+  | "auto";
 
 function normalizePredictionRows(payload: PredictionResponsePayload): PredictionRow[] {
   if (Array.isArray(payload)) {
@@ -358,7 +364,7 @@ function normalizePredictionRows(payload: PredictionResponsePayload): Prediction
 }
 
 export function getPointsPredictions(
-  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
+  day: PredictionDayParam = "auto"
 ): Promise<PredictionRow[]> {
   return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/points",
@@ -368,7 +374,7 @@ export function getPointsPredictions(
 }
 
 export function getAssistsPredictions(
-  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
+  day: PredictionDayParam = "auto"
 ): Promise<PredictionRow[]> {
   return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/assists",
@@ -378,7 +384,7 @@ export function getAssistsPredictions(
 }
 
 export function getReboundsPredictions(
-  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
+  day: PredictionDayParam = "auto"
 ): Promise<PredictionRow[]> {
   return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/rebounds",
@@ -388,7 +394,7 @@ export function getReboundsPredictions(
 }
 
 export function getThreeptPredictions(
-  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
+  day: PredictionDayParam = "auto"
 ): Promise<PredictionRow[]> {
   return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/threept",
@@ -398,7 +404,7 @@ export function getThreeptPredictions(
 }
 
 export function getThreepaPredictions(
-  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto"
+  day: PredictionDayParam = "auto"
 ): Promise<PredictionRow[]> {
   return fetchWithCache<PredictionResponsePayload>(
     "/players/predictions/threepa",
@@ -408,7 +414,7 @@ export function getThreepaPredictions(
 }
 
 export function getFirstBasketPredictions(
-  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto",
+  day: PredictionDayParam = "auto",
   top_n_per_game = 6
 ): Promise<FirstBasketPredictionRow[]> {
   const url = new URL("/players/predictions/first_basket", API_BASE);
@@ -452,7 +458,7 @@ function normalizeDoubleTripleRows(
 }
 
 export function getDoublesPredictions(
-  day: "today" | "tomorrow" | "yesterday" | "auto" = "auto",
+  day: PredictionDayParam = "auto",
   top_n = 30
 ): Promise<DoubleTriplePredictionRow[]> {
   return fetchWithCache<DoubleTripleResponsePayload>(
@@ -482,7 +488,7 @@ export function getBestBets(
     leg_mode?: "exact" | "up_to";
     max_legs?: number;
     bookmaker?: string;
-    day?: "today" | "tomorrow" | "yesterday" | "auto";
+    day?: PredictionDayParam;
     include_combos?: boolean;
     event_ids?: string;
     min_confidence?: number;

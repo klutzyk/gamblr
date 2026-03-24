@@ -379,11 +379,11 @@ def recent_performers(season: str = "2025-26", last_n_games: int = 5, top_n: int
 ## Predivtion routes
 @router.get("/predictions/points")
 async def predict_points_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
 ):
     """
     Predict player points for NBA games.
-    day = today | tomorrow | yesterday
+    day = today | tomorrow | yesterday | two_days_ago
     """
     lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
     expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
@@ -443,11 +443,11 @@ async def predict_points_api(
 
 @router.get("/predictions/assists")
 async def predict_assists_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
 ):
     """
     Predict player assists for NBA games.
-    day = today | tomorrow | yesterday
+    day = today | tomorrow | yesterday | two_days_ago
     """
     lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
     expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
@@ -507,11 +507,11 @@ async def predict_assists_api(
 
 @router.get("/predictions/rebounds")
 async def predict_rebounds_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
 ):
     """
     Predict player rebounds for NBA games.
-    day = today | tomorrow | yesterday
+    day = today | tomorrow | yesterday | two_days_ago
     """
     lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
     expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
@@ -571,11 +571,11 @@ async def predict_rebounds_api(
 
 @router.get("/predictions/threept")
 async def predict_threept_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
 ):
     """
     Predict player made 3-pointers for NBA games.
-    day = today | tomorrow | yesterday
+    day = today | tomorrow | yesterday | two_days_ago
     """
     lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
     expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
@@ -635,11 +635,11 @@ async def predict_threept_api(
 
 @router.get("/predictions/threepa")
 async def predict_threepa_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
 ):
     """
     Predict player 3-point attempts for NBA games.
-    day = today | tomorrow | yesterday
+    day = today | tomorrow | yesterday | two_days_ago
     """
     lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
     expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
@@ -699,7 +699,7 @@ async def predict_threepa_api(
 
 @router.get("/predictions/doubles")
 async def predict_doubles_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
     top_n: int = Query(30, ge=1, le=200),
 ):
     """
@@ -1017,13 +1017,13 @@ def _rotowire_day_for_prediction_day(day: str) -> str | None:
             target_date = base_date if aus_hour >= 17 else base_date - timedelta(days=1)
         else:
             target_date = base_date
-    elif day in {"today", "tomorrow", "yesterday"}:
+    elif day in {"today", "tomorrow", "yesterday", "two_days_ago"}:
         target_date = _target_et_date_for_day(day)
     else:
         target_date = base_date
 
     diff_days = (target_date - base_date).days
-    if diff_days == -1:
+    if diff_days <= -1:
         return "yesterday"
     if diff_days == 0:
         return "today"
@@ -1319,6 +1319,8 @@ def _target_et_date_for_day(day: str):
         return base_date + timedelta(days=1)
     if day == "yesterday":
         return base_date - timedelta(days=1)
+    if day == "two_days_ago":
+        return base_date - timedelta(days=2)
     return base_date
 
 
@@ -1453,13 +1455,13 @@ def build_inferred_lineups_from_schedule(engine, day: str):
 
 @router.get("/predictions/first_basket")
 async def predict_first_basket_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
     top_n_per_game: int = Query(6, ge=1, le=10),
 ):
     """
     Generate first-basket probabilities using projected starters and point projections.
     """
-    rotowire_day = day if day in {"today", "tomorrow", "yesterday"} else None
+    rotowire_day = _rotowire_day_for_prediction_day(day)
     raw_lineups = await run_in_threadpool(rotowire_lineups_client.fetch_lineups, rotowire_day)
     lineups = await run_in_threadpool(lineup_resolver.enrich_rotowire_payload, raw_lineups)
     lineups = await run_in_threadpool(attach_schedule_metadata, lineups)

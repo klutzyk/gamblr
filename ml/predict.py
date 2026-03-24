@@ -141,6 +141,8 @@ def _predict_stat(
         target_date = base_date + timedelta(days=1)
     elif day == "yesterday":
         target_date = base_date - timedelta(days=1)
+    elif day == "two_days_ago":
+        target_date = base_date - timedelta(days=2)
     elif day == "auto":
         # If it's afternoon/evening in Australia, switch to NBA "tomorrow" (ET)
         if ZoneInfo:
@@ -149,7 +151,7 @@ def _predict_stat(
         else:
             target_date = base_date
     else:
-        raise ValueError("day must be one of: today, tomorrow, yesterday, auto")
+        raise ValueError("day must be one of: today, tomorrow, yesterday, two_days_ago, auto")
 
     target_date = pd.to_datetime(target_date)
     target_date_only = target_date.date()

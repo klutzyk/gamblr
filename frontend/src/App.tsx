@@ -26,6 +26,7 @@ import {
   type FirstBasketPredictionRow,
   type DoubleTriplePredictionRow,
   type BestBetsResponse,
+  type PredictionDayParam,
 } from "./api";
 
 type NormalizedPropRow = {
@@ -655,6 +656,59 @@ function App() {
     { value: "yesterday", label: `Yesterday ${dayLabelSuffix}` },
   ];
 
+  const toUtcMidnightMs = (parts: { year: number; month: number; day: number }) =>
+    Date.UTC(parts.year, parts.month - 1, parts.day);
+
+  const getDatePartsInTz = (date: Date, timeZone: string) => {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = formatter.formatToParts(date);
+    const year = Number(parts.find((p) => p.type === "year")?.value);
+    const month = Number(parts.find((p) => p.type === "month")?.value);
+    const day = Number(parts.find((p) => p.type === "day")?.value);
+    return { year, month, day };
+  };
+
+  const mapDayToEtForApi = (
+    selectedDay: "today" | "tomorrow" | "yesterday" | "auto"
+  ): PredictionDayParam => {
+    if (selectedDay === "auto") return "auto";
+
+    // AU users are always ahead of ET by one calendar day in this app context.
+    // Use explicit mapping to avoid timezone/runtime edge cases.
+    if (userRegion === "au") {
+      if (selectedDay === "yesterday") return "two_days_ago";
+      if (selectedDay === "today") return "yesterday";
+      return "today";
+    }
+
+    const selectedOffset: Record<"today" | "tomorrow" | "yesterday", number> = {
+      yesterday: -1,
+      today: 0,
+      tomorrow: 1,
+    };
+
+    const now = new Date();
+    const etToday = getDatePartsInTz(now, "America/New_York");
+    const userToday = getDatePartsInTz(now, regionConfig.timeZone);
+    const userEtDeltaDays = Math.round(
+      (toUtcMidnightMs(userToday) - toUtcMidnightMs(etToday)) / (24 * 60 * 60 * 1000)
+    );
+    const etOffset = selectedOffset[selectedDay] - userEtDeltaDays;
+
+    if (etOffset <= -2) return "two_days_ago";
+    if (etOffset === -1) return "yesterday";
+    if (etOffset === 0) return "today";
+    if (etOffset >= 1) return "tomorrow";
+    return "auto";
+  };
+
+  const predictionApiDay = mapDayToEtForApi(predictionDay);
+
   const formatDateByRegion = (value: string | Date | number) =>
     new Date(value).toLocaleDateString(regionConfig.locale, {
       timeZone: regionConfig.timeZone,
@@ -785,35 +839,35 @@ function App() {
       unit: "pts",
       state: pointsPredictionsState,
       setState: setPointsPredictionsState,
-      loader: () => getPointsPredictions(predictionDay),
+      loader: () => getPointsPredictions(predictionApiDay),
     },
     assists: {
       label: "Assists",
       unit: "ast",
       state: assistsPredictionsState,
       setState: setAssistsPredictionsState,
-      loader: () => getAssistsPredictions(predictionDay),
+      loader: () => getAssistsPredictions(predictionApiDay),
     },
     rebounds: {
       label: "Rebounds",
       unit: "reb",
       state: reboundsPredictionsState,
       setState: setReboundsPredictionsState,
-      loader: () => getReboundsPredictions(predictionDay),
+      loader: () => getReboundsPredictions(predictionApiDay),
     },
     threept: {
       label: "3PT Made",
       unit: "3PM",
       state: threeptPredictionsState,
       setState: setThreeptPredictionsState,
-      loader: () => getThreeptPredictions(predictionDay),
+      loader: () => getThreeptPredictions(predictionApiDay),
     },
     threepa: {
       label: "3PT Attempts",
       unit: "3PA",
       state: threepaPredictionsState,
       setState: setThreepaPredictionsState,
-      loader: () => getThreepaPredictions(predictionDay),
+      loader: () => getThreepaPredictions(predictionApiDay),
     },
   };
 
@@ -948,7 +1002,7 @@ function App() {
     safeLoad(
       firstBasketPredictionsState,
       setFirstBasketPredictionsState,
-      () => getFirstBasketPredictions(predictionDay, 6),
+      () => getFirstBasketPredictions(predictionApiDay, 6),
       5 * 60 * 1000,
       force
     );
@@ -957,7 +1011,7 @@ function App() {
     safeLoad(
       doubleTripleState,
       setDoubleTripleState,
-      () => getDoublesPredictions(predictionDay, 40),
+      () => getDoublesPredictions(predictionApiDay, 40),
       5 * 60 * 1000,
       force
     );
@@ -983,7 +1037,7 @@ function App() {
 
   useEffect(() => {
     handleLoadPredictions(true);
-  }, [predictionDay, predictionStat]);
+  }, [predictionApiDay, predictionStat]);
 
   useEffect(() => {
     if (activeTab === "first_basket") {
@@ -992,7 +1046,7 @@ function App() {
     if (activeTab === "double_triple") {
       void handleLoadDoubleTriple(true);
     }
-  }, [activeTab, predictionDay]);
+  }, [activeTab, predictionApiDay]);
 
   useEffect(() => {
     const defaults: Record<typeof predictionStat, number> = {
