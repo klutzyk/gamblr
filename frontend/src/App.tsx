@@ -97,9 +97,13 @@ function formatNumber(value: unknown, digits = 1): string {
   return value.toFixed(digits);
 }
 
-function getPlayerStatsSearchUrl(playerName: string): string {
+function getPlayerStatsSearchUrl(playerName: string | null | undefined): string {
+  const safeName =
+    typeof playerName === "string" && playerName.trim().length > 0
+      ? playerName.trim()
+      : "NBA player";
   const url = new URL("https://www.google.com/search");
-  url.searchParams.set("q", `${playerName} stats`);
+  url.searchParams.set("q", `${safeName} stats`);
   return url.toString();
 }
 
@@ -251,14 +255,14 @@ function PredictionsGrid({
     );
   }
 
-  const getInitials = (name: string) =>
-    name
+  const getInitials = (name: string | null | undefined) =>
+    (name ?? "")
       .split(" ")
       .filter(Boolean)
       .slice(0, 2)
       .map((part) => part[0])
       .join("")
-      .toUpperCase();
+      .toUpperCase() || "NA";
 
   const getHeadshotUrl = (
     playerId: number,

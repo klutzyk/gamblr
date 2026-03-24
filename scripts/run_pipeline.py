@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 import time
+from typing import Optional
 
 import httpx
 from sqlalchemy import create_engine
@@ -17,6 +18,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 sys.path.insert(0, str(ML_DIR))
 
 from app.core.config import settings  # noqa: E402
+from app.db.url_utils import to_sync_db_url  # noqa: E402
 from update_rolling import update_rolling_stats  # noqa: E402
 
 
@@ -54,7 +56,7 @@ def call_api(
     method: str,
     path: str,
     params: dict | None = None,
-    timeout_seconds: int = 600,
+    timeout_seconds: Optional[float] = None,
 ):
     print(f"-> {method} {path} {params or ''}".strip())
     response = client.request(method, path, params=params, timeout=timeout_seconds)
@@ -69,7 +71,7 @@ def call_api_with_retry(
     method: str,
     path: str,
     params: dict | None = None,
-    timeout_seconds: int = 600,
+    timeout_seconds: Optional[float] = None,
     retries: int = 3,
     retry_sleep: int = 5,
 ):
@@ -116,14 +118,21 @@ def parse_args():
         action="store_true",
         help="Skip /ml/train/all and reuse existing model files.",
     )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=0,
+        help="HTTP timeout for pipeline API calls in seconds. Use 0 for unlimited (default).",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    request_timeout: Optional[float] = None if args.timeout_seconds <= 0 else args.timeout_seconds
     print("Gamblr pipeline runner")
     base_url = prompt("API base URL", "http://127.0.0.1:8000")
-    engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
+    engine = create_engine(to_sync_db_url(settings.DATABASE_URL))
     last_ingest = get_last_ingest_date(engine)
     default_since = ""
     if last_ingest:
@@ -194,7 +203,7 @@ def main():
                         client,
                         "GET",
                         f"/db/jobs/{job_id}",
-                        timeout_seconds=120,
+                        timeout_seconds=request_timeout,
                         retries=5,
                         retry_sleep=6,
                     )
@@ -225,11 +234,12 @@ def main():
                 "POST",
                 "/db/players/refresh-team-abbr",
                 {"fallback": str(refresh_player_fallback).lower()},
+                timeout_seconds=request_timeout,
             )
 
         if update_actuals:
             print("Updating prediction actuals...")
-            call_api(client, "POST", "/ml/evaluate/all")
+            call_api(client, "POST", "/ml/evaluate/all", timeout_seconds=request_timeout)
 
     print("Updating rolling features CSV...")
     update_rolling_stats(engine)
@@ -238,11 +248,11 @@ def main():
     with httpx.Client(base_url=base_url) as client:
         if recalc_under_risk:
             print("Recalculating under-risk metrics...")
-            call_api(client, "POST", "/db/under-risk/recalc-all")
+            call_api(client, "POST", "/db/under-risk/recalc-all", timeout_seconds=request_timeout)
 
         if run_training:
             print("Training models...")
-            call_api(client, "POST", "/ml/train/all")
+            call_api(client, "POST", "/ml/train/all", timeout_seconds=request_timeout)
         else:
             print("Skipping model training. Reusing existing model artifacts.")
 
@@ -254,6 +264,7 @@ def main():
                     "POST",
                     f"/ml/backtest/walkforward/{stat}",
                     {"reset": "false"},
+                    timeout_seconds=request_timeout,
                 )
 
     print("Pipeline complete.")
