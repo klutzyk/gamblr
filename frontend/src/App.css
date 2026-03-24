@@ -595,9 +595,28 @@
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem;
+  padding: 0.3rem;
   border-radius: 999px;
   background: rgba(16, 29, 26, 0.06);
+}
+
+.prediction-select-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0.2rem 0.25rem 0.25rem;
+  border-radius: 999px;
+}
+
+.prediction-select-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--brand-muted);
+  padding-left: 0.45rem;
+  line-height: 1;
 }
 
 .prediction-select-group .form-select {
@@ -607,6 +626,12 @@
   font-size: 0.75rem;
   font-weight: 600;
   padding: 0.35rem 1.8rem 0.35rem 0.7rem;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .team-chip {
@@ -841,5 +866,15 @@
     min-width: 0;
     border-radius: 0.75rem;
     padding: 0.5rem 2rem 0.5rem 0.75rem;
+  }
+
+  .prediction-select-label {
+    padding-left: 0.2rem;
+  }
+
+  .prediction-select-field {
+    padding: 0;
+    background: transparent;
+    border: none;
   }
 }

@@ -18,6 +18,7 @@ import {
   getDoublesPredictions,
   getBestBets,
   syncPlayerPropsWindow,
+  getApiHealth,
   type PlayerRow,
   type OddsEvent,
   type OddsEventPropsResponse,
@@ -602,6 +603,11 @@ function App() {
   const [selectedBestBetEventIds, setSelectedBestBetEventIds] = useState<string[]>([]);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const [isSyncingBestBets, setIsSyncingBestBets] = useState(false);
+  const [backendHealth, setBackendHealth] = useState<
+    "checking" | "up" | "down"
+  >("checking");
+  const [backendCheckedAt, setBackendCheckedAt] = useState<number | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -867,6 +873,25 @@ function App() {
       force
     );
 
+  const checkBackendHealth = async () => {
+    setBackendHealth("checking");
+    try {
+      await getApiHealth();
+      setBackendHealth("up");
+      setBackendError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Health check failed";
+      setBackendHealth("down");
+      setBackendError(
+        message.includes("status")
+          ? "Could not reach the backend right now."
+          : "Backend is sleeping or temporarily unavailable."
+      );
+    } finally {
+      setBackendCheckedAt(Date.now());
+    }
+  };
+
   useEffect(() => {
     handleLoadPredictions(true);
   }, [predictionDay, predictionStat]);
@@ -911,6 +936,14 @@ function App() {
     const validIds = new Set(eventsState.data.map((e) => e.id));
     setSelectedBestBetEventIds((prev) => prev.filter((id) => validIds.has(id)));
   }, [eventsState.data]);
+
+  useEffect(() => {
+    void checkBackendHealth();
+    const interval = setInterval(() => {
+      void checkBackendHealth();
+    }, 45_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -1643,67 +1676,83 @@ function App() {
                   ))}
                 </div>
                 <div className="prediction-select-group">
-                  <select
-                    className="form-select form-select-sm"
-                    value={predictionDay}
-                    onChange={(e) =>
-                      setPredictionDay(
-                        e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
-                      )
-                    }
-                  >
-                    <option value="auto">Auto (ET)</option>
-                    <option value="today">Today (ET)</option>
-                    <option value="tomorrow">Tomorrow (ET)</option>
-                    <option value="yesterday">Yesterday (ET)</option>
-                  </select>
-                  <select
-                    className="form-select form-select-sm"
-                    value={predictionLine}
-                    onChange={(e) => {
-                      const value =
-                        e.target.value === "all"
-                          ? "all"
-                          : Number(e.target.value);
-                      setPredictionLine(value);
-                    }}
-                  >
-                    <option value="all">All lines</option>
-                    {lineOptions[predictionStat].map((line) => (
-                      <option key={line} value={line}>
-                        {line}+
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="form-select form-select-sm"
-                    value={predictionSort}
-                    onChange={(e) =>
-                      setPredictionSort(
-                        e.target.value as
-                          | "pred_value_desc"
-                          | "pred_value_asc"
-                          | "confidence_desc"
-                      )
-                    }
-                  >
-                    <option value="pred_value_desc">Value (High &gt;&gt; Low)</option>
-                    <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
-                    <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
-                  </select>
-                  <select
-                    className="form-select form-select-sm"
-                    value={underRiskSort}
-                    onChange={(e) =>
-                      setUnderRiskSort(
-                        e.target.value as "none" | "under_risk_desc" | "under_risk_asc"
-                      )
-                    }
-                  >
-                    <option value="none">Under Risk (None)</option>
-                    <option value="under_risk_desc">Under Risk (High &gt;&gt; Low)</option>
-                    <option value="under_risk_asc">Under Risk (Low &gt;&gt; High)</option>
-                  </select>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Day</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionDay}
+                      aria-label="Prediction day"
+                      onChange={(e) =>
+                        setPredictionDay(
+                          e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                        )
+                      }
+                    >
+                      <option value="auto">Auto (ET)</option>
+                      <option value="today">Today (ET)</option>
+                      <option value="tomorrow">Tomorrow (ET)</option>
+                      <option value="yesterday">Yesterday (ET)</option>
+                    </select>
+                  </label>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Line</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionLine}
+                      aria-label="Prediction line filter"
+                      onChange={(e) => {
+                        const value =
+                          e.target.value === "all"
+                            ? "all"
+                            : Number(e.target.value);
+                        setPredictionLine(value);
+                      }}
+                    >
+                      <option value="all">All lines</option>
+                      {lineOptions[predictionStat].map((line) => (
+                        <option key={line} value={line}>
+                          {line}+
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Sort</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionSort}
+                      aria-label="Prediction sort order"
+                      onChange={(e) =>
+                        setPredictionSort(
+                          e.target.value as
+                            | "pred_value_desc"
+                            | "pred_value_asc"
+                            | "confidence_desc"
+                        )
+                      }
+                    >
+                      <option value="pred_value_desc">Value (High &gt;&gt; Low)</option>
+                      <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
+                      <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
+                    </select>
+                  </label>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Under Risk</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={underRiskSort}
+                      aria-label="Under risk sort order"
+                      onChange={(e) =>
+                        setUnderRiskSort(
+                          e.target.value as "none" | "under_risk_desc" | "under_risk_asc"
+                        )
+                      }
+                    >
+                      <option value="none">None</option>
+                      <option value="under_risk_desc">High &gt;&gt; Low</option>
+                      <option value="under_risk_asc">Low &gt;&gt; High</option>
+                    </select>
+                  </label>
                 </div>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
@@ -2100,11 +2149,6 @@ function App() {
     }
   };
 
-  const jumpToTab = (tab: TabKey, loader?: () => void) => {
-    setActiveTab(tab);
-    if (loader) loader();
-  };
-
   return (
     <div className="app-shell min-vh-100">
       <header className="hero-header position-relative overflow-hidden">
@@ -2249,34 +2293,47 @@ function App() {
             <div className="col-lg-4">
               <div className="card shadow-lg border-radius-xl mb-4">
                 <div className="card-header pb-0">
-                  <h5 className="mb-0">Quick Actions</h5>
+                  <h5 className="mb-0">Backend Status</h5>
                 </div>
                 <div className="card-body">
-                  <button
-                    className="btn btn-sm bg-gradient-primary w-100 mb-3"
-                    onClick={handleLoadTopScorers}
-                  >
-                    Refresh Top Scorers
-                  </button>
-                  <button
-                    className="btn btn-sm btn-outline-dark w-100 mb-3"
-                    onClick={handleLoadProps}
-                  >
-                    Fetch Player Props
-                  </button>
-                  <button
-                    className="btn btn-sm btn-outline-dark w-100 mb-3"
-                    onClick={() => jumpToTab("best_bets", handleSyncAndLoadBestBets)}
-                  >
-                    Build Best Bets
-                  </button>
+                  <div className="status-row mb-2">
+                    <span className="text-sm text-secondary">API</span>
+                    <span
+                      className={`badge badge-sm ${
+                        backendHealth === "up"
+                          ? "bg-gradient-success"
+                          : backendHealth === "down"
+                            ? "bg-gradient-warning"
+                            : "bg-gradient-info"
+                      }`}
+                    >
+                      {backendHealth === "up"
+                        ? "Online"
+                        : backendHealth === "down"
+                          ? "Sleeping / Down"
+                          : "Checking..."}
+                    </span>
+                  </div>
+                  {backendCheckedAt && (
+                    <p className="text-xs text-secondary mb-2">
+                      Last checked: {new Date(backendCheckedAt).toLocaleTimeString()}
+                    </p>
+                  )}
+                  {backendError && (
+                    <p className="text-xs text-warning mb-3">
+                      {backendError}
+                    </p>
+                  )}
+                  <p className="text-xs text-secondary mb-3">
+                    Free-tier backend may sleep. First request can take 30-60s while it wakes up.
+                  </p>
                   <button
                     className="btn btn-sm btn-outline-dark w-100"
                     onClick={() => {
-                      void handleLoadPredictions();
+                      void checkBackendHealth();
                     }}
                   >
-                    Update Predictions
+                    Check Backend Now
                   </button>
                 </div>
               </div>

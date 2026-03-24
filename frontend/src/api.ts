@@ -426,6 +426,15 @@ export function getFirstBasketPredictions(
     .then((payload) => payload.data ?? []);
 }
 
+export async function getApiHealth(): Promise<{ message?: string }> {
+  const url = new URL("/", API_BASE);
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    throw new Error(`Health check failed (${res.status})`);
+  }
+  return (await res.json()) as { message?: string };
+}
+
 type DoubleTripleResponsePayload =
   | DoubleTriplePredictionRow[]
   | { data?: DoubleTriplePredictionRow[] };
