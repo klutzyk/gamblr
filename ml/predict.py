@@ -136,11 +136,11 @@ def _predict_stat(
         base_date = datetime.now().date()
 
     if day == "today":
-        target_date = base_date - timedelta(days=1)
-    elif day == "tomorrow":
         target_date = base_date
+    elif day == "tomorrow":
+        target_date = base_date + timedelta(days=1)
     elif day == "yesterday":
-        target_date = base_date - timedelta(days=2)
+        target_date = base_date - timedelta(days=1)
     elif day == "auto":
         # If it's afternoon/evening in Australia, switch to NBA "tomorrow" (ET)
         if ZoneInfo:

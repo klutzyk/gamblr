@@ -215,6 +215,27 @@
   align-items: flex-start;
 }
 
+.region-select {
+  color: #ffffff !important;
+  color-scheme: dark;
+}
+
+.region-select option {
+  background-color: #07141b;
+  color: #ffffff;
+}
+
+.region-select option:checked,
+.region-select option:hover {
+  background-color: #123041;
+  color: #ffffff;
+}
+
+.region-select:focus {
+  border-color: rgba(106, 223, 79, 0.95) !important;
+  box-shadow: 0 0 0 0.18rem rgba(106, 223, 79, 0.35) !important;
+}
+
 .hero-slogan {
   font-family: "Overlock SC", "Space Grotesk", serif;
   text-transform: uppercase;

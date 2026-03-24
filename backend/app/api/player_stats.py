@@ -1314,11 +1314,11 @@ def _target_et_date_for_day(day: str):
     else:
         base_date = datetime.now().date()
     if day == "today":
-        return base_date - timedelta(days=1)
-    if day == "tomorrow":
         return base_date
+    if day == "tomorrow":
+        return base_date + timedelta(days=1)
     if day == "yesterday":
-        return base_date - timedelta(days=2)
+        return base_date - timedelta(days=1)
     return base_date
 
 

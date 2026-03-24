@@ -52,6 +52,32 @@ type TabKey =
   | "first_basket"
   | "double_triple";
 
+type UserRegion = "au" | "us" | "uk";
+
+const REGION_CONFIG: Record<
+  UserRegion,
+  { label: string; locale: string; timeZone: string; short: string }
+> = {
+  au: {
+    label: "Australia",
+    locale: "en-AU",
+    timeZone: "Australia/Sydney",
+    short: "AET",
+  },
+  us: {
+    label: "USA",
+    locale: "en-US",
+    timeZone: "America/New_York",
+    short: "ET",
+  },
+  uk: {
+    label: "England",
+    locale: "en-GB",
+    timeZone: "Europe/London",
+    short: "UK",
+  },
+};
+
 type ApiState<T> = {
   loading: boolean;
   error: string | null;
@@ -177,11 +203,13 @@ function PredictionsGrid({
   statLabel,
   unitLabel,
   statKey,
+  formatGameDate,
 }: {
   predictions: PredictionRow[];
   statLabel: string;
   unitLabel: string;
   statKey: "points" | "assists" | "rebounds" | "threept" | "threepa";
+  formatGameDate: (dateString: string) => string;
 }) {
   const TEAM_ID_BY_ABBR: Record<string, number> = {
     ATL: 1610612737,
@@ -222,15 +250,6 @@ function PredictionsGrid({
       </div>
     );
   }
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  };
 
   const getInitials = (name: string) =>
     name
@@ -362,7 +381,7 @@ function PredictionsGrid({
             </div>
             <div className="d-flex align-items-center">
               <i className="material-symbols-rounded text-secondary me-2">calendar_today</i>
-              <span className="text-sm text-secondary">{formatDate(pred.game_date)}</span>
+              <span className="text-sm text-secondary">{formatGameDate(pred.game_date)}</span>
             </div>
             <div className="prediction-stat-tag mt-3">
               <span className="badge badge-sm bg-gradient-info">{statLabel}</span>
@@ -430,7 +449,13 @@ function PredictionsGrid({
   );
 }
 
-function FirstBasketGrid({ rows }: { rows: FirstBasketPredictionRow[] }) {
+function FirstBasketGrid({
+  rows,
+  userRegion,
+}: {
+  rows: FirstBasketPredictionRow[];
+  userRegion: UserRegion;
+}) {
   if (!rows.length) {
     return (
       <div className="text-center py-5">
@@ -467,7 +492,11 @@ function FirstBasketGrid({ rows }: { rows: FirstBasketPredictionRow[] }) {
               </td>
               <td className="text-sm">{row.team_abbreviation}</td>
               <td className="text-sm">{row.matchup}</td>
-              <td className="text-sm">{row.tipoff_au ?? row.tipoff_et ?? "-"}</td>
+              <td className="text-sm">
+                {userRegion === "au"
+                  ? row.tipoff_au ?? row.tipoff_et ?? "-"
+                  : row.tipoff_et ?? row.tipoff_au ?? "-"}
+              </td>
               <td className="text-sm text-primary font-weight-bold">
                 {`${(row.first_basket_prob * 100).toFixed(1)}%`}
               </td>
@@ -544,6 +573,7 @@ function DoubleTripleGrid({ rows }: { rows: DoubleTriplePredictionRow[] }) {
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("predictions");
+  const [userRegion, setUserRegion] = useState<UserRegion>("au");
 
   const [topScorers, setTopScorers] =
     useState<ApiState<PlayerRow[]>>(initialState);
@@ -608,6 +638,62 @@ function App() {
   >("checking");
   const [backendCheckedAt, setBackendCheckedAt] = useState<number | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
+  const regionConfig = REGION_CONFIG[userRegion];
+  const dayLabelSuffix =
+    userRegion === "us" ? "(ET)" : `(${regionConfig.short})`;
+  const dayOptions: Array<{
+    value: "auto" | "today" | "tomorrow" | "yesterday";
+    label: string;
+  }> = [
+    { value: "auto", label: `Auto ${dayLabelSuffix}` },
+    { value: "today", label: `Today ${dayLabelSuffix}` },
+    { value: "tomorrow", label: `Tomorrow ${dayLabelSuffix}` },
+    { value: "yesterday", label: `Yesterday ${dayLabelSuffix}` },
+  ];
+
+  const formatDateByRegion = (value: string | Date | number) =>
+    new Date(value).toLocaleDateString(regionConfig.locale, {
+      timeZone: regionConfig.timeZone,
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+
+  const formatSlateDateForRegion = (value: string) => {
+    // `game_date` is an NBA slate date in ET (date-only).
+    // For AU/UK users, that slate usually lands on the next local calendar day.
+    const normalized = String(value).slice(0, 10);
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+    if (!match) return formatDateByRegion(value);
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    const baseUtc = new Date(Date.UTC(year, month, day));
+    const dayShift = userRegion === "us" ? 0 : 1;
+    baseUtc.setUTCDate(baseUtc.getUTCDate() + dayShift);
+    return baseUtc.toLocaleDateString(regionConfig.locale, {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  };
+
+  const formatDateTimeByRegion = (value: string | Date | number) =>
+    new Date(value).toLocaleString(regionConfig.locale, {
+      timeZone: regionConfig.timeZone,
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const formatTimeByRegion = (value: string | Date | number) =>
+    new Date(value).toLocaleTimeString(regionConfig.locale, {
+      timeZone: regionConfig.timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
   // Helper to avoid hammering the backend. Enforces a minimum interval between
   // network calls per section while keeping the UI logic simple.
@@ -775,11 +861,10 @@ function App() {
       const diffDays = Math.round(
         (parseKey(eventKey) - parseKey(nowKey)) / (24 * 60 * 60 * 1000)
       );
-      // The prediction API maps "today" -> ET date minus 1, and "tomorrow" -> ET date.
-      // Align selected event date to that mapping to avoid day mismatches.
-      if (diffDays === 0) return "tomorrow";
-      if (diffDays === -1) return "today";
-      if (diffDays === -2) return "yesterday";
+      // Align selected event date to ET day labels expected by prediction endpoints.
+      if (diffDays === 0) return "today";
+      if (diffDays === 1) return "tomorrow";
+      if (diffDays === -1) return "yesterday";
       return "auto";
     };
 
@@ -1153,12 +1238,7 @@ function App() {
                   eventsState.data.map((event) => (
                     <option key={event.id} value={event.id}>
                       {event.away_team} @ {event.home_team} |{" "}
-                      {new Date(event.commence_time).toLocaleString("en-AU", {
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                      {formatDateTimeByRegion(event.commence_time)}
                     </option>
                   ))
                 ) : (
@@ -1265,10 +1345,7 @@ function App() {
                                 <td className="text-sm">{row.sportsbook}</td>
                                 <td className="text-sm">
                                   {row.lastUpdate
-                                    ? new Date(row.lastUpdate).toLocaleTimeString("en-AU", {
-                                        hour: "2-digit",
-                                        minute: "2-digit",
-                                      })
+                                    ? formatTimeByRegion(row.lastUpdate)
                                     : "-"}
                                 </td>
                               </tr>
@@ -1290,12 +1367,7 @@ function App() {
         const bestBetMatchupOptions = (eventsState.data ?? []).map((event) => ({
           id: event.id,
           label: `${event.away_team} @ ${event.home_team}`,
-          kickoff: new Date(event.commence_time).toLocaleString("en-AU", {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
+          kickoff: formatDateTimeByRegion(event.commence_time),
         }));
         const selectedMatchupCount =
           selectedBestBetEventIds.length > 0
@@ -1362,7 +1434,7 @@ function App() {
                     }
                     disabled={selectedBestBetEventIds.length > 0}
                   >
-                    <option value="auto">Auto (AU time)</option>
+                    <option value="auto">Auto ({regionConfig.short} time)</option>
                     <option value="night">Night (next slate)</option>
                     <option value="morning">Morning (near tipoff)</option>
                     <option value="all">All upcoming</option>
@@ -1659,7 +1731,10 @@ function App() {
           <div className="card card-body border-radius-xl shadow-lg prediction-focus">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
               <div>
-                <h4 className="mb-1">Prediction Focus</h4>
+                <h4 className="mb-1">Predictions</h4>
+                {/* <p className="text-xs text-secondary mb-0">
+                  Day filter follows NBA slate timing (ET). Displayed dates/times follow your selected region.
+                </p> */}
               </div>
               <div className="d-flex flex-wrap gap-2 align-items-center">
                 <div className="stat-toggle">
@@ -1688,10 +1763,11 @@ function App() {
                         )
                       }
                     >
-                      <option value="auto">Auto (ET)</option>
-                      <option value="today">Today (ET)</option>
-                      <option value="tomorrow">Tomorrow (ET)</option>
-                      <option value="yesterday">Yesterday (ET)</option>
+                      {dayOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <label className="prediction-select-field">
@@ -1862,6 +1938,7 @@ function App() {
                   statLabel={activePrediction.label}
                   unitLabel={activePrediction.unit}
                   statKey={predictionStat}
+                  formatGameDate={formatSlateDateForRegion}
                 />
             )}
           </div>
@@ -1909,10 +1986,11 @@ function App() {
                       )
                     }
                   >
-                    <option value="auto">Auto (ET)</option>
-                    <option value="today">Today (ET)</option>
-                    <option value="tomorrow">Tomorrow (ET)</option>
-                    <option value="yesterday">Yesterday (ET)</option>
+                    {dayOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <button
@@ -2036,10 +2114,11 @@ function App() {
                       )
                     }
                   >
-                    <option value="auto">Auto (ET)</option>
-                    <option value="today">Today (ET)</option>
-                    <option value="tomorrow">Tomorrow (ET)</option>
-                    <option value="yesterday">Yesterday (ET)</option>
+                    {dayOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                   <select
                     className="form-select form-select-sm"
@@ -2139,6 +2218,7 @@ function App() {
                     const pb = b.first_basket_prob ?? 0;
                     return firstBasketSort === "prob_asc" ? pa - pb : pb - pa;
                   })}
+                  userRegion={userRegion}
                 />
               </>
             )}
@@ -2160,6 +2240,21 @@ function App() {
               <div className="brand-text-wrap">
                 <h2 className="mb-0 text-white brand-title">GAMBLR</h2>
               </div>
+            </div>
+            <div className="ms-auto d-flex align-items-center gap-2">
+              <label className="text-xs text-white opacity-8 mb-0" htmlFor="region-select">
+                Region
+              </label>
+              <select
+                id="region-select"
+                className="form-select form-select-sm region-select"
+                value={userRegion}
+                onChange={(e) => setUserRegion(e.target.value as UserRegion)}
+              >
+                <option value="au">Australia</option>
+                <option value="us">USA</option>
+                <option value="uk">England</option>
+              </select>
             </div>
           </nav>
 
@@ -2297,7 +2392,7 @@ function App() {
                 </div>
                 <div className="card-body">
                   <div className="status-row mb-2">
-                    <span className="text-sm text-secondary">API</span>
+                    <span className="text-sm text-secondary">Status</span>
                     <span
                       className={`badge badge-sm ${
                         backendHealth === "up"
@@ -2316,7 +2411,7 @@ function App() {
                   </div>
                   {backendCheckedAt && (
                     <p className="text-xs text-secondary mb-2">
-                      Last checked: {new Date(backendCheckedAt).toLocaleTimeString()}
+                      Last checked: {formatTimeByRegion(backendCheckedAt)}
                     </p>
                   )}
                   {backendError && (
@@ -2352,7 +2447,7 @@ function App() {
                   </p>
                   <div className="d-flex align-items-center justify-content-between">
                     <span className="text-sm text-secondary">Data refresh</span>
-                    <span className="badge badge-sm bg-gradient-info">About every 5 min</span>
+                    <span className="badge badge-sm bg-gradient-info">Every Night at 12:00 AM</span>
                   </div>
                 </div>
               </div>
