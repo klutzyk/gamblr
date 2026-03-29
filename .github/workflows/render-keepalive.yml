@@ -1,0 +1,18 @@
+name: Render Keepalive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Render backend
+        env:
+          BACKEND_URL: "https://gamblr-mgou.onrender.com"
+        run: |
+          echo "Pinging ${BACKEND_URL}/"
+          curl --silent --show-error --fail --max-time 20 "${BACKEND_URL}/" > /dev/null
