@@ -8,11 +8,20 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
       - name: Ping Render backend
         env:
           BACKEND_URL: "https://gamblr-mgou.onrender.com"
         run: |
-          echo "Pinging ${BACKEND_URL}/"
-          curl --silent --show-error --fail --max-time 20 "${BACKEND_URL}/" > /dev/null
+          echo "Pinging ${BACKEND_URL}/ (with retries for cold start)..."
+          for attempt in 1 2 3; do
+            if curl --silent --show-error --fail --max-time 90 "${BACKEND_URL}/" > /dev/null; then
+              echo "Ping successful on attempt ${attempt}"
+              exit 0
+            fi
+            echo "Attempt ${attempt} failed; waiting 20s before retry..."
+            sleep 20
+          done
+          echo "All keepalive attempts failed."
+          exit 1
