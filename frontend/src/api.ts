@@ -499,3 +499,107 @@ export function getBestBets(
 ): Promise<BestBetsResponse> {
   return fetchWithCache<BestBetsResponse>("/bets/best", params, 2 * 60 * 1000);
 }
+
+export type UpdateJobStatus = {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed" | string;
+  players_done?: number;
+  players_total?: number | null;
+  error?: string | null;
+  result?: Record<string, unknown> | null;
+};
+
+export type LatestIngestionRunResponse = {
+  status: "ok" | "empty" | string;
+  latest_game_date?: string | null;
+  data:
+    | {
+        id: number;
+        ingest_type: string;
+        since_date: string | null;
+        season: string | null;
+        status: string;
+        created_at: string;
+      }
+    | null;
+};
+
+export type RecentPlayerGameDateRow = {
+  id: number;
+  player_id: number;
+  game_id: string;
+  game_date: string;
+  matchup: string | null;
+  points: number | null;
+  assists: number | null;
+  rebounds: number | null;
+};
+
+export function ingestGamesByDate(params: {
+  since: string;
+  until?: string;
+  season?: string;
+  include_team_stats?: boolean;
+}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/db/games/ingest", params);
+}
+
+export function startLastNUpdateJob(params: {
+  since: string;
+  until?: string;
+  season?: string;
+}): Promise<{ status: string; job_id: string }> {
+  return postJson<{ status: string; job_id: string }>("/db/last-n/update/start", params);
+}
+
+export function getUpdateJobStatus(jobId: string): Promise<UpdateJobStatus> {
+  return fetchWithCache<UpdateJobStatus>(`/db/jobs/${jobId}`, undefined, 0);
+}
+
+export function getLatestIngestionRun(): Promise<LatestIngestionRunResponse> {
+  return fetchWithCache<LatestIngestionRunResponse>("/db/ingestion-runs/latest", undefined, 10_000);
+}
+
+export function getRecentPlayerGameDates(
+  limit = 5
+): Promise<{ status: string; data: RecentPlayerGameDateRow[] }> {
+  return fetchWithCache<{ status: string; data: RecentPlayerGameDateRow[] }>(
+    "/db/player-games/recent-dates",
+    { limit },
+    10_000
+  );
+}
+
+export function updateTeamGames(season = "2025-26"): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/db/team-games/update", { season });
+}
+
+export function refreshPlayerTeamAbbr(params: {
+  season?: string;
+  fallback?: boolean;
+} = {}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/db/players/refresh-team-abbr", params);
+}
+
+export function evaluateAllPredictions(): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/ml/evaluate/all");
+}
+
+export function updateRollingFeatures(): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/ml/rolling/update");
+}
+
+export function recalcUnderRiskAll(): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/db/under-risk/recalc-all");
+}
+
+export function trainAllModels(): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/ml/train/all");
+}
+
+export function runWalkforwardBacktest(
+  statType: "points" | "assists" | "rebounds" | "threept" | "threepa",
+  params: { reset?: boolean; min_games?: number; max_dates?: number } = {}
+): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(`/ml/backtest/walkforward/${statType}`, params);
+}

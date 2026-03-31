@@ -26,6 +26,7 @@ from app.db.store_prediction_logs import log_predictions
 from ml.first_basket_labels import build_first_basket_labels
 from ml.first_basket_model import train_first_basket_models
 from ml.under_side_model import train_under_side_model
+from ml.update_rolling import update_rolling_stats
 
 router = APIRouter()
 
@@ -194,3 +195,9 @@ async def train_under_side(
         min_rows_per_stat,
     )
     return {"status": "trained", **result}
+
+
+@router.post("/rolling/update")
+async def update_rolling_features():
+    await run_in_threadpool(update_rolling_stats, sync_engine)
+    return {"status": "updated"}
