@@ -708,6 +708,10 @@ async def ingest_games_by_date(
         )
         return result
 
+    # End the read transaction before long-running external boxscore calls so the
+    # session does not hold an idle connection open until the next DB operation.
+    await db.rollback()
+
     games_processed = 0
     games_skipped = 0
     players_inserted = 0
