@@ -3,10 +3,10 @@ import {
   evaluateAllPredictions,
   getLatestIngestionRun,
   getRecentPlayerGameDates,
-  ingestGamesByDate,
   recalcUnderRiskAll,
   refreshPlayerTeamAbbr,
   runWalkforwardBacktest,
+  startGamesIngestJob,
   startLastNUpdateJob,
   trainAllModels,
   updateRollingFeatures,
@@ -26,6 +26,14 @@ const BACKTEST_STATS: BacktestStat[] = [
 ];
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const formatElapsed = (elapsedMs: number) => {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+};
 
 export default function AdminPage() {
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -50,6 +58,8 @@ export default function AdminPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [latestIngestionText, setLatestIngestionText] = useState("Loading...");
+  const [progressLabel, setProgressLabel] = useState<string | null>(null);
+  const [progressPct, setProgressPct] = useState<number | null>(null);
   const [latestGameDates, setLatestGameDates] = useState<
     Array<{
       id: number;
@@ -74,6 +84,27 @@ export default function AdminPage() {
     setLogs((prev) => [...prev, `[${stamp}] ${line}`]);
   };
 
+  const runWithHeartbeat = async <T,>(
+    label: string,
+    task: () => Promise<T>,
+    heartbeatMs = 30000
+  ) => {
+    const startedAt = Date.now();
+    appendLog(`${label} started...`);
+    const interval = window.setInterval(() => {
+      const elapsed = formatElapsed(Date.now() - startedAt);
+      appendLog(`${label} still running... (${elapsed} elapsed)`);
+    }, heartbeatMs);
+
+    try {
+      const result = await task();
+      appendLog(`${label} finished in ${formatElapsed(Date.now() - startedAt)}.`);
+      return result;
+    } finally {
+      window.clearInterval(interval);
+    }
+  };
+
   const toggleBacktest = (stat: BacktestStat) => {
     setSelectedBacktests((prev) =>
       prev.includes(stat) ? prev.filter((s) => s !== stat) : [...prev, stat]
@@ -83,20 +114,54 @@ export default function AdminPage() {
   const runPipeline = async () => {
     setIsRunning(true);
     setLogs([]);
+    setProgressLabel(null);
+    setProgressPct(null);
     try {
       if (sinceDate) {
         if (useGameIngest) {
-          appendLog(`Starting per-game ingest from ${sinceDate}...`);
-          const ingestResult = await ingestGamesByDate({
+          appendLog(`Starting per-game ingest job from ${sinceDate}...`);
+          const started = await startGamesIngestJob({
             since: sinceDate,
             until: untilDate || undefined,
             season,
             include_team_stats: true,
           });
-          appendLog(`Game ingest done: ${JSON.stringify(ingestResult)}`);
+          appendLog(`Game ingest job queued: ${started.job_id}`);
+          while (true) {
+            const status = await getUpdateJobStatus(started.job_id);
+            const done = status.games_done ?? 0;
+            const total = status.games_total ?? null;
+            const pct =
+              total && total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) : null;
+            setProgressPct(pct);
+            setProgressLabel(
+              total && total > 0
+                ? `Ingesting games: ${done}/${total}${
+                    status.current_game_date ? ` • ${status.current_game_date}` : ""
+                  }${status.current_game_id ? ` • ${status.current_game_id}` : ""}`
+                : "Preparing game ingest..."
+            );
+            appendLog(
+              total && total > 0
+                ? `Game ingest ${status.status} (${done}/${total})`
+                : `Game ingest ${status.status}`
+            );
+            if (status.status === "completed") {
+              const ingestResult = status.result ?? {};
+              appendLog(`Game ingest done: ${JSON.stringify(ingestResult)}`);
+              setProgressPct(100);
+              setProgressLabel("Game ingest completed.");
+              break;
+            }
+            if (status.status === "failed") {
+              throw new Error(`Game ingest failed: ${status.error ?? "unknown error"}`);
+            }
+            await wait(8000);
+          }
           if (updateTeamGamesAfterIngest) {
-            appendLog("Updating team game logs...");
-            const teamResult = await updateTeamGames(season);
+            const teamResult = await runWithHeartbeat("Updating team game logs", () =>
+              updateTeamGames(season)
+            );
             appendLog(`Team games update done: ${JSON.stringify(teamResult)}`);
           }
         } else {
@@ -111,8 +176,18 @@ export default function AdminPage() {
             const status = await getUpdateJobStatus(started.job_id);
             const done = status.players_done ?? 0;
             const total = status.players_total ?? "n/a";
+            setProgressPct(
+              typeof status.players_total === "number" && status.players_total > 0
+                ? Math.max(0, Math.min(100, (done / status.players_total) * 100))
+                : null
+            );
+            setProgressLabel(`Ingesting players: ${done}/${total}`);
             appendLog(`Job ${status.status} (${done}/${total})`);
-            if (status.status === "completed") break;
+            if (status.status === "completed") {
+              setProgressPct(100);
+              setProgressLabel("Per-player ingest completed.");
+              break;
+            }
             if (status.status === "failed") {
               throw new Error(`Ingest job failed: ${status.error ?? "unknown error"}`);
             }
@@ -120,8 +195,9 @@ export default function AdminPage() {
           }
           appendLog("Per-player ingest completed.");
           if (updateTeamGamesAfterIngest) {
-            appendLog("Updating team game logs...");
-            const teamResult = await updateTeamGames(season);
+            const teamResult = await runWithHeartbeat("Updating team game logs", () =>
+              updateTeamGames(season)
+            );
             appendLog(`Team games update done: ${JSON.stringify(teamResult)}`);
           }
         }
@@ -130,35 +206,43 @@ export default function AdminPage() {
       }
 
       if (refreshPlayerTeams) {
-        appendLog("Refreshing player team abbreviations...");
-        const refreshResult = await refreshPlayerTeamAbbr({
-          season,
-          fallback: fallbackRefresh,
-        });
+        const refreshResult = await runWithHeartbeat(
+          "Refreshing player team abbreviations",
+          () =>
+            refreshPlayerTeamAbbr({
+              season,
+              fallback: fallbackRefresh,
+            })
+        );
         appendLog(`Refresh done: ${JSON.stringify(refreshResult)}`);
       }
 
       if (updateActuals) {
-        appendLog("Updating prediction actuals...");
-        const actualsResult = await evaluateAllPredictions();
+        const actualsResult = await runWithHeartbeat("Updating prediction actuals", () =>
+          evaluateAllPredictions()
+        );
         appendLog(`Actuals update done: ${JSON.stringify(actualsResult)}`);
       }
 
       if (updateRolling) {
-        appendLog("Updating rolling features...");
-        const rollingResult = await updateRollingFeatures();
+        const rollingResult = await runWithHeartbeat("Updating rolling features", () =>
+          updateRollingFeatures()
+        );
         appendLog(`Rolling update done: ${JSON.stringify(rollingResult)}`);
       }
 
       if (recalcUnderRisk) {
-        appendLog("Recalculating under-risk metrics...");
-        const underRiskResult = await recalcUnderRiskAll();
+        const underRiskResult = await runWithHeartbeat(
+          "Recalculating under-risk metrics",
+          () => recalcUnderRiskAll()
+        );
         appendLog(`Under-risk recalc done: ${JSON.stringify(underRiskResult)}`);
       }
 
       if (trainModels) {
-        appendLog("Training models...");
-        const trainResult = await trainAllModels();
+        const trainResult = await runWithHeartbeat("Training models", () =>
+          trainAllModels()
+        );
         appendLog(`Training done: ${JSON.stringify(trainResult)}`);
       } else {
         appendLog("Model training skipped.");
@@ -168,7 +252,10 @@ export default function AdminPage() {
         const stats = selectedBacktests.slice();
         appendLog(`Running walk-forward backtests: ${stats.join(", ")}`);
         for (const stat of stats) {
-          const backtestResult = await runWalkforwardBacktest(stat, { reset: false });
+          const backtestResult = await runWithHeartbeat(
+            `${stat} walk-forward backtest`,
+            () => runWalkforwardBacktest(stat, { reset: false })
+          );
           appendLog(`${stat} backtest done: ${JSON.stringify(backtestResult)}`);
         }
       } else {
@@ -179,6 +266,7 @@ export default function AdminPage() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       appendLog(`Pipeline failed: ${message}`);
+      setProgressLabel(`Failed: ${message}`);
     } finally {
       setIsRunning(false);
     }
@@ -303,6 +391,20 @@ export default function AdminPage() {
           </div>
 
           <div className="admin-logs mt-4">
+            {(isRunning || progressLabel) && (
+              <div className="admin-progress-wrap">
+                <div className="admin-progress-meta">
+                  <span>{progressLabel ?? "Running..."}</span>
+                  <span>{progressPct !== null ? `${progressPct.toFixed(0)}%` : "..."}</span>
+                </div>
+                <div className="admin-progress-bar">
+                  <div
+                    className={`admin-progress-fill${progressPct === null ? " indeterminate" : ""}`}
+                    style={progressPct !== null ? { width: `${progressPct}%` } : undefined}
+                  ></div>
+                </div>
+              </div>
+            )}
             <div className="admin-log-meta">{latestIngestionText}</div>
             {logs.length === 0 ? (
               <p className="mb-0 text-muted">No runs yet.</p>

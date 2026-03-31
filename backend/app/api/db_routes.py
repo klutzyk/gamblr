@@ -640,39 +640,14 @@ async def _run_last_n_update(
     return result
 
 
-@router.post("/games/ingest")
-async def ingest_games_by_date(
-    since: str,
-    until: str | None = None,
-    season: str = "2025-26",
-    include_team_stats: bool = True,
-    db: AsyncSession = Depends(get_db),
+async def _run_games_ingest(
+    since_date,
+    until_date,
+    season: str,
+    include_team_stats: bool,
+    db: AsyncSession,
+    job_id: str | None = None,
 ):
-    """
-    Ingest per-game boxscores for all scheduled games in a date range.
-    Faster than per-player ingestion for daily runs.
-    """
-    try:
-        since_date = datetime.strptime(since, "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
-
-    if until:
-        try:
-            until_date = datetime.strptime(until, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
-    else:
-        if ZoneInfo:
-            until_date = datetime.now(ZoneInfo("America/New_York")).date()
-        else:
-            until_date = datetime.now().date()
-
-    if since_date > until_date:
-        raise HTTPException(
-            status_code=400, detail="since must be on or before until"
-        )
-
     schedule_result = await db.execute(
         select(
             GameSchedule.game_id,
@@ -712,6 +687,12 @@ async def ingest_games_by_date(
     # session does not hold an idle connection open until the next DB operation.
     await db.rollback()
 
+    if job_id and job_id in update_jobs:
+        update_jobs[job_id]["games_total"] = len(games)
+        update_jobs[job_id]["games_done"] = 0
+        update_jobs[job_id]["current_game_id"] = None
+        update_jobs[job_id]["current_game_date"] = None
+
     games_processed = 0
     games_skipped = 0
     players_inserted = 0
@@ -719,7 +700,7 @@ async def ingest_games_by_date(
     teams_inserted = 0
     teams_updated = 0
 
-    for game in games:
+    for idx, game in enumerate(games, start=1):
         (
             game_id,
             game_date,
@@ -731,7 +712,14 @@ async def ingest_games_by_date(
         ) = game
         if not game_id:
             games_skipped += 1
+            if job_id and job_id in update_jobs:
+                update_jobs[job_id]["games_done"] = idx
             continue
+
+        if job_id and job_id in update_jobs:
+            update_jobs[job_id]["games_done"] = idx - 1
+            update_jobs[job_id]["current_game_id"] = str(game_id)
+            update_jobs[job_id]["current_game_date"] = str(game_date)
 
         for attempt in range(GAME_INGEST_MAX_ATTEMPTS):
             try:
@@ -916,8 +904,12 @@ async def ingest_games_by_date(
             await db.rollback()
             logger.exception(f"Failed committing game {game_id}: {e}")
             games_skipped += 1
+            if job_id and job_id in update_jobs:
+                update_jobs[job_id]["games_done"] = idx
             continue
         games_processed += 1
+        if job_id and job_id in update_jobs:
+            update_jobs[job_id]["games_done"] = idx
         await asyncio.sleep(0.05)
 
     result = {
@@ -934,6 +926,10 @@ async def ingest_games_by_date(
         "teams_updated": teams_updated,
         "include_team_stats": include_team_stats,
     }
+    if job_id and job_id in update_jobs:
+        update_jobs[job_id]["games_done"] = len(games)
+        update_jobs[job_id]["current_game_id"] = None
+        update_jobs[job_id]["current_game_date"] = None
     await _record_ingest_run(
         db,
         since_date,
@@ -944,6 +940,118 @@ async def ingest_games_by_date(
         ingest_type="games_ingest",
     )
     return result
+
+
+@router.post("/games/ingest")
+async def ingest_games_by_date(
+    since: str,
+    until: str | None = None,
+    season: str = "2025-26",
+    include_team_stats: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ingest per-game boxscores for all scheduled games in a date range.
+    Faster than per-player ingestion for daily runs.
+    """
+    try:
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+
+    if until:
+        try:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
+    else:
+        if ZoneInfo:
+            until_date = datetime.now(ZoneInfo("America/New_York")).date()
+        else:
+            until_date = datetime.now().date()
+
+    if since_date > until_date:
+        raise HTTPException(
+            status_code=400, detail="since must be on or before until"
+        )
+
+    return await _run_games_ingest(
+        since_date, until_date, season, include_team_stats, db
+    )
+
+
+async def _run_games_ingest_job(
+    job_id: str, since: str, until: str | None, season: str, include_team_stats: bool
+):
+    try:
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
+        if until:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        else:
+            until_date = datetime.now(ZoneInfo("America/New_York")).date()
+        update_jobs[job_id]["status"] = "running"
+        async with AsyncSessionLocal() as db:
+            result = await _run_games_ingest(
+                since_date,
+                until_date,
+                season,
+                include_team_stats,
+                db,
+                job_id=job_id,
+            )
+        update_jobs[job_id]["status"] = "completed"
+        update_jobs[job_id]["result"] = result
+        update_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+    except Exception as e:
+        logger.error(f"games ingest job {job_id} failed: {e}")
+        update_jobs[job_id]["status"] = "failed"
+        update_jobs[job_id]["error"] = str(e)
+        update_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+
+
+@router.post("/games/ingest/start")
+async def start_games_ingest(
+    since: str,
+    until: str | None = None,
+    season: str = "2025-26",
+    include_team_stats: bool = True,
+):
+    try:
+        since_date = datetime.strptime(since, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+    if until:
+        try:
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
+    else:
+        until_date = datetime.now(ZoneInfo("America/New_York")).date()
+
+    if since_date > until_date:
+        raise HTTPException(status_code=400, detail="since must be on or before until")
+
+    job_id = str(uuid.uuid4())
+    update_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "games_ingest",
+        "status": "queued",
+        "since": since,
+        "until": until or str(until_date),
+        "season": season,
+        "include_team_stats": include_team_stats,
+        "games_done": 0,
+        "games_total": None,
+        "current_game_id": None,
+        "current_game_date": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "result": None,
+        "error": None,
+    }
+    asyncio.create_task(
+        _run_games_ingest_job(job_id, since, until, season, include_team_stats)
+    )
+    return {"status": "queued", "job_id": job_id}
 
 
 @router.post("/last-n/update")

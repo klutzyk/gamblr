@@ -505,6 +505,11 @@ export type UpdateJobStatus = {
   status: "queued" | "running" | "completed" | "failed" | string;
   players_done?: number;
   players_total?: number | null;
+  games_done?: number;
+  games_total?: number | null;
+  current_game_id?: string | null;
+  current_game_date?: string | null;
+  type?: string;
   error?: string | null;
   result?: Record<string, unknown> | null;
 };
@@ -542,6 +547,15 @@ export function ingestGamesByDate(params: {
   include_team_stats?: boolean;
 }): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>("/db/games/ingest", params);
+}
+
+export function startGamesIngestJob(params: {
+  since: string;
+  until?: string;
+  season?: string;
+  include_team_stats?: boolean;
+}): Promise<{ status: string; job_id: string }> {
+  return postJson<{ status: string; job_id: string }>("/db/games/ingest/start", params);
 }
 
 export function startLastNUpdateJob(params: {
