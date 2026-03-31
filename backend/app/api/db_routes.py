@@ -12,7 +12,7 @@ from app.db.store_schedule import load_schedule
 from app.db.under_risk import compute_under_risk
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as nba_teams
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from datetime import datetime
 from app.models.player_game_stat import PlayerGameStat
 from app.models.team_game_stat import TeamGameStat
@@ -104,10 +104,11 @@ async def _record_ingest_run(
     result: dict,
     status: str,
     note: str | None = None,
+    ingest_type: str = "last_n_update",
 ):
     try:
         run = IngestionRun(
-            ingest_type="last_n_update",
+            ingest_type=ingest_type,
             since_date=since_date,
             season=season,
             status=status,
@@ -689,13 +690,23 @@ async def ingest_games_by_date(
     )
     games = schedule_result.all()
     if not games:
-        return {
+        result = {
             "status": "no_games",
             "since": str(since_date),
             "until": str(until_date),
             "season": season,
             "games_considered": 0,
         }
+        await _record_ingest_run(
+            db,
+            since_date,
+            season,
+            result,
+            "no_games",
+            note=f"until={until_date}",
+            ingest_type="games_ingest",
+        )
+        return result
 
     games_processed = 0
     games_skipped = 0
@@ -905,7 +916,7 @@ async def ingest_games_by_date(
         games_processed += 1
         await asyncio.sleep(0.05)
 
-    return {
+    result = {
         "status": "completed",
         "since": str(since_date),
         "until": str(until_date),
@@ -919,6 +930,16 @@ async def ingest_games_by_date(
         "teams_updated": teams_updated,
         "include_team_stats": include_team_stats,
     }
+    await _record_ingest_run(
+        db,
+        since_date,
+        season,
+        result,
+        "completed",
+        note=f"until={until_date}",
+        ingest_type="games_ingest",
+    )
+    return result
 
 
 @router.post("/last-n/update")
@@ -1023,6 +1044,57 @@ async def get_update_job_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     return job
+
+
+@router.get("/ingestion-runs/latest")
+async def get_latest_ingestion_run(db: AsyncSession = Depends(get_db)):
+    row = (
+        (
+            await db.execute(
+                select(
+                    IngestionRun.id,
+                    IngestionRun.ingest_type,
+                    IngestionRun.since_date,
+                    IngestionRun.season,
+                    IngestionRun.status,
+                    IngestionRun.created_at,
+                )
+                .order_by(IngestionRun.created_at.desc())
+                .limit(1)
+            )
+        )
+        .mappings()
+        .first()
+    )
+    latest_game_date = (
+        await db.execute(select(func.max(PlayerGameStat.game_date)))
+    ).scalar_one_or_none()
+    if not row:
+        return {"status": "empty", "data": None, "latest_game_date": latest_game_date}
+    return {"status": "ok", "data": dict(row), "latest_game_date": latest_game_date}
+
+
+@router.get("/player-games/recent-dates")
+async def get_recent_player_game_dates(limit: int = 5, db: AsyncSession = Depends(get_db)):
+    safe_limit = max(1, min(limit, 20))
+    rows = (
+        (
+            await db.execute(
+                text(
+                    """
+                    SELECT id, player_id, game_id, game_date, matchup, points, assists, rebounds
+                    FROM player_game_stats
+                    ORDER BY game_date DESC, id DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": safe_limit},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return {"status": "ok", "data": [dict(r) for r in rows]}
 
 
 @router.post("/last-n/backfill-shooting")

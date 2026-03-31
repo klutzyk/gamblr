@@ -1,0 +1,129 @@
+.admin-shell {
+  min-height: 100vh;
+  background: #f6f5f1;
+  color: #102235;
+}
+
+.admin-card {
+  background: #ffffff;
+  border: 1px solid rgba(16, 34, 53, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
+  padding: 20px;
+}
+
+.admin-card-narrow {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.admin-header p {
+  color: #5a6f82;
+}
+
+.admin-options {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.admin-options label,
+.admin-backtests label {
+  font-size: 0.95rem;
+}
+
+.admin-options input[type="checkbox"],
+.admin-backtests input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+.admin-label {
+  display: block;
+  margin: 0 0 0.35rem 0.15rem;
+  color: #5a6f82;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.admin-help {
+  display: inline-block;
+  margin-top: 0.35rem;
+  color: #6e7f8f;
+  font-size: 0.82rem;
+}
+
+.admin-input,
+.admin-select {
+  display: block;
+  width: 100%;
+  height: 30px;
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid rgba(16, 34, 53, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #102235;
+  font-size: 0.78rem;
+  line-height: 1;
+  box-shadow: none;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  vertical-align: middle;
+}
+
+.admin-input:focus,
+.admin-select:focus {
+  border-color: #6adf4f;
+  box-shadow: 0 0 0 0.18rem rgba(106, 223, 79, 0.18);
+}
+
+.admin-input[type="date"] {
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-right: 4px;
+}
+
+.admin-input::-webkit-date-and-time-value {
+  min-height: 0;
+  text-align: left;
+  padding: 0;
+}
+
+.admin-select {
+  padding-right: 24px;
+  appearance: auto;
+  -webkit-appearance: menulist;
+  -moz-appearance: auto;
+}
+
+.admin-logs {
+  background: #0d1f2a;
+  color: #d6e4ef;
+  border-radius: 12px;
+  padding: 12px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 0.86rem;
+}
+
+.admin-log-meta {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(214, 228, 239, 0.2);
+  color: #9fb4c4;
+}
+
+.admin-log-line {
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.admin-recent {
+  border: 1px solid rgba(16, 34, 53, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fbfbfb;
+}
