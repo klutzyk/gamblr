@@ -676,16 +676,6 @@ function App() {
   const mapDayToEtForApi = (
     selectedDay: "today" | "tomorrow" | "yesterday" | "auto"
   ): PredictionDayParam => {
-    if (selectedDay === "auto") return "auto";
-
-    // AU users are always ahead of ET by one calendar day in this app context.
-    // Use explicit mapping to avoid timezone/runtime edge cases.
-    if (userRegion === "au") {
-      if (selectedDay === "yesterday") return "two_days_ago";
-      if (selectedDay === "today") return "yesterday";
-      return "today";
-    }
-
     const selectedOffset: Record<"today" | "tomorrow" | "yesterday", number> = {
       yesterday: -1,
       today: 0,
@@ -698,6 +688,30 @@ function App() {
     const userEtDeltaDays = Math.round(
       (toUtcMidnightMs(userToday) - toUtcMidnightMs(etToday)) / (24 * 60 * 60 * 1000)
     );
+
+    // Australia needs two modes:
+    // - Morning AU: local calendar day is ahead of ET, but the relevant NBA slate is still ET "today".
+    // - Later AU day: ET has caught up, so local "today" maps back one ET day.
+    if (userRegion === "au") {
+      const auMapsDirectlyToCurrentEtSlate = userEtDeltaDays >= 1;
+
+      if (selectedDay === "auto") {
+        return auMapsDirectlyToCurrentEtSlate ? "today" : "yesterday";
+      }
+
+      if (auMapsDirectlyToCurrentEtSlate) {
+        if (selectedDay === "yesterday") return "yesterday";
+        if (selectedDay === "today") return "today";
+        return "tomorrow";
+      }
+
+      if (selectedDay === "yesterday") return "two_days_ago";
+      if (selectedDay === "today") return "yesterday";
+      return "today";
+    }
+
+    if (selectedDay === "auto") return "auto";
+
     const etOffset = selectedOffset[selectedDay] - userEtDeltaDays;
 
     if (etOffset <= -2) return "two_days_ago";
