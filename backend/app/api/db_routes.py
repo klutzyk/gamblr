@@ -1,6 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import create_engine
 from app.db.session import get_db, AsyncSessionLocal
+from app.core.config import settings
+from app.db.url_utils import to_sync_db_url
 from app.services.theodds_client import TheOddsClient
 from app.services.nba_client import NBAClient
 from app.db.store_odds import save_event_odds
@@ -10,10 +14,11 @@ from app.db.store_lineup_stats import save_lineup_stats
 from app.db.store_teams import load_teams
 from app.db.store_schedule import load_schedule
 from app.db.under_risk import compute_under_risk
+from app.db.store_prediction_logs import update_prediction_actuals, log_predictions
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as nba_teams
 from sqlalchemy import select, func, text
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.models.player_game_stat import PlayerGameStat
 from app.models.team_game_stat import TeamGameStat
 from app.models.player import Player
@@ -28,6 +33,8 @@ from asyncio_throttle import Throttler
 import pandas as pd
 from app.core.constants import MAX_GAMES_PER_PLAYER
 from zoneinfo import ZoneInfo
+from ml.backtest import walk_forward_backtest
+from ml.update_rolling import update_rolling_stats
 
 
 def _parse_minutes(value):
@@ -74,6 +81,7 @@ odds_client = TheOddsClient()
 nba_client = NBAClient()
 # Dedicated client for per-game boxscore ingest.
 nba_boxscore_client = NBAClient(timeout=60)
+sync_engine = create_engine(to_sync_db_url(settings.DATABASE_URL))
 
 # Throttle NBA API calls conservatively to reduce upstream timeouts.
 throttler = Throttler(rate_limit=2, period=1)
@@ -85,6 +93,18 @@ GAME_INGEST_MAX_ATTEMPTS = 4
 GAME_INGEST_BACKOFF_BASE_SECONDS = 1.0
 GAME_INGEST_BACKOFF_CAP_SECONDS = 8.0
 GAME_INGEST_BACKOFF_JITTER_SECONDS = 0.4
+
+
+def _current_et_date():
+    if ZoneInfo:
+        return datetime.now(ZoneInfo("America/New_York")).date()
+    return datetime.now().date()
+
+
+def _latest_completed_nba_et_date():
+    # Scheduler should treat the most recent fully completed NBA slate as the
+    # previous ET calendar day.
+    return _current_et_date() - timedelta(days=1)
 
 
 def _retry_backoff_seconds(
@@ -965,10 +985,7 @@ async def ingest_games_by_date(
         except ValueError:
             raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
     else:
-        if ZoneInfo:
-            until_date = datetime.now(ZoneInfo("America/New_York")).date()
-        else:
-            until_date = datetime.now().date()
+        until_date = _current_et_date()
 
     if since_date > until_date:
         raise HTTPException(
@@ -988,7 +1005,7 @@ async def _run_games_ingest_job(
         if until:
             until_date = datetime.strptime(until, "%Y-%m-%d").date()
         else:
-            until_date = datetime.now(ZoneInfo("America/New_York")).date()
+            until_date = _current_et_date()
         update_jobs[job_id]["status"] = "running"
         async with AsyncSessionLocal() as db:
             result = await _run_games_ingest(
@@ -1026,7 +1043,7 @@ async def start_games_ingest(
         except ValueError:
             raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
     else:
-        until_date = datetime.now(ZoneInfo("America/New_York")).date()
+        until_date = _current_et_date()
 
     if since_date > until_date:
         raise HTTPException(status_code=400, detail="since must be on or before until")
@@ -1052,6 +1069,189 @@ async def start_games_ingest(
         _run_games_ingest_job(job_id, since, until, season, include_team_stats)
     )
     return {"status": "queued", "job_id": job_id}
+
+
+@router.post("/games/ingest/latest/start")
+async def start_latest_completed_games_ingest(
+    season: str = "2025-26",
+    include_team_stats: bool = True,
+):
+    target_date = _latest_completed_nba_et_date()
+    since = str(target_date)
+    until = str(target_date)
+
+    job_id = str(uuid.uuid4())
+    update_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "games_ingest_latest",
+        "status": "queued",
+        "since": since,
+        "until": until,
+        "season": season,
+        "include_team_stats": include_team_stats,
+        "games_done": 0,
+        "games_total": None,
+        "current_game_id": None,
+        "current_game_date": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "result": None,
+        "error": None,
+    }
+    asyncio.create_task(
+        _run_games_ingest_job(job_id, since, until, season, include_team_stats)
+    )
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "target_et_date": since,
+        "season": season,
+        "include_team_stats": include_team_stats,
+    }
+
+
+async def _run_nightly_pipeline_job(
+    job_id: str,
+    season: str,
+    include_team_stats: bool,
+    fallback_refresh: bool,
+):
+    stat_types = ["points", "assists", "rebounds", "threept", "threepa"]
+    steps_total = 6 + len(stat_types)
+
+    def set_step(step_name: str, step_index: int):
+        update_jobs[job_id]["status"] = "running"
+        update_jobs[job_id]["current_step"] = step_name
+        update_jobs[job_id]["steps_done"] = step_index
+        update_jobs[job_id]["steps_total"] = steps_total
+
+    try:
+        target_date = _latest_completed_nba_et_date()
+        update_jobs[job_id]["target_et_date"] = str(target_date)
+
+        async with AsyncSessionLocal() as db:
+            set_step("game_ingest", 0)
+            ingest_result = await _run_games_ingest(
+                target_date,
+                target_date,
+                season,
+                include_team_stats,
+                db,
+                job_id=job_id,
+            )
+            update_jobs[job_id]["ingest_result"] = ingest_result
+
+            set_step("team_games_update", 1)
+            team_games_result = await update_team_games_all_teams(season=season, db=db)
+            update_jobs[job_id]["team_games_result"] = team_games_result
+
+            set_step("player_team_refresh", 2)
+            refresh_result = await refresh_player_team_abbr(
+                db=db,
+                season=season,
+                fallback=fallback_refresh,
+            )
+            update_jobs[job_id]["refresh_result"] = refresh_result
+
+        set_step("evaluate_actuals", 3)
+        evaluate_result = {
+            "points": await run_in_threadpool(update_prediction_actuals, sync_engine, "points"),
+            "assists": await run_in_threadpool(update_prediction_actuals, sync_engine, "assists"),
+            "rebounds": await run_in_threadpool(update_prediction_actuals, sync_engine, "rebounds"),
+            "minutes": await run_in_threadpool(update_prediction_actuals, sync_engine, "minutes"),
+            "threept": await run_in_threadpool(update_prediction_actuals, sync_engine, "threept"),
+            "threepa": await run_in_threadpool(update_prediction_actuals, sync_engine, "threepa"),
+        }
+        update_jobs[job_id]["evaluate_result"] = evaluate_result
+
+        set_step("rolling_update", 4)
+        await run_in_threadpool(update_rolling_stats, sync_engine)
+
+        async with AsyncSessionLocal() as db:
+            set_step("under_risk_recalc", 5)
+            under_risk_result = await recalc_under_risk_all(db=db)
+            update_jobs[job_id]["under_risk_result"] = under_risk_result
+
+        backtest_results: dict[str, dict] = {}
+        for idx, stat_type in enumerate(stat_types, start=6):
+            set_step(f"backtest_{stat_type}", idx)
+            df_preds = await run_in_threadpool(
+                walk_forward_backtest, sync_engine, stat_type, 15, None
+            )
+            if df_preds.empty:
+                backtest_results[stat_type] = {"status": "no_data"}
+                continue
+            await run_in_threadpool(
+                log_predictions,
+                sync_engine,
+                df_preds,
+                stat_type,
+                "walkforward",
+                True,
+            )
+            updated = await run_in_threadpool(
+                update_prediction_actuals, sync_engine, stat_type
+            )
+            backtest_results[stat_type] = {
+                "status": "logged",
+                "rows": int(len(df_preds)),
+                "actuals_updated": updated,
+            }
+        update_jobs[job_id]["backtest_results"] = backtest_results
+
+        update_jobs[job_id]["status"] = "completed"
+        update_jobs[job_id]["steps_done"] = steps_total
+        update_jobs[job_id]["current_step"] = "completed"
+        update_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+    except Exception as e:
+        logger.error(f"nightly pipeline job {job_id} failed: {e}")
+        update_jobs[job_id]["status"] = "failed"
+        update_jobs[job_id]["error"] = str(e)
+        update_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+
+
+@router.post("/pipeline/nightly/start")
+async def start_nightly_pipeline(
+    season: str = "2025-26",
+    include_team_stats: bool = True,
+    fallback_refresh: bool = True,
+):
+    target_date = _latest_completed_nba_et_date()
+    job_id = str(uuid.uuid4())
+    update_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "nightly_pipeline",
+        "status": "queued",
+        "season": season,
+        "include_team_stats": include_team_stats,
+        "fallback_refresh": fallback_refresh,
+        "target_et_date": str(target_date),
+        "steps_done": 0,
+        "steps_total": 11,
+        "current_step": "queued",
+        "games_done": 0,
+        "games_total": None,
+        "current_game_id": None,
+        "current_game_date": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "result": None,
+        "error": None,
+    }
+    asyncio.create_task(
+        _run_nightly_pipeline_job(
+            job_id,
+            season,
+            include_team_stats,
+            fallback_refresh,
+        )
+    )
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "target_et_date": str(target_date),
+        "season": season,
+        "include_team_stats": include_team_stats,
+        "fallback_refresh": fallback_refresh,
+    }
 
 
 @router.post("/last-n/update")
