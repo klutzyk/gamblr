@@ -13,7 +13,7 @@ from app.db.under_risk import compute_under_risk
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as nba_teams
 from sqlalchemy import select, func, text
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.models.player_game_stat import PlayerGameStat
 from app.models.team_game_stat import TeamGameStat
 from app.models.player import Player
@@ -85,6 +85,18 @@ GAME_INGEST_MAX_ATTEMPTS = 4
 GAME_INGEST_BACKOFF_BASE_SECONDS = 1.0
 GAME_INGEST_BACKOFF_CAP_SECONDS = 8.0
 GAME_INGEST_BACKOFF_JITTER_SECONDS = 0.4
+
+
+def _current_et_date():
+    if ZoneInfo:
+        return datetime.now(ZoneInfo("America/New_York")).date()
+    return datetime.now().date()
+
+
+def _latest_completed_nba_et_date():
+    # Scheduler should treat the most recent fully completed NBA slate as the
+    # previous ET calendar day.
+    return _current_et_date() - timedelta(days=1)
 
 
 def _retry_backoff_seconds(
@@ -965,10 +977,7 @@ async def ingest_games_by_date(
         except ValueError:
             raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
     else:
-        if ZoneInfo:
-            until_date = datetime.now(ZoneInfo("America/New_York")).date()
-        else:
-            until_date = datetime.now().date()
+        until_date = _current_et_date()
 
     if since_date > until_date:
         raise HTTPException(
@@ -988,7 +997,7 @@ async def _run_games_ingest_job(
         if until:
             until_date = datetime.strptime(until, "%Y-%m-%d").date()
         else:
-            until_date = datetime.now(ZoneInfo("America/New_York")).date()
+            until_date = _current_et_date()
         update_jobs[job_id]["status"] = "running"
         async with AsyncSessionLocal() as db:
             result = await _run_games_ingest(
@@ -1026,7 +1035,7 @@ async def start_games_ingest(
         except ValueError:
             raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
     else:
-        until_date = datetime.now(ZoneInfo("America/New_York")).date()
+        until_date = _current_et_date()
 
     if since_date > until_date:
         raise HTTPException(status_code=400, detail="since must be on or before until")
@@ -1052,6 +1061,44 @@ async def start_games_ingest(
         _run_games_ingest_job(job_id, since, until, season, include_team_stats)
     )
     return {"status": "queued", "job_id": job_id}
+
+
+@router.post("/games/ingest/latest/start")
+async def start_latest_completed_games_ingest(
+    season: str = "2025-26",
+    include_team_stats: bool = True,
+):
+    target_date = _latest_completed_nba_et_date()
+    since = str(target_date)
+    until = str(target_date)
+
+    job_id = str(uuid.uuid4())
+    update_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "games_ingest_latest",
+        "status": "queued",
+        "since": since,
+        "until": until,
+        "season": season,
+        "include_team_stats": include_team_stats,
+        "games_done": 0,
+        "games_total": None,
+        "current_game_id": None,
+        "current_game_date": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "result": None,
+        "error": None,
+    }
+    asyncio.create_task(
+        _run_games_ingest_job(job_id, since, until, season, include_team_stats)
+    )
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "target_et_date": since,
+        "season": season,
+        "include_team_stats": include_team_stats,
+    }
 
 
 @router.post("/last-n/update")
