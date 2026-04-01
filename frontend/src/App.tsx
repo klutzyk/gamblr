@@ -93,6 +93,14 @@ const initialState = <T,>(): ApiState<T> => ({
   lastFetched: null,
 });
 
+const BEST_BETS_LOADING_STEPS = [
+  "Checking available player props",
+  "Filtering lines and matchups",
+  "Scoring candidate picks",
+  "Building parlay combinations",
+  "Ranking best-value slips",
+];
+
 function formatNumber(value: unknown, digits = 1): string {
   if (typeof value !== "number") return "-";
   return value.toFixed(digits);
@@ -643,6 +651,8 @@ function App() {
   >("checking");
   const [backendCheckedAt, setBackendCheckedAt] = useState<number | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
+  const [bestBetsLoadingStep, setBestBetsLoadingStep] = useState(0);
+  const [bestBetsLoadingElapsed, setBestBetsLoadingElapsed] = useState(0);
   const regionConfig = REGION_CONFIG[userRegion];
   const dayLabelSuffix =
     userRegion === "us" ? "(ET)" : `(${regionConfig.short})`;
@@ -1101,6 +1111,32 @@ function App() {
     }, 45_000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const isBestBetsBusy = bestBetsState.loading || isSyncingBestBets;
+    if (!isBestBetsBusy) {
+      setBestBetsLoadingStep(0);
+      setBestBetsLoadingElapsed(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    setBestBetsLoadingStep(0);
+    setBestBetsLoadingElapsed(0);
+
+    const elapsedTimer = window.setInterval(() => {
+      setBestBetsLoadingElapsed(Date.now() - startedAt);
+    }, 1000);
+
+    const stepTimer = window.setInterval(() => {
+      setBestBetsLoadingStep((prev) => (prev + 1) % BEST_BETS_LOADING_STEPS.length);
+    }, 2400);
+
+    return () => {
+      window.clearInterval(elapsedTimer);
+      window.clearInterval(stepTimer);
+    };
+  }, [bestBetsState.loading, isSyncingBestBets]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -1629,11 +1665,26 @@ function App() {
               </div>
             )}
             {bestBetsState.loading && !bestBetsState.data && (
-              <div className="text-center py-5">
-                <div className="spinner-border text-primary" role="status">
-                  <span className="visually-hidden">Loading...</span>
+              <div className="best-bets-loading">
+                <div className="best-bets-loading-head">
+                  <div>
+                    <h6 className="mb-1">
+                      {isSyncingBestBets ? "Syncing props and building bets" : "Building best bets"}
+                    </h6>
+                    <p className="text-sm text-secondary mb-0">
+                      {BEST_BETS_LOADING_STEPS[bestBetsLoadingStep]}
+                    </p>
+                  </div>
+                  <span className="best-bets-loading-time">
+                    {Math.floor(bestBetsLoadingElapsed / 1000)}s
+                  </span>
                 </div>
-                <p className="text-secondary mt-3">Building best bets...</p>
+                <div className="best-bets-loading-bar" aria-hidden="true">
+                  <div className="best-bets-loading-fill"></div>
+                </div>
+                <p className="text-xs text-secondary mb-0">
+                  This can take a bit on free hosting while odds sync.
+                </p>
               </div>
             )}
             {bestBetsState.data && (

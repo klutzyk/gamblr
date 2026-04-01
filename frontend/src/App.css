@@ -753,6 +753,56 @@
   color: var(--brand-muted);
 }
 
+.best-bets-loading {
+  margin-top: 0.5rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 1rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.94) 0%, rgba(247, 244, 235, 0.9) 100%);
+}
+
+.best-bets-loading-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.best-bets-loading-time {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--brand-muted);
+  white-space: nowrap;
+}
+
+.best-bets-loading-bar {
+  position: relative;
+  height: 0.55rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.08);
+  margin-bottom: 0.7rem;
+}
+
+.best-bets-loading-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6adf4f 0%, #b8ff7a 100%);
+  animation: best-bets-loading-slide 1.6s ease-in-out infinite;
+}
+
+@keyframes best-bets-loading-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
 .matchup-chip-wrap {
   display: flex;
   flex-wrap: wrap;
