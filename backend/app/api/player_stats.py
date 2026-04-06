@@ -58,6 +58,52 @@ def df_to_dict(df):
     return records
 
 
+def _attach_prediction_tipoffs(df_preds: pd.DataFrame, lineups_payload: dict | None) -> pd.DataFrame:
+    if df_preds.empty:
+        return df_preds
+
+    games = (lineups_payload or {}).get("games", []) or []
+    if not games:
+        return df_preds
+
+    by_game_id: dict[str, dict] = {}
+    by_matchup: dict[str, dict] = {}
+    for game in games:
+        game_id = game.get("game_id")
+        matchup = game.get("matchup")
+        tipoff_et = game.get("tipoff_et")
+        game_date = game.get("game_date")
+        tipoff_au = _tipoff_et_to_au_text(tipoff_et, game_date)
+        meta = {
+            "tipoff_et": tipoff_et,
+            "tipoff_au": tipoff_au,
+        }
+        if game_id is not None:
+            by_game_id[str(game_id)] = meta
+        if matchup:
+            by_matchup[str(matchup)] = meta
+
+    if not by_game_id and not by_matchup:
+        return df_preds
+
+    def lookup_tipoff(row, field: str):
+        game_id = row.get("game_id")
+        matchup = row.get("matchup")
+        meta = None
+        if pd.notna(game_id):
+            meta = by_game_id.get(str(game_id))
+        if meta is None and matchup:
+            meta = by_matchup.get(str(matchup))
+        if meta is None:
+            return None
+        return meta.get(field)
+
+    df_preds = df_preds.copy()
+    df_preds["tipoff_et"] = df_preds.apply(lambda row: lookup_tipoff(row, "tipoff_et"), axis=1)
+    df_preds["tipoff_au"] = df_preds.apply(lambda row: lookup_tipoff(row, "tipoff_au"), axis=1)
+    return df_preds
+
+
 def fetch_under_risk(engine, stat_type: str, player_ids: list[int]):
     if not player_ids:
         return {}
@@ -399,6 +445,7 @@ async def predict_points_api(
         return {"message": f"No games found for {day}", "data": []}
 
     df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
+    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "points", df_preds["player_id"].tolist()
@@ -463,6 +510,7 @@ async def predict_assists_api(
         return {"message": f"No games found for {day}", "data": []}
 
     df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
+    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "assists", df_preds["player_id"].tolist()
@@ -527,6 +575,7 @@ async def predict_rebounds_api(
         return {"message": f"No games found for {day}", "data": []}
 
     df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
+    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "rebounds", df_preds["player_id"].tolist()
@@ -591,6 +640,7 @@ async def predict_threept_api(
         return {"message": f"No games found for {day}", "data": []}
 
     df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
+    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "threept", df_preds["player_id"].tolist()
@@ -655,6 +705,7 @@ async def predict_threepa_api(
         return {"message": f"No games found for {day}", "data": []}
 
     df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
+    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
 
     under_risk = fetch_under_risk(
         sync_engine, "threepa", df_preds["player_id"].tolist()

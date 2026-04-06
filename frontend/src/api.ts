@@ -73,6 +73,8 @@ export type PredictionRow = {
   matchup: string;
   game_date: string;
   game_id?: string;
+  tipoff_et?: string | null;
+  tipoff_au?: string | null;
   pred_value: number;
   pred_p10?: number;
   pred_p50?: number;

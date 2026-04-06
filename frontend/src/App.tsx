@@ -80,6 +80,73 @@ const REGION_CONFIG: Record<
   },
 };
 
+const TEAM_NAME_TO_ABBR: Record<string, string> = {
+  "atlanta hawks": "ATL",
+  "boston celtics": "BOS",
+  "brooklyn nets": "BKN",
+  "charlotte hornets": "CHA",
+  "chicago bulls": "CHI",
+  "cleveland cavaliers": "CLE",
+  "dallas mavericks": "DAL",
+  "denver nuggets": "DEN",
+  "detroit pistons": "DET",
+  "golden state warriors": "GSW",
+  "houston rockets": "HOU",
+  "indiana pacers": "IND",
+  "los angeles clippers": "LAC",
+  "la clippers": "LAC",
+  "los angeles lakers": "LAL",
+  "la lakers": "LAL",
+  "memphis grizzlies": "MEM",
+  "miami heat": "MIA",
+  "milwaukee bucks": "MIL",
+  "minnesota timberwolves": "MIN",
+  "new orleans pelicans": "NOP",
+  "new york knicks": "NYK",
+  "ny knicks": "NYK",
+  "oklahoma city thunder": "OKC",
+  "orlando magic": "ORL",
+  "philadelphia 76ers": "PHI",
+  "phoenix suns": "PHX",
+  "portland trail blazers": "POR",
+  "sacramento kings": "SAC",
+  "san antonio spurs": "SAS",
+  "toronto raptors": "TOR",
+  "utah jazz": "UTA",
+  "washington wizards": "WAS",
+};
+
+function normalizeTeamToAbbr(teamName: string) {
+  const trimmed = (teamName ?? "").trim();
+  if (!trimmed) return trimmed;
+  const cleaned = trimmed.toLowerCase().replace(/\./g, "");
+  if (TEAM_NAME_TO_ABBR[cleaned]) return TEAM_NAME_TO_ABBR[cleaned];
+  if (/^[a-z]{2,4}$/.test(cleaned)) return cleaned.toUpperCase();
+  return trimmed;
+}
+
+function toAbbrMatchup(awayTeam: string, homeTeam: string) {
+  const away = normalizeTeamToAbbr(awayTeam);
+  const home = normalizeTeamToAbbr(homeTeam);
+  return `${away} @ ${home}`;
+}
+
+function normalizeMatchupKey(raw: string) {
+  if (!raw) return "";
+  const cleaned = raw
+    .replace(/\s+/g, " ")
+    .replace(/vs\.?/gi, "@")
+    .replace(/v\.?/gi, "@")
+    .trim();
+  const parts = cleaned.split("@").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const away = normalizeTeamToAbbr(parts[0]);
+    const home = normalizeTeamToAbbr(parts[1]);
+    return `${away}@${home}`;
+  }
+  return normalizeTeamToAbbr(cleaned);
+}
+
 type ApiState<T> = {
   loading: boolean;
   error: string | null;
@@ -753,14 +820,50 @@ function App() {
     });
   };
 
-  const formatDateTimeByRegion = (value: string | Date | number) =>
-    new Date(value).toLocaleString(regionConfig.locale, {
+  const formatMatchupKickoffLabel = (
+    value: string | Date | number,
+    includeZoneSuffix = userRegion === "au"
+  ) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Date tbd";
+    const parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: regionConfig.timeZone,
-      month: "short",
       day: "numeric",
+      month: "short",
       hour: "2-digit",
       minute: "2-digit",
-    });
+      hour12: true,
+    }).formatToParts(date);
+    const day = parts.find((part) => part.type === "day")?.value ?? "";
+    const month = parts.find((part) => part.type === "month")?.value ?? "";
+    const hour = parts.find((part) => part.type === "hour")?.value ?? "";
+    const minute = parts.find((part) => part.type === "minute")?.value ?? "";
+    const period = (parts.find((part) => part.type === "dayPeriod")?.value ?? "").toLowerCase();
+    const zoneSuffix = includeZoneSuffix
+      ? ` ${userRegion === "au" ? "AEST" : regionConfig.short}`
+      : "";
+    return `${day} ${month}, ${hour}:${minute} ${period}${zoneSuffix}`;
+  };
+
+  const formatPredictionMatchupKickoff = (row: PredictionRow) => {
+    if (userRegion === "au" && row.tipoff_au) {
+      const parsedAu = new Date(row.tipoff_au);
+      if (!Number.isNaN(parsedAu.getTime())) {
+        return formatMatchupKickoffLabel(parsedAu, true);
+      }
+      return row.tipoff_au;
+    }
+    if (row.tipoff_et && row.game_date) {
+      const parsed = new Date(`${row.game_date}T00:00:00`);
+      if (!Number.isNaN(parsed.getTime())) {
+        return `${formatSlateDateForRegion(row.game_date)}${userRegion === "au" ? " AEST" : ""}`;
+      }
+    }
+    return row.game_date ? formatSlateDateForRegion(row.game_date) : "Date tbd";
+  };
+
+  const formatDateTimeByRegion = (value: string | Date | number) =>
+    formatMatchupKickoffLabel(value, userRegion === "au");
 
   const formatTimeByRegion = (value: string | Date | number) =>
     new Date(value).toLocaleTimeString(regionConfig.locale, {
@@ -887,14 +990,51 @@ function App() {
     },
   };
 
+  const bestBetMatchupOptions = (eventsState.data ?? []).map((event) => ({
+    id: event.id,
+    label: `${event.away_team} @ ${event.home_team}`,
+    kickoff: formatDateTimeByRegion(event.commence_time),
+  }));
+
   const currentPredictionRows = predictionConfig[predictionStat].state.data ?? [];
+  const predictionMatchupMap = currentPredictionRows.reduce(
+    (map, row) => {
+      const matchup = row.matchup;
+      if (!matchup) return map;
+      const matchupKey = normalizeMatchupKey(matchup);
+      if (!map.has(matchupKey)) {
+        map.set(matchupKey, {
+          key: matchupKey,
+          label: matchup,
+          kickoff: formatPredictionMatchupKickoff(row),
+        });
+      }
+      return map;
+    },
+    new Map<string, { key: string; label: string; kickoff: string }>()
+  );
+
+  const eventMatchupMap = new Map(
+    bestBetMatchupOptions.map((event) => {
+      const key = normalizeMatchupKey(event.label);
+      return [
+        key,
+        {
+          key,
+          label: event.label,
+          kickoff: event.kickoff,
+        },
+      ] as const;
+    })
+  );
+
   const currentPredictionMatchups = Array.from(
-    new Set(
-      currentPredictionRows
-        .map((row) => row.matchup)
-        .filter((matchup): matchup is string => Boolean(matchup))
-    )
-  ).sort();
+    predictionMatchupMap.entries(),
+    ([key, fallback]) => eventMatchupMap.get(key) ?? fallback
+  ).sort((a, b) => a.label.localeCompare(b.label));
+
+  const selectedPredictionMatchupOption =
+    currentPredictionMatchups.find((item) => item.key === selectedPredictionMatchup) ?? null;
 
   const handleLoadPredictions = (force = false) => {
     const config = predictionConfig[predictionStat];
@@ -1070,9 +1210,15 @@ function App() {
       return;
     }
     setSelectedPredictionMatchup((prev) =>
-      currentPredictionMatchups.includes(prev) ? prev : currentPredictionMatchups[0]
+      currentPredictionMatchups.some((item) => item.key === prev)
+        ? prev
+        : currentPredictionMatchups[0].key
     );
-  }, [predictionStat, predictionApiDay, currentPredictionMatchups.join("|")]);
+  }, [
+    predictionStat,
+    predictionApiDay,
+    currentPredictionMatchups.map((item) => item.key).join("|"),
+  ]);
 
   useEffect(() => {
     if (activeTab === "first_basket") {
@@ -1099,6 +1245,9 @@ function App() {
       void handleLoadEvents();
     }
     if (activeTab === "best_bets") {
+      void handleLoadEvents(true);
+    }
+    if (activeTab === "matchups") {
       void handleLoadEvents(true);
     }
   }, [activeTab]);
@@ -1457,11 +1606,6 @@ function App() {
         );
       case "best_bets":
         const estimatedMarketsPerEvent = includeComboMarkets ? 7 : 3;
-        const bestBetMatchupOptions = (eventsState.data ?? []).map((event) => ({
-          id: event.id,
-          label: `${event.away_team} @ ${event.home_team}`,
-          kickoff: formatDateTimeByRegion(event.commence_time),
-        }));
         const selectedMatchupCount =
           selectedBestBetEventIds.length > 0
             ? selectedBestBetEventIds.length
@@ -2040,7 +2184,9 @@ function App() {
         const matchupPrediction = predictionConfig[predictionStat];
         const matchupRows = matchupPrediction.state.data
           ? matchupPrediction.state.data
-              .filter((row) => row.matchup === selectedPredictionMatchup)
+              .filter(
+                (row) => normalizeMatchupKey(row.matchup) === selectedPredictionMatchup
+              )
               .sort((a, b) => (b.pred_value ?? 0) - (a.pred_value ?? 0))
           : [];
         return (
@@ -2084,6 +2230,26 @@ function App() {
                       ))}
                     </select>
                   </label>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Sort</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionSort}
+                      aria-label="Matchup prediction sort order"
+                      onChange={(e) =>
+                        setPredictionSort(
+                          e.target.value as
+                            | "pred_value_desc"
+                            | "pred_value_asc"
+                            | "confidence_desc"
+                        )
+                      }
+                    >
+                      <option value="pred_value_desc">Value (High &gt;&gt; Low)</option>
+                      <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
+                      <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
+                    </select>
+                  </label>
                 </div>
                 <button
                   className="btn btn-sm bg-gradient-primary mb-0"
@@ -2112,16 +2278,21 @@ function App() {
             </div>
             <div className="best-bets-matchups mb-4">
               <label className="form-label">Select matchup</label>
+              <p className="text-xs text-secondary mb-2">
+                {bestBetMatchupOptions.length > 0
+                  ? `Event times loaded: ${bestBetMatchupOptions.length}`
+                  : "No event times available (showing slate dates)."}
+              </p>
               <div className="matchup-chip-wrap">
-                {currentPredictionMatchups.map((matchup) => (
+                {currentPredictionMatchups.map((item) => (
                   <button
-                    key={matchup}
+                    key={item.key}
                     type="button"
-                    className={`matchup-chip ${selectedPredictionMatchup === matchup ? "active" : ""}`}
-                    onClick={() => setSelectedPredictionMatchup(matchup)}
+                    className={`matchup-chip ${selectedPredictionMatchup === item.key ? "active" : ""}`}
+                    onClick={() => setSelectedPredictionMatchup(item.key)}
                   >
-                    <span>{matchup}</span>
-                    <small>{matchupPrediction.label}</small>
+                    <span>{item.label}</span>
+                    <small>{item.kickoff}</small>
                   </button>
                 ))}
                 {currentPredictionMatchups.length === 0 && (
@@ -2132,7 +2303,7 @@ function App() {
             {selectedPredictionMatchup && (
               <div className="mb-3">
                 <span className="badge badge-sm bg-gradient-info me-2">
-                  {selectedPredictionMatchup}
+                  {selectedPredictionMatchupOption?.label ?? selectedPredictionMatchup}
                 </span>
                 <span className="text-sm text-secondary">
                   {matchupRows.length} player predictions
@@ -2162,7 +2333,23 @@ function App() {
               )}
             {matchupRows.length > 0 && (
               <PredictionsGrid
-                predictions={matchupRows}
+                predictions={[...matchupRows].sort((a, b) => {
+                  const valA = a.pred_value ?? 0;
+                  const valB = b.pred_value ?? 0;
+                  const confA = a.confidence ?? -1;
+                  const confB = b.confidence ?? -1;
+
+                  if (predictionSort === "pred_value_asc" && valA !== valB) {
+                    return valA - valB;
+                  }
+                  if (predictionSort === "pred_value_desc" && valA !== valB) {
+                    return valB - valA;
+                  }
+                  if (predictionSort === "confidence_desc" && confA !== confB) {
+                    return confB - confA;
+                  }
+                  return valB - valA;
+                })}
                 statLabel={matchupPrediction.label}
                 unitLabel={matchupPrediction.unit}
                 statKey={predictionStat}
