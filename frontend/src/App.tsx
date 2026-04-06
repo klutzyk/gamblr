@@ -48,6 +48,7 @@ type TabKey =
   | "guards"
   | "recent"
   | "props"
+  | "matchups"
   | "predictions"
   | "best_bets"
   | "first_basket"
@@ -624,6 +625,7 @@ function App() {
   const [predictionSearch, setPredictionSearch] = useState("");
   const [predictionTeams, setPredictionTeams] = useState<string[]>([]);
   const [predictionLine, setPredictionLine] = useState<number | "all">("all");
+  const [selectedPredictionMatchup, setSelectedPredictionMatchup] = useState("");
   const [firstBasketSort, setFirstBasketSort] = useState<
     "prob_desc" | "prob_asc"
   >("prob_desc");
@@ -885,6 +887,15 @@ function App() {
     },
   };
 
+  const currentPredictionRows = predictionConfig[predictionStat].state.data ?? [];
+  const currentPredictionMatchups = Array.from(
+    new Set(
+      currentPredictionRows
+        .map((row) => row.matchup)
+        .filter((matchup): matchup is string => Boolean(matchup))
+    )
+  ).sort();
+
   const handleLoadPredictions = (force = false) => {
     const config = predictionConfig[predictionStat];
     return safeLoad(
@@ -1052,6 +1063,16 @@ function App() {
   useEffect(() => {
     handleLoadPredictions(true);
   }, [predictionApiDay, predictionStat]);
+
+  useEffect(() => {
+    if (currentPredictionMatchups.length === 0) {
+      setSelectedPredictionMatchup("");
+      return;
+    }
+    setSelectedPredictionMatchup((prev) =>
+      currentPredictionMatchups.includes(prev) ? prev : currentPredictionMatchups[0]
+    );
+  }, [predictionStat, predictionApiDay, currentPredictionMatchups.join("|")]);
 
   useEffect(() => {
     if (activeTab === "first_basket") {
@@ -2015,6 +2036,141 @@ function App() {
             )}
           </div>
         );
+      case "matchups":
+        const matchupPrediction = predictionConfig[predictionStat];
+        const matchupRows = matchupPrediction.state.data
+          ? matchupPrediction.state.data
+              .filter((row) => row.matchup === selectedPredictionMatchup)
+              .sort((a, b) => (b.pred_value ?? 0) - (a.pred_value ?? 0))
+          : [];
+        return (
+          <div className="card card-body border-radius-xl shadow-lg prediction-focus">
+            <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
+              <div>
+                <h4 className="mb-1">Matchup Predictions</h4>
+                <p className="text-sm text-secondary mb-0">
+                  View both teams together for one matchup on the selected slate.
+                </p>
+              </div>
+              <div className="d-flex flex-wrap gap-2 align-items-center">
+                <div className="stat-toggle">
+                  {(["points", "assists", "rebounds", "threept", "threepa"] as const).map((stat) => (
+                    <button
+                      key={stat}
+                      className={`stat-chip ${predictionStat === stat ? "active" : ""}`}
+                      onClick={() => setPredictionStat(stat)}
+                    >
+                      {predictionConfig[stat].label}
+                    </button>
+                  ))}
+                </div>
+                <div className="prediction-select-group">
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Day</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionDay}
+                      aria-label="Matchup prediction day"
+                      onChange={(e) =>
+                        setPredictionDay(
+                          e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                        )
+                      }
+                    >
+                      {dayOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <button
+                  className="btn btn-sm bg-gradient-primary mb-0"
+                  onClick={() => {
+                    void handleLoadPredictions(true);
+                  }}
+                  disabled={matchupPrediction.state.loading}
+                >
+                  {matchupPrediction.state.loading ? (
+                    <span
+                      className="spinner-border spinner-border-sm me-2"
+                      role="status"
+                      aria-hidden="true"
+                    ></span>
+                  ) : (
+                    <i
+                      className="material-symbols-rounded me-2"
+                      style={{ fontSize: "16px" }}
+                    >
+                      sports_basketball
+                    </i>
+                  )}
+                  Refresh Matchups
+                </button>
+              </div>
+            </div>
+            <div className="best-bets-matchups mb-4">
+              <label className="form-label">Select matchup</label>
+              <div className="matchup-chip-wrap">
+                {currentPredictionMatchups.map((matchup) => (
+                  <button
+                    key={matchup}
+                    type="button"
+                    className={`matchup-chip ${selectedPredictionMatchup === matchup ? "active" : ""}`}
+                    onClick={() => setSelectedPredictionMatchup(matchup)}
+                  >
+                    <span>{matchup}</span>
+                    <small>{matchupPrediction.label}</small>
+                  </button>
+                ))}
+                {currentPredictionMatchups.length === 0 && (
+                  <span className="text-sm text-secondary">No matchups available for this slate.</span>
+                )}
+              </div>
+            </div>
+            {selectedPredictionMatchup && (
+              <div className="mb-3">
+                <span className="badge badge-sm bg-gradient-info me-2">
+                  {selectedPredictionMatchup}
+                </span>
+                <span className="text-sm text-secondary">
+                  {matchupRows.length} player predictions
+                </span>
+              </div>
+            )}
+            {matchupPrediction.state.error && (
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {matchupPrediction.state.error}
+              </div>
+            )}
+            {matchupPrediction.state.loading && !matchupPrediction.state.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading matchup predictions...</p>
+              </div>
+            )}
+            {!matchupPrediction.state.loading &&
+              matchupPrediction.state.data &&
+              selectedPredictionMatchup &&
+              matchupRows.length === 0 && (
+                <div className="text-center py-5">
+                  <p className="text-secondary mb-0">No predictions found for that matchup.</p>
+                </div>
+              )}
+            {matchupRows.length > 0 && (
+              <PredictionsGrid
+                predictions={matchupRows}
+                statLabel={matchupPrediction.label}
+                unitLabel={matchupPrediction.unit}
+                statKey={predictionStat}
+                formatGameDate={formatSlateDateForRegion}
+              />
+            )}
+          </div>
+        );
       case "double_triple":
         const dtSearch = predictionSearch.trim().toLowerCase();
         const dtRows = doubleTripleState.data
@@ -2372,6 +2528,17 @@ function App() {
                       >
                         <i className="material-symbols-rounded me-2">psychology</i>
                         Predictions
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "matchups" ? "active" : ""}`}
+                        onClick={() => setActiveTab("matchups")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">groups</i>
+                        Matchups
                       </a>
                     </li>
                     <li className="nav-item">
