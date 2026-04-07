@@ -76,7 +76,8 @@ def _finish_best_bets_progress(request_id: str, status: str, message: str, **ext
     with _best_bets_progress_lock:
         if _best_bets_progress.get("request_id") != request_id:
             return
-    _set_best_bets_progress(status=status, phase=status, message=message, **extra)
+    phase = extra.pop("phase", status)
+    _set_best_bets_progress(status=status, phase=phase, message=message, **extra)
 
 
 @router.get("/best/progress")
