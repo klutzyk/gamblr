@@ -1025,18 +1025,23 @@ function App() {
         kickoff: "",
       }
     : null;
+  const bestBetsProgressPhase = bestBetsProgressData?.phase ?? null;
   const bestBetElapsedSeconds = bestBetLoadingStartedAt
     ? Math.max(0, Math.round((Date.now() - bestBetLoadingStartedAt) / 1000))
     : 0;
   const bestBetsProgressSummaryParts = [
+    (bestBetsProgressPhase === "scoring" || bestBetsProgressPhase === "ranking") &&
     typeof bestBetsProgressData?.rows_processed === "number" &&
     typeof bestBetsProgressData?.rows_total === "number" &&
     bestBetsProgressData.rows_total > 0
       ? `${bestBetsProgressData.rows_processed}/${bestBetsProgressData.rows_total} props`
       : null,
-    typeof bestBetsProgressData?.candidates_kept === "number"
+    (bestBetsProgressPhase === "scoring" || bestBetsProgressPhase === "ranking") &&
+    typeof bestBetsProgressData?.candidates_kept === "number" &&
+    bestBetsProgressData.candidates_kept > 0
       ? `${bestBetsProgressData.candidates_kept} candidates`
       : null,
+    bestBetsProgressPhase === "ranking" &&
     typeof bestBetsProgressData?.combos_considered === "number" &&
     bestBetsProgressData.combos_considered > 0
       ? `${bestBetsProgressData.combos_considered} combos`
@@ -1935,9 +1940,11 @@ function App() {
                           ? ` (${bestBetsProgressMatchup.kickoff})`
                           : ""
                       }`
-                    : bestBetFocusLabel
+                    : !bestBetsProgressPhase || bestBetsProgressPhase === "syncing"
+                      ? bestBetFocusLabel
                       ? `Focus matchup: ${bestBetFocusLabel.label} (${bestBetFocusLabel.kickoff})`
-                      : "Preparing selected matchups."}
+                      : "Preparing selected matchups."
+                      : "Preparing candidate pool."}
                   {bestBetsProgressSummaryParts.length > 0
                     ? ` | ${bestBetsProgressSummaryParts.join(" | ")}`
                     : ""}
