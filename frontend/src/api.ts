@@ -65,6 +65,12 @@ export type OddsEventPropsResponse = {
   estimated_cost?: number;
 };
 
+export type OddsUsageSnapshot = {
+  requests_last?: number | null;
+  requests_remaining?: number | null;
+  requests_used?: number | null;
+};
+
 export type PredictionRow = {
   player_id: number;
   full_name: string;
@@ -73,6 +79,8 @@ export type PredictionRow = {
   matchup: string;
   game_date: string;
   game_id?: string;
+  tipoff_et?: string | null;
+  tipoff_au?: string | null;
   pred_value: number;
   pred_p10?: number;
   pred_p50?: number;
@@ -176,6 +184,19 @@ export type BestBetsResponse = {
   recommended_parlays?: BestBetParlay[];
   message?: string;
   debug?: Record<string, number>;
+};
+
+export type BestBetsProgress = {
+  request_id?: string | null;
+  status?: string | null;
+  phase?: string | null;
+  message?: string | null;
+  current_matchup?: string | null;
+  rows_processed?: number | null;
+  rows_total?: number | null;
+  candidates_kept?: number | null;
+  combos_considered?: number | null;
+  updated_at?: string | null;
 };
 
 const API_BASE =
@@ -320,6 +341,14 @@ export function getNbaEvents(): Promise<OddsEvent[]> {
     undefined,
     5 * 60 * 1000
   );
+}
+
+export function getOddsUsageSnapshot(): Promise<OddsUsageSnapshot> {
+  return fetchWithCache<OddsUsageSnapshot>("/odds/usage/snapshot", undefined, 30 * 1000);
+}
+
+export function getBestBetsProgress(): Promise<BestBetsProgress> {
+  return fetchWithCache<BestBetsProgress>("/bets/best/progress", undefined, 1000);
 }
 
 export function getOddsEventProps(

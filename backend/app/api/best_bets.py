@@ -1,7 +1,9 @@
 import math
 import re
+import uuid
 from datetime import datetime, timedelta
 from itertools import combinations
+from threading import Lock
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -23,6 +25,19 @@ from ml.under_side_model import load_latest_under_side_model, predict_under_prob
 
 router = APIRouter()
 sync_engine = create_engine(to_sync_db_url(settings.DATABASE_URL))
+_best_bets_progress_lock = Lock()
+_best_bets_progress: dict[str, object] = {
+    "request_id": None,
+    "status": "idle",
+    "phase": "idle",
+    "message": None,
+    "current_matchup": None,
+    "rows_processed": 0,
+    "rows_total": 0,
+    "candidates_kept": 0,
+    "combos_considered": 0,
+    "updated_at": None,
+}
 
 MARKET_TO_STATS = {
     "player_points": ("points",),
@@ -33,6 +48,42 @@ MARKET_TO_STATS = {
     "player_points_assists": ("points", "assists"),
     "player_rebounds_assists": ("rebounds", "assists"),
 }
+
+
+def _set_best_bets_progress(**updates):
+    with _best_bets_progress_lock:
+        _best_bets_progress.update(updates)
+        _best_bets_progress["updated_at"] = datetime.now(ZoneInfo("UTC")).isoformat()
+
+
+def _start_best_bets_progress() -> str:
+    request_id = uuid.uuid4().hex
+    _set_best_bets_progress(
+        request_id=request_id,
+        status="running",
+        phase="preparing",
+        message="Preparing Best Bets build",
+        current_matchup=None,
+        rows_processed=0,
+        rows_total=0,
+        candidates_kept=0,
+        combos_considered=0,
+    )
+    return request_id
+
+
+def _finish_best_bets_progress(request_id: str, status: str, message: str, **extra):
+    with _best_bets_progress_lock:
+        if _best_bets_progress.get("request_id") != request_id:
+            return
+    phase = extra.pop("phase", status)
+    _set_best_bets_progress(status=status, phase=phase, message=message, **extra)
+
+
+@router.get("/best/progress")
+async def get_best_bets_progress():
+    with _best_bets_progress_lock:
+        return dict(_best_bets_progress)
 
 
 def _normalize_name(name: str) -> str:
@@ -359,6 +410,7 @@ async def get_best_bets(
     max_candidates: int = 30,
     db: AsyncSession = Depends(get_db),
 ):
+    request_id = _start_best_bets_progress()
     if leg_count < 1 or leg_count > 6:
         raise HTTPException(status_code=400, detail="leg_count must be between 1 and 6")
     if leg_mode not in {"exact", "up_to"}:
@@ -374,191 +426,429 @@ async def get_best_bets(
             status_code=400, detail="day must be one of today, tomorrow, yesterday, auto"
         )
 
-    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
-    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
-    prediction_index = await run_in_threadpool(
-        _build_prediction_index, day, expected_map, excluded_map
-    )
-    under_risk_index: dict[int, dict[str, dict]] = {}
-    under_side_model_payload: dict | None = None
-    if use_under_overlay or use_under_model:
-        player_ids = await run_in_threadpool(_collect_prediction_player_ids, prediction_index)
-        under_risk_index = await run_in_threadpool(
-            _fetch_under_risk_index, sync_engine, player_ids
+    try:
+        _set_best_bets_progress(
+            phase="lineups",
+            message="Loading lineup context",
         )
-    if use_under_model:
-        try:
-            under_side_model_payload, _ = await run_in_threadpool(load_latest_under_side_model)
-        except FileNotFoundError:
-            under_side_model_payload = None
-
-    now_utc = datetime.now(ZoneInfo("UTC")) - timedelta(hours=2)
-    markets_to_use = [
-        "player_points",
-        "player_assists",
-        "player_rebounds",
-    ]
-    if include_combos:
-        markets_to_use.extend(
-            [
-                "player_points_rebounds_assists",
-                "player_points_rebounds",
-                "player_points_assists",
-                "player_rebounds_assists",
-            ]
+        lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
+        expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+        _set_best_bets_progress(
+            phase="predictions",
+            message="Building prediction index",
         )
-
-    stmt = (
-        select(
-            Event.id,
-            Event.commence_time,
-            Event.home_team,
-            Event.away_team,
-            Bookmaker.key,
-            Market.key,
-            PlayerProp.player_name,
-            PlayerProp.side,
-            PlayerProp.line,
-            PlayerProp.price,
+        prediction_index = await run_in_threadpool(
+            _build_prediction_index, day, expected_map, excluded_map
         )
-        .join(Bookmaker, Bookmaker.event_id == Event.id)
-        .join(Market, Market.bookmaker_id == Bookmaker.id)
-        .join(PlayerProp, PlayerProp.market_id == Market.id)
-        .where(
-            Bookmaker.key == bookmaker,
-            Market.key.in_(tuple(markets_to_use)),
-            Event.commence_time >= now_utc,
-        )
-        .order_by(Event.commence_time.asc())
-    )
-
-    selected_ids = [eid.strip() for eid in (event_ids or "").split(",") if eid.strip()]
-    if selected_ids:
-        stmt = stmt.where(Event.id.in_(tuple(selected_ids)))
-
-    rows = (await db.execute(stmt)).all()
-    if not rows:
-        return {
-            "status": "no_props",
-            "message": "No stored props found for the selected bookmaker.",
-            "bookmaker": bookmaker,
-        }
-
-    candidates = []
-    skipped_no_prediction = 0
-    skipped_low_confidence = 0
-    skipped_low_edge = 0
-    overlay_applied = 0
-    under_model_applied = 0
-
-    for row in rows:
-        (
-            event_id,
-            commence_time,
-            home_team,
-            away_team,
-            book_key,
-            market_key,
-            player_name,
-            side,
-            line,
-            price,
-        ) = row
-        if line is None or price is None or price <= 1.0:
-            continue
-        stat_components = MARKET_TO_STATS.get(market_key)
-        if not stat_components:
-            continue
-
-        normalized = _normalize_name(player_name or "")
-        if len(stat_components) == 1:
-            pred = prediction_index.get(stat_components[0], {}).get(normalized)
-        else:
-            pred = _compose_prediction_row(stat_components, normalized, prediction_index)
-        if not pred:
-            skipped_no_prediction += 1
-            continue
-
-        confidence = pred.get("confidence")
-        if confidence is not None and float(confidence) < min_confidence:
-            skipped_low_confidence += 1
-            continue
-
-        raw_prob, model_prob = _model_probability(pred, float(line), str(side))
-        overlay_meta = None
-        if use_under_overlay:
-            model_prob, overlay_meta = _apply_under_overlay(
-                model_prob=model_prob,
-                side=str(side),
-                stat_components=stat_components,
-                pred=pred,
-                under_risk_index=under_risk_index,
+        under_risk_index: dict[int, dict[str, dict]] = {}
+        under_side_model_payload: dict | None = None
+        if use_under_overlay or use_under_model:
+            _set_best_bets_progress(
+                phase="risk",
+                message="Loading under-risk profiles",
             )
-            if overlay_meta is not None:
-                overlay_applied += 1
-        under_model_meta = None
-        if use_under_model and under_side_model_payload is not None:
-            model_prob, under_model_meta = _apply_under_side_model(
-                model_prob=model_prob,
-                side=str(side),
-                stat_components=stat_components,
-                pred=pred,
-                under_risk_index=under_risk_index,
-                side_model_payload=under_side_model_payload,
+            player_ids = await run_in_threadpool(_collect_prediction_player_ids, prediction_index)
+            under_risk_index = await run_in_threadpool(
+                _fetch_under_risk_index, sync_engine, player_ids
             )
-            if under_model_meta is not None:
-                under_model_applied += 1
-        implied_prob = 1.0 / float(price)
-        edge = model_prob - implied_prob
-        if model_prob < min_prob or edge < min_edge:
-            skipped_low_edge += 1
-            continue
+        if use_under_model:
+            _set_best_bets_progress(
+                phase="risk",
+                message="Loading under-side model",
+            )
+            try:
+                under_side_model_payload, _ = await run_in_threadpool(load_latest_under_side_model)
+            except FileNotFoundError:
+                under_side_model_payload = None
 
-        expected_value = model_prob * (float(price) - 1.0) - (1.0 - model_prob)
-        stat_type = "+".join(stat_components)
-        candidates.append(
-            {
-                "event_id": event_id,
-                "commence_time": commence_time.isoformat(),
-                "matchup": f"{away_team} @ {home_team}",
-                "bookmaker": book_key,
-                "market": market_key,
-                "stat_type": stat_type,
-                "player_name": player_name,
-                "side": side,
-                "line": float(line),
-                "price_decimal": float(price),
-                "implied_prob": round(implied_prob, 4),
-                "model_prob_raw": round(raw_prob, 4),
-                "model_prob": round(model_prob, 4),
-                "edge": round(edge, 4),
-                "ev_per_unit": round(expected_value, 4),
-                "under_overlay": overlay_meta,
-                "under_side_model": under_model_meta,
-                "prediction": {
-                    "pred_value": pred.get("pred_value"),
-                    "pred_p10": pred.get("pred_p10"),
-                    "pred_p50": pred.get("pred_p50"),
-                    "pred_p90": pred.get("pred_p90"),
-                    "confidence": pred.get("confidence"),
-                    "player_id": pred.get("player_id"),
-                    "team_abbreviation": pred.get("team_abbreviation"),
+        now_utc = datetime.now(ZoneInfo("UTC")) - timedelta(hours=2)
+        markets_to_use = [
+            "player_points",
+            "player_assists",
+            "player_rebounds",
+        ]
+        if include_combos:
+            markets_to_use.extend(
+                [
+                    "player_points_rebounds_assists",
+                    "player_points_rebounds",
+                    "player_points_assists",
+                    "player_rebounds_assists",
+                ]
+            )
+
+        stmt = (
+            select(
+                Event.id,
+                Event.commence_time,
+                Event.home_team,
+                Event.away_team,
+                Bookmaker.key,
+                Market.key,
+                PlayerProp.player_name,
+                PlayerProp.side,
+                PlayerProp.line,
+                PlayerProp.price,
+            )
+            .join(Bookmaker, Bookmaker.event_id == Event.id)
+            .join(Market, Market.bookmaker_id == Bookmaker.id)
+            .join(PlayerProp, PlayerProp.market_id == Market.id)
+            .where(
+                Bookmaker.key == bookmaker,
+                Market.key.in_(tuple(markets_to_use)),
+                Event.commence_time >= now_utc,
+            )
+            .order_by(Event.commence_time.asc())
+        )
+
+        selected_ids = [eid.strip() for eid in (event_ids or "").split(",") if eid.strip()]
+        if selected_ids:
+            stmt = stmt.where(Event.id.in_(tuple(selected_ids)))
+
+        _set_best_bets_progress(
+            phase="props",
+            message="Loading stored props",
+        )
+        rows = (await db.execute(stmt)).all()
+        if not rows:
+            _finish_best_bets_progress(
+                request_id,
+                "completed",
+                "No stored props found",
+                phase="completed",
+                rows_total=0,
+            )
+            return {
+                "status": "no_props",
+                "message": "No stored props found for the selected bookmaker.",
+                "bookmaker": bookmaker,
+            }
+
+        candidates = []
+        skipped_no_prediction = 0
+        skipped_low_confidence = 0
+        skipped_low_edge = 0
+        overlay_applied = 0
+        under_model_applied = 0
+        current_matchup = None
+        _set_best_bets_progress(
+            phase="scoring",
+            message="Scoring candidate legs",
+            rows_total=len(rows),
+        )
+
+        for idx, row in enumerate(rows, start=1):
+            (
+                event_id,
+                commence_time,
+                home_team,
+                away_team,
+                book_key,
+                market_key,
+                player_name,
+                side,
+                line,
+                price,
+            ) = row
+            matchup = f"{away_team} @ {home_team}"
+            if matchup != current_matchup or idx == 1 or idx % 50 == 0:
+                current_matchup = matchup
+                _set_best_bets_progress(
+                    current_matchup=matchup,
+                    rows_processed=idx,
+                    candidates_kept=len(candidates),
+                    message=f"Scoring candidate legs for {matchup}",
+                )
+
+            if line is None or price is None or price <= 1.0:
+                continue
+            stat_components = MARKET_TO_STATS.get(market_key)
+            if not stat_components:
+                continue
+
+            normalized = _normalize_name(player_name or "")
+            if len(stat_components) == 1:
+                pred = prediction_index.get(stat_components[0], {}).get(normalized)
+            else:
+                pred = _compose_prediction_row(stat_components, normalized, prediction_index)
+            if not pred:
+                skipped_no_prediction += 1
+                continue
+
+            confidence = pred.get("confidence")
+            if confidence is not None and float(confidence) < min_confidence:
+                skipped_low_confidence += 1
+                continue
+
+            raw_prob, model_prob = _model_probability(pred, float(line), str(side))
+            overlay_meta = None
+            if use_under_overlay:
+                model_prob, overlay_meta = _apply_under_overlay(
+                    model_prob=model_prob,
+                    side=str(side),
+                    stat_components=stat_components,
+                    pred=pred,
+                    under_risk_index=under_risk_index,
+                )
+                if overlay_meta is not None:
+                    overlay_applied += 1
+            under_model_meta = None
+            if use_under_model and under_side_model_payload is not None:
+                model_prob, under_model_meta = _apply_under_side_model(
+                    model_prob=model_prob,
+                    side=str(side),
+                    stat_components=stat_components,
+                    pred=pred,
+                    under_risk_index=under_risk_index,
+                    side_model_payload=under_side_model_payload,
+                )
+                if under_model_meta is not None:
+                    under_model_applied += 1
+            implied_prob = 1.0 / float(price)
+            edge = model_prob - implied_prob
+            if model_prob < min_prob or edge < min_edge:
+                skipped_low_edge += 1
+                continue
+
+            expected_value = model_prob * (float(price) - 1.0) - (1.0 - model_prob)
+            stat_type = "+".join(stat_components)
+            candidates.append(
+                {
+                    "event_id": event_id,
+                    "commence_time": commence_time.isoformat(),
+                    "matchup": matchup,
+                    "bookmaker": book_key,
+                    "market": market_key,
+                    "stat_type": stat_type,
+                    "player_name": player_name,
+                    "side": side,
+                    "line": float(line),
+                    "price_decimal": float(price),
+                    "implied_prob": round(implied_prob, 4),
+                    "model_prob_raw": round(raw_prob, 4),
+                    "model_prob": round(model_prob, 4),
+                    "edge": round(edge, 4),
+                    "ev_per_unit": round(expected_value, 4),
+                    "under_overlay": overlay_meta,
+                    "under_side_model": under_model_meta,
+                    "prediction": {
+                        "pred_value": pred.get("pred_value"),
+                        "pred_p10": pred.get("pred_p10"),
+                        "pred_p50": pred.get("pred_p50"),
+                        "pred_p90": pred.get("pred_p90"),
+                        "confidence": pred.get("confidence"),
+                        "player_id": pred.get("player_id"),
+                        "team_abbreviation": pred.get("team_abbreviation"),
+                    },
+                }
+            )
+
+        if not candidates:
+            _finish_best_bets_progress(
+                request_id,
+                "completed",
+                "No bets met thresholds",
+                rows_processed=len(rows),
+                rows_total=len(rows),
+                candidates_kept=0,
+                phase="completed",
+            )
+            return {
+                "status": "no_candidates",
+                "message": "No bets met confidence/edge thresholds. Try lower filters.",
+                "bookmaker": bookmaker,
+                "filters": {
+                    "target_multiplier": target_multiplier,
+                    "leg_count": leg_count,
+                    "min_confidence": min_confidence,
+                    "min_edge": min_edge,
+                    "min_prob": min_prob,
+                },
+                "debug": {
+                    "rows_loaded": len(rows),
+                    "skipped_no_prediction": skipped_no_prediction,
+                    "skipped_low_confidence": skipped_low_confidence,
+                    "skipped_low_edge": skipped_low_edge,
+                    "under_overlay_enabled": use_under_overlay,
+                    "under_overlay_applied": overlay_applied,
+                    "under_model_enabled": use_under_model,
+                    "under_model_loaded": under_side_model_payload is not None,
+                    "under_model_applied": under_model_applied,
                 },
             }
+
+        _set_best_bets_progress(
+            phase="ranking",
+            message="Ranking parlay combinations",
+            rows_processed=len(rows),
+            candidates_kept=len(candidates),
         )
 
-    if not candidates:
+        ranked = sorted(
+            candidates,
+            key=lambda c: (c["edge"], c["model_prob"], c["ev_per_unit"]),
+            reverse=True,
+        )[: max(leg_count, max_candidates)]
+
+        parlay_options = []
+        all_combo_candidates = []
+        max_target_overshoot = 1.8
+        target_leg_max = max_legs if max_legs is not None else leg_count
+        if leg_mode == "up_to":
+            leg_counts = [n for n in range(2, target_leg_max + 1)]
+            if not leg_counts:
+                leg_counts = [1]
+        else:
+            leg_counts = [leg_count]
+
+        combos_considered = 0
+        for active_leg_count in leg_counts:
+            if active_leg_count == 1:
+                for leg in ranked[: min(8, len(ranked))]:
+                    payout = leg["price_decimal"]
+                    parlay_options.append(
+                        {
+                            "legs": [leg],
+                            "leg_count": 1,
+                            "combined_odds": round(payout, 4),
+                            "combined_probability": leg["model_prob"],
+                            "expected_value_per_unit": leg["ev_per_unit"],
+                            "meets_target": payout >= target_multiplier,
+                        }
+                    )
+                continue
+
+            pool = ranked[: min(len(ranked), 18)]
+            min_distinct_events = 2 if len(selected_ids) >= 2 and active_leg_count >= 2 else 1
+            for combo in combinations(pool, active_leg_count):
+                combos_considered += 1
+                if combos_considered == 1 or combos_considered % 100 == 0:
+                    focus_leg = combo[0] if combo else None
+                    _set_best_bets_progress(
+                        phase="ranking",
+                        message="Ranking parlay combinations",
+                        current_matchup=focus_leg.get("matchup") if focus_leg else None,
+                        combos_considered=combos_considered,
+                        candidates_kept=len(candidates),
+                    )
+                combo_keys = {
+                    (leg["event_id"], leg["player_name"], leg["market"], leg["side"], leg["line"])
+                    for leg in combo
+                }
+                if len(combo_keys) != len(combo):
+                    continue
+
+                distinct_events = {leg["event_id"] for leg in combo}
+                if len(distinct_events) < min_distinct_events:
+                    continue
+
+                combined_odds = _combo_product([leg["price_decimal"] for leg in combo])
+                combined_prob = _combo_product([leg["model_prob"] for leg in combo])
+                expected_value = combined_prob * (combined_odds - 1.0) - (1.0 - combined_prob)
+                parlay_payload = {
+                    "legs": list(combo),
+                    "leg_count": active_leg_count,
+                    "combined_odds": round(combined_odds, 4),
+                    "combined_probability": round(combined_prob, 4),
+                    "expected_value_per_unit": round(expected_value, 4),
+                    "meets_target": combined_odds >= target_multiplier,
+                }
+                all_combo_candidates.append(parlay_payload)
+
+                if combined_odds < target_multiplier:
+                    continue
+                if combined_odds > target_multiplier * max_target_overshoot:
+                    continue
+                parlay_options.append(parlay_payload)
+
+        ranked_parlays = sorted(
+            parlay_options,
+            key=lambda p: (
+                abs(p["combined_odds"] - target_multiplier),
+                -p["combined_probability"],
+                -p["expected_value_per_unit"],
+            ),
+        )
+
+    # Fallback path: if no near-target parlays, show best available combos.
+    # Preference order:
+    # 1) combos above target with more "Over" legs
+    # 2) if none above target, combos below target with more "Over" legs
+        if not ranked_parlays and max(leg_counts) > 1 and all_combo_candidates:
+            above_target = [p for p in all_combo_candidates if p["combined_odds"] >= target_multiplier]
+            below_target = [p for p in all_combo_candidates if p["combined_odds"] < target_multiplier]
+
+            def over_count(parlay: dict) -> int:
+                return sum(1 for leg in parlay["legs"] if str(leg.get("side", "")).lower() == "over")
+
+            if above_target:
+                ranked_parlays = sorted(
+                    above_target,
+                    key=lambda p: (
+                        -over_count(p),
+                        abs(p["combined_odds"] - target_multiplier),
+                        -p["combined_probability"],
+                    ),
+                )
+            elif below_target:
+                ranked_parlays = sorted(
+                    below_target,
+                    key=lambda p: (
+                        -over_count(p),
+                        abs(p["combined_odds"] - target_multiplier),
+                        -p["combined_probability"],
+                    ),
+                )
+
+    # Diversify recommendations so the same player does not repeat across parlays.
+        parlay_options = []
+        used_players: set[tuple[str, str]] = set()
+        for parlay in ranked_parlays:
+            parlay_players = {
+                (leg["event_id"], str(leg["player_name"]).lower()) for leg in parlay["legs"]
+            }
+            if used_players.intersection(parlay_players):
+                continue
+            parlay_options.append(parlay)
+            used_players.update(parlay_players)
+            if len(parlay_options) >= 5:
+                break
+
+        top_single_legs = sorted(
+            candidates, key=lambda c: (c["model_prob"], c["edge"]), reverse=True
+        )[:10]
+
+        _finish_best_bets_progress(
+            request_id,
+            "completed",
+            "Best Bets build complete",
+            phase="completed",
+            rows_processed=len(rows),
+            rows_total=len(rows),
+            candidates_kept=len(candidates),
+            combos_considered=combos_considered,
+        )
         return {
-            "status": "no_candidates",
-            "message": "No bets met confidence/edge thresholds. Try lower filters.",
+            "status": "ok",
+            "generated_at": datetime.now(ZoneInfo("UTC")).isoformat(),
             "bookmaker": bookmaker,
+            "target_multiplier": target_multiplier,
+            "leg_count": leg_count,
+            "leg_mode": leg_mode,
+            "max_legs": target_leg_max,
+            "day": day,
+            "include_combos": include_combos,
+            "selected_event_count": len(selected_ids),
             "filters": {
-                "target_multiplier": target_multiplier,
-                "leg_count": leg_count,
                 "min_confidence": min_confidence,
                 "min_edge": min_edge,
                 "min_prob": min_prob,
+                "use_under_model": use_under_model,
+                "use_under_overlay": use_under_overlay,
             },
+            "pool_size": len(candidates),
+            "top_single_legs": top_single_legs,
+            "recommended_parlays": parlay_options,
             "debug": {
                 "rows_loaded": len(rows),
                 "skipped_no_prediction": skipped_no_prediction,
@@ -571,162 +861,11 @@ async def get_best_bets(
                 "under_model_applied": under_model_applied,
             },
         }
-
-    ranked = sorted(
-        candidates,
-        key=lambda c: (c["edge"], c["model_prob"], c["ev_per_unit"]),
-        reverse=True,
-    )[: max(leg_count, max_candidates)]
-
-    parlay_options = []
-    all_combo_candidates = []
-    max_target_overshoot = 1.8
-    target_leg_max = max_legs if max_legs is not None else leg_count
-    if leg_mode == "up_to":
-        leg_counts = [n for n in range(2, target_leg_max + 1)]
-        if not leg_counts:
-            leg_counts = [1]
-    else:
-        leg_counts = [leg_count]
-
-    for active_leg_count in leg_counts:
-        if active_leg_count == 1:
-            for leg in ranked[: min(8, len(ranked))]:
-                payout = leg["price_decimal"]
-                parlay_options.append(
-                    {
-                        "legs": [leg],
-                        "leg_count": 1,
-                        "combined_odds": round(payout, 4),
-                        "combined_probability": leg["model_prob"],
-                        "expected_value_per_unit": leg["ev_per_unit"],
-                        "meets_target": payout >= target_multiplier,
-                    }
-                )
-            continue
-
-        pool = ranked[: min(len(ranked), 18)]
-        min_distinct_events = 2 if len(selected_ids) >= 2 and active_leg_count >= 2 else 1
-        for combo in combinations(pool, active_leg_count):
-            combo_keys = {
-                (leg["event_id"], leg["player_name"], leg["market"], leg["side"], leg["line"])
-                for leg in combo
-            }
-            if len(combo_keys) != len(combo):
-                continue
-
-            # If user selected multiple matchups, force event diversity in parlays.
-            distinct_events = {leg["event_id"] for leg in combo}
-            if len(distinct_events) < min_distinct_events:
-                continue
-
-            combined_odds = _combo_product([leg["price_decimal"] for leg in combo])
-            combined_prob = _combo_product([leg["model_prob"] for leg in combo])
-            expected_value = combined_prob * (combined_odds - 1.0) - (1.0 - combined_prob)
-            parlay_payload = {
-                "legs": list(combo),
-                "leg_count": active_leg_count,
-                "combined_odds": round(combined_odds, 4),
-                "combined_probability": round(combined_prob, 4),
-                "expected_value_per_unit": round(expected_value, 4),
-                "meets_target": combined_odds >= target_multiplier,
-            }
-            all_combo_candidates.append(parlay_payload)
-
-            if combined_odds < target_multiplier:
-                continue
-            # Keep recommendations near the requested payout target.
-            if combined_odds > target_multiplier * max_target_overshoot:
-                continue
-            parlay_options.append(parlay_payload)
-
-    ranked_parlays = sorted(
-        parlay_options,
-        key=lambda p: (
-            abs(p["combined_odds"] - target_multiplier),
-            -p["combined_probability"],
-            -p["expected_value_per_unit"],
-        ),
-    )
-
-    # Fallback path: if no near-target parlays, show best available combos.
-    # Preference order:
-    # 1) combos above target with more "Over" legs
-    # 2) if none above target, combos below target with more "Over" legs
-    if not ranked_parlays and max(leg_counts) > 1 and all_combo_candidates:
-        above_target = [p for p in all_combo_candidates if p["combined_odds"] >= target_multiplier]
-        below_target = [p for p in all_combo_candidates if p["combined_odds"] < target_multiplier]
-
-        def over_count(parlay: dict) -> int:
-            return sum(1 for leg in parlay["legs"] if str(leg.get("side", "")).lower() == "over")
-
-        if above_target:
-            ranked_parlays = sorted(
-                above_target,
-                key=lambda p: (
-                    -over_count(p),
-                    abs(p["combined_odds"] - target_multiplier),
-                    -p["combined_probability"],
-                ),
-            )
-        elif below_target:
-            ranked_parlays = sorted(
-                below_target,
-                key=lambda p: (
-                    -over_count(p),
-                    abs(p["combined_odds"] - target_multiplier),
-                    -p["combined_probability"],
-                ),
-            )
-
-    # Diversify recommendations so the same player does not repeat across parlays.
-    parlay_options = []
-    used_players: set[tuple[str, str]] = set()
-    for parlay in ranked_parlays:
-        parlay_players = {
-            (leg["event_id"], str(leg["player_name"]).lower()) for leg in parlay["legs"]
-        }
-        if used_players.intersection(parlay_players):
-            continue
-        parlay_options.append(parlay)
-        used_players.update(parlay_players)
-        if len(parlay_options) >= 5:
-            break
-
-    top_single_legs = sorted(
-        candidates, key=lambda c: (c["model_prob"], c["edge"]), reverse=True
-    )[:10]
-
-    return {
-        "status": "ok",
-        "generated_at": datetime.now(ZoneInfo("UTC")).isoformat(),
-        "bookmaker": bookmaker,
-        "target_multiplier": target_multiplier,
-        "leg_count": leg_count,
-        "leg_mode": leg_mode,
-        "max_legs": target_leg_max,
-        "day": day,
-        "include_combos": include_combos,
-        "selected_event_count": len(selected_ids),
-        "filters": {
-            "min_confidence": min_confidence,
-            "min_edge": min_edge,
-            "min_prob": min_prob,
-            "use_under_model": use_under_model,
-            "use_under_overlay": use_under_overlay,
-        },
-        "pool_size": len(candidates),
-        "top_single_legs": top_single_legs,
-        "recommended_parlays": parlay_options,
-        "debug": {
-            "rows_loaded": len(rows),
-            "skipped_no_prediction": skipped_no_prediction,
-            "skipped_low_confidence": skipped_low_confidence,
-            "skipped_low_edge": skipped_low_edge,
-            "under_overlay_enabled": use_under_overlay,
-            "under_overlay_applied": overlay_applied,
-            "under_model_enabled": use_under_model,
-            "under_model_loaded": under_side_model_payload is not None,
-            "under_model_applied": under_model_applied,
-        },
-    }
+    except Exception as exc:
+        _finish_best_bets_progress(
+            request_id,
+            "failed",
+            f"Best Bets build failed: {exc}",
+            phase="failed",
+        )
+        raise
