@@ -8,6 +8,7 @@ import {
   getGuardStats,
   getRecentPerformers,
   getNbaEvents,
+  getOddsUsageSnapshot,
   getOddsEventProps,
   getPointsPredictions,
   getAssistsPredictions,
@@ -17,15 +18,18 @@ import {
   getFirstBasketPredictions,
   getDoublesPredictions,
   getBestBets,
+  getBestBetsProgress,
   syncPlayerPropsWindow,
   getApiHealth,
   type PlayerRow,
   type OddsEvent,
   type OddsEventPropsResponse,
+  type OddsUsageSnapshot,
   type PredictionRow,
   type FirstBasketPredictionRow,
   type DoubleTriplePredictionRow,
   type BestBetsResponse,
+  type BestBetsProgress,
   type PredictionDayParam,
 } from "./api";
 
@@ -707,6 +711,14 @@ function App() {
   const [selectedBestBetEventIds, setSelectedBestBetEventIds] = useState<string[]>([]);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const [isSyncingBestBets, setIsSyncingBestBets] = useState(false);
+  const [oddsUsage, setOddsUsage] = useState<ApiState<OddsUsageSnapshot>>(initialState);
+  const [bestBetsProgress, setBestBetsProgress] =
+    useState<ApiState<BestBetsProgress>>(initialState);
+  const [bestBetLoadingPhase, setBestBetLoadingPhase] = useState<
+    "idle" | "syncing" | "scoring" | "ranking"
+  >("idle");
+  const [bestBetLoadingStartedAt, setBestBetLoadingStartedAt] = useState<number | null>(null);
+  const [bestBetLoadingTick, setBestBetLoadingTick] = useState(0);
   const [backendHealth, setBackendHealth] = useState<
     "checking" | "up" | "down"
   >("checking");
@@ -995,6 +1007,45 @@ function App() {
     label: `${event.away_team} @ ${event.home_team}`,
     kickoff: formatDateTimeByRegion(event.commence_time),
   }));
+  const activeBestBetMatchups =
+    selectedBestBetEventIds.length > 0
+      ? bestBetMatchupOptions.filter((event) => selectedBestBetEventIds.includes(event.id))
+      : bestBetMatchupOptions.slice(0, bestBetEvents);
+  const bestBetFocusLabel =
+    activeBestBetMatchups.length > 0
+      ? activeBestBetMatchups[bestBetLoadingTick % activeBestBetMatchups.length]
+      : null;
+  const bestBetsProgressData = bestBetsProgress.data;
+  const bestBetsProgressMatchup = bestBetsProgressData?.current_matchup
+    ? activeBestBetMatchups.find(
+        (event) => normalizeMatchupKey(event.label) === normalizeMatchupKey(bestBetsProgressData.current_matchup ?? "")
+      ) ?? {
+        id: "",
+        label: bestBetsProgressData.current_matchup,
+        kickoff: "",
+      }
+    : null;
+  const bestBetElapsedSeconds = bestBetLoadingStartedAt
+    ? Math.max(0, Math.round((Date.now() - bestBetLoadingStartedAt) / 1000))
+    : 0;
+  const bestBetsProgressSummaryParts = [
+    typeof bestBetsProgressData?.rows_processed === "number" &&
+    typeof bestBetsProgressData?.rows_total === "number" &&
+    bestBetsProgressData.rows_total > 0
+      ? `${bestBetsProgressData.rows_processed}/${bestBetsProgressData.rows_total} props`
+      : null,
+    typeof bestBetsProgressData?.candidates_kept === "number"
+      ? `${bestBetsProgressData.candidates_kept} candidates`
+      : null,
+    typeof bestBetsProgressData?.combos_considered === "number" &&
+    bestBetsProgressData.combos_considered > 0
+      ? `${bestBetsProgressData.combos_considered} combos`
+      : null,
+  ].filter(Boolean) as string[];
+  const oddsCreditsRemaining =
+    typeof oddsUsage.data?.requests_remaining === "number"
+      ? oddsUsage.data.requests_remaining
+      : null;
 
   const currentPredictionRows = predictionConfig[predictionStat].state.data ?? [];
   const predictionMatchupMap = currentPredictionRows.reduce(
@@ -1099,6 +1150,11 @@ function App() {
           ? "today"
           : "auto");
 
+    setBestBetLoadingStartedAt(Date.now());
+    setBestBetLoadingTick(0);
+    setBestBetsProgress(initialState<BestBetsProgress>());
+    void loadBestBetsProgress(true);
+
     await safeLoad(
       bestBetsState,
       setBestBetsState,
@@ -1123,11 +1179,17 @@ function App() {
       2 * 60 * 1000,
       force
     );
+    void loadBestBetsProgress(true);
   };
 
   const handleSyncAndLoadBestBets = async () => {
     setSyncSummary(null);
     setIsSyncingBestBets(true);
+    setBestBetLoadingPhase("syncing");
+    setBestBetLoadingStartedAt(Date.now());
+    setBestBetLoadingTick(0);
+    setBestBetsProgress(initialState<BestBetsProgress>());
+    void loadBestBetsProgress(true);
     try {
       const selectedMarkets = includeComboMarkets
         ? "player_points,player_assists,player_rebounds," +
@@ -1153,12 +1215,32 @@ function App() {
         usage && typeof usage.requests_remaining !== "undefined"
           ? ` | credits left: ${usage.requests_remaining}`
           : "";
+      if (usage) {
+        setOddsUsage({
+          loading: false,
+          error: null,
+          data: {
+            requests_last:
+              typeof usage.requests_last === "number" ? usage.requests_last : null,
+            requests_remaining:
+              typeof usage.requests_remaining === "number"
+                ? usage.requests_remaining
+                : null,
+            requests_used:
+              typeof usage.requests_used === "number" ? usage.requests_used : null,
+          },
+          lastFetched: Date.now(),
+        });
+      }
       setSyncSummary(`Synced ${processed}/${considered} events${remaining}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to sync props.";
       setSyncSummary(`Sync error: ${message}`);
     } finally {
+      setBestBetLoadingPhase("scoring");
       await handleLoadBestBets(true);
+      setBestBetLoadingPhase("idle");
+      setBestBetLoadingStartedAt(null);
       setIsSyncingBestBets(false);
     }
   };
@@ -1199,6 +1281,24 @@ function App() {
       setBackendCheckedAt(Date.now());
     }
   };
+
+  const loadOddsUsageSnapshot = (force = false) =>
+    safeLoad(
+      oddsUsage,
+      setOddsUsage,
+      () => getOddsUsageSnapshot(),
+      30 * 1000,
+      force
+    );
+
+  const loadBestBetsProgress = (force = false) =>
+    safeLoad(
+      bestBetsProgress,
+      setBestBetsProgress,
+      () => getBestBetsProgress(),
+      1000,
+      force
+    );
 
   useEffect(() => {
     handleLoadPredictions(true);
@@ -1245,7 +1345,10 @@ function App() {
       void handleLoadEvents();
     }
     if (activeTab === "best_bets") {
-      void handleLoadEvents(true);
+      void (async () => {
+        await handleLoadEvents(true);
+        await loadOddsUsageSnapshot(true);
+      })();
     }
     if (activeTab === "matchups") {
       void handleLoadEvents(true);
@@ -1263,6 +1366,21 @@ function App() {
     const validIds = new Set(eventsState.data.map((e) => e.id));
     setSelectedBestBetEventIds((prev) => prev.filter((id) => validIds.has(id)));
   }, [eventsState.data]);
+
+  useEffect(() => {
+    if (!isSyncingBestBets && !bestBetsState.loading) return;
+    const interval = setInterval(() => {
+      setBestBetLoadingTick((prev) => prev + 1);
+      void loadBestBetsProgress(true);
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [isSyncingBestBets, bestBetsState.loading]);
+
+  useEffect(() => {
+    if (isSyncingBestBets || bestBetsState.loading) return;
+    setBestBetLoadingStartedAt(null);
+    setBestBetLoadingPhase("idle");
+  }, [isSyncingBestBets, bestBetsState.loading]);
 
   useEffect(() => {
     void checkBackendHealth();
@@ -1611,6 +1729,21 @@ function App() {
             ? selectedBestBetEventIds.length
             : bestBetEvents;
         const estimatedCredits = selectedMatchupCount * estimatedMarketsPerEvent;
+        const bestBetPhaseLabel =
+          bestBetsProgressData?.message ??
+          (bestBetLoadingPhase === "syncing"
+            ? `Syncing Sportsbet props${bestBetFocusLabel ? ` for ${bestBetFocusLabel.label}` : ""}`
+            : bestBetLoadingPhase === "ranking"
+              ? `Ranking parlay combinations${bestBetFocusLabel ? ` around ${bestBetFocusLabel.label}` : ""}`
+              : `Scoring candidate legs${bestBetFocusLabel ? ` for ${bestBetFocusLabel.label}` : ""}`);
+        const bestBetLoadingSummary =
+          bestBetsProgressData?.phase
+            ? `${bestBetsProgressData.phase[0].toUpperCase()}${bestBetsProgressData.phase.slice(1)}`
+            : bestBetLoadingPhase === "syncing"
+              ? "Syncing"
+              : bestBetLoadingPhase === "ranking"
+                ? "Ranking"
+                : "Scoring";
         return (
           <div className="card card-body border-radius-xl shadow-lg best-bets-panel">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
@@ -1782,10 +1915,35 @@ function App() {
             </div>
             <p className="text-sm text-secondary mb-3">
               Estimated sync cost: ~{estimatedCredits} credits ({selectedMatchupCount} events x{" "}
-              {estimatedMarketsPerEvent} markets/event, Sportsbet only). 
+              {estimatedMarketsPerEvent} markets/event, Sportsbet only)
+              {oddsCreditsRemaining !== null ? ` | Credits left: ${oddsCreditsRemaining}` : ""}
             </p>
-            {isSyncingBestBets && (
-              <p className="text-sm text-secondary mb-3">Sync in progress...</p>
+            {oddsUsage.error && (
+              <p className="text-sm text-secondary mb-3">
+                Could not load current credits snapshot.
+              </p>
+            )}
+            {(isSyncingBestBets || bestBetsState.loading) && (
+              <div className="mb-3">
+                <p className="text-sm text-secondary mb-1">
+                  {bestBetLoadingSummary}: {bestBetPhaseLabel}
+                </p>
+                <p className="text-xs text-secondary mb-0">
+                  {bestBetsProgressMatchup
+                    ? `Current matchup: ${bestBetsProgressMatchup.label}${
+                        bestBetsProgressMatchup.kickoff
+                          ? ` (${bestBetsProgressMatchup.kickoff})`
+                          : ""
+                      }`
+                    : bestBetFocusLabel
+                      ? `Focus matchup: ${bestBetFocusLabel.label} (${bestBetFocusLabel.kickoff})`
+                      : "Preparing selected matchups."}
+                  {bestBetsProgressSummaryParts.length > 0
+                    ? ` | ${bestBetsProgressSummaryParts.join(" | ")}`
+                    : ""}
+                  {` | ${bestBetElapsedSeconds}s elapsed`}
+                </p>
+              </div>
             )}
             {syncSummary && <p className="text-sm text-secondary mb-3">{syncSummary}</p>}
             {bestBetsState.error && (

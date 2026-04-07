@@ -79,6 +79,7 @@ class TheOddsClient:
         async with httpx.AsyncClient(timeout=15) as client:
             res = await client.get(url, params=params)
             res.raise_for_status()
+            self._extract_usage(res)
             return res.json()
 
     @cached(ttl_seconds=60 * 5)  # 5 minutes
@@ -138,6 +139,7 @@ class TheOddsClient:
                 params={"api_key": self.api_key},
             )
             res.raise_for_status()
+            self._extract_usage(res)
             return res.json()
 
     # event odds (eg. player props)
