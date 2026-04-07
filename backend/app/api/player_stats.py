@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Query
+import asyncio
 from ..services.nba_client import NBAClient
 from sqlalchemy import create_engine, text
 from app.core.config import settings
@@ -43,6 +44,7 @@ sync_engine = create_engine(to_sync_db_url(settings.DATABASE_URL))
 rotowire_lineups_client = RotoWireLineupsClient(timeout=20)
 jedi_client = JediBetsFirstBasketClient(timeout=20)
 lineup_resolver = LineupResolver(sync_engine)
+prediction_precompute_jobs: dict[str, dict] = {}
 
 
 # Helper function to convert DataFrame to list of dicts for API response
@@ -358,6 +360,142 @@ def apply_under_risk_boost(df, stat_type: str, good_ids: set[int]):
 
     df["under_risk"] = df.apply(adjust, axis=1)
 
+
+def _load_stored_predictions(engine, stat_type: str, day: str) -> pd.DataFrame:
+    target_date = _target_et_date_for_day(day)
+    df = pd.read_sql(
+        text(
+            """
+            SELECT
+                pl.player_id,
+                p.full_name,
+                t.id AS team_id,
+                p.team_abbreviation,
+                COALESCE(gs.matchup, pl.game_id) AS matchup,
+                pl.game_date,
+                pl.game_id,
+                pl.pred_value,
+                pl.pred_p10,
+                pl.pred_p50,
+                pl.pred_p90,
+                pl.confidence,
+                pl.model_version
+            FROM prediction_logs pl
+            JOIN players p ON p.id = pl.player_id
+            LEFT JOIN teams t ON UPPER(t.abbreviation) = UPPER(p.team_abbreviation)
+            LEFT JOIN game_schedule gs ON gs.game_id = pl.game_id
+            WHERE pl.stat_type = :stat_type
+              AND pl.game_date = :target_date
+            ORDER BY pl.pred_value DESC
+            """
+        ),
+        engine,
+        params={"stat_type": stat_type, "target_date": target_date},
+    )
+    if df.empty:
+        return df
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    df["team_abbreviation"] = df["team_abbreviation"].astype(str).str.upper()
+    return df
+
+
+def _enrich_prediction_frame(
+    df_preds: pd.DataFrame,
+    stat_type: str,
+    day: str,
+    *,
+    lineups_payload: dict | None,
+    apply_lineup_filters_flag: bool,
+) -> pd.DataFrame:
+    if df_preds.empty:
+        return df_preds
+
+    if apply_lineup_filters_flag:
+        df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
+    if lineups_payload is not None:
+        df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
+
+    under_risk = fetch_under_risk(sync_engine, stat_type, df_preds["player_id"].tolist())
+    last_under = compute_last_under_by_threshold(sync_engine, df_preds, stat_type)
+    good_ids = fetch_good_player_ids(sync_engine, stat_type)
+    df_preds["under_risk"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
+    )
+    df_preds["under_risk_n"] = df_preds["player_id"].map(
+        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
+    )
+    df_preds["last_under_date"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
+    )
+    df_preds["last_under_value"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
+    )
+    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
+    )
+    df_preds["last_under_matchup"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
+    )
+    df_preds["last_under_minutes"] = df_preds["player_id"].map(
+        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
+    )
+    apply_under_risk_boost(df_preds, stat_type, good_ids)
+    return df_preds.sort_values("pred_value", ascending=False)
+
+
+def _predictor_for_stat(stat_type: str):
+    mapping = {
+        "points": predict_points,
+        "assists": predict_assists,
+        "rebounds": predict_rebounds,
+        "threept": predict_threept,
+        "threepa": predict_threepa,
+    }
+    predictor = mapping.get(stat_type)
+    if predictor is None:
+        raise ValueError(f"Unsupported stat_type: {stat_type}")
+    return predictor
+
+
+def _get_or_compute_predictions(stat_type: str, day: str) -> tuple[list[dict], str]:
+    stored_df = _load_stored_predictions(sync_engine, stat_type, day)
+    if not stored_df.empty:
+        enriched = _enrich_prediction_frame(
+            stored_df,
+            stat_type,
+            day,
+            lineups_payload=None,
+            apply_lineup_filters_flag=False,
+        )
+        return df_to_dict(enriched), "stored"
+
+    lineups_payload = fetch_lineups_payload(sync_engine, day)
+    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
+    predictor = _predictor_for_stat(stat_type)
+    df_preds = predictor(
+        sync_engine,
+        day,
+        expected_players_by_team=expected_map,
+        excluded_players_by_team=excluded_map,
+    )
+    if df_preds.empty:
+        return [], "computed_empty"
+
+    enriched = _enrich_prediction_frame(
+        df_preds,
+        stat_type,
+        day,
+        lineups_payload=lineups_payload,
+        apply_lineup_filters_flag=True,
+    )
+    log_predictions(
+        sync_engine,
+        enriched,
+        stat_type,
+        enriched["model_version"].iloc[0] if "model_version" in enriched else None,
+    )
+    return df_to_dict(enriched), "computed"
+
 @router.get("/top_scorers")
 def top_scorers(season: str = "2025-26", top_n: int = 10):
     df = client.fetch_player_stats(
@@ -431,61 +569,10 @@ async def predict_points_api(
     Predict player points for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
-    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
-    df_preds = await run_in_threadpool(
-        predict_points,
-        sync_engine,
-        day,
-        expected_players_by_team=expected_map,
-        excluded_players_by_team=excluded_map,
-    )
-
-    if df_preds.empty:
-        return {"message": f"No games found for {day}", "data": []}
-
-    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
-    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
-
-    under_risk = fetch_under_risk(
-        sync_engine, "points", df_preds["player_id"].tolist()
-    )
-    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "points")
-    good_ids = fetch_good_player_ids(sync_engine, "points")
-    df_preds["under_risk"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
-    )
-    df_preds["under_risk_n"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
-    )
-    df_preds["last_under_date"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
-    )
-    df_preds["last_under_value"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
-    )
-    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
-    )
-    df_preds["last_under_matchup"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
-    )
-    df_preds["last_under_minutes"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
-    )
-    apply_under_risk_boost(df_preds, "points", good_ids)
-
-    df_preds = df_preds.sort_values("pred_value", ascending=False)
-
-    await run_in_threadpool(
-        log_predictions,
-        sync_engine,
-        df_preds,
-        "points",
-        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
-    )
-
-    return df_to_dict(df_preds)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "points", day)
+    if not payload:
+        return {"message": f"No games found for {day}", "data": [], "source": source}
+    return {"data": payload, "source": source}
 
 
 @router.get("/predictions/assists")
@@ -496,61 +583,10 @@ async def predict_assists_api(
     Predict player assists for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
-    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
-    df_preds = await run_in_threadpool(
-        predict_assists,
-        sync_engine,
-        day,
-        expected_players_by_team=expected_map,
-        excluded_players_by_team=excluded_map,
-    )
-
-    if df_preds.empty:
-        return {"message": f"No games found for {day}", "data": []}
-
-    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
-    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
-
-    under_risk = fetch_under_risk(
-        sync_engine, "assists", df_preds["player_id"].tolist()
-    )
-    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "assists")
-    good_ids = fetch_good_player_ids(sync_engine, "assists")
-    df_preds["under_risk"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
-    )
-    df_preds["under_risk_n"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
-    )
-    df_preds["last_under_date"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
-    )
-    df_preds["last_under_value"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
-    )
-    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
-    )
-    df_preds["last_under_matchup"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
-    )
-    df_preds["last_under_minutes"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
-    )
-    apply_under_risk_boost(df_preds, "assists", good_ids)
-
-    df_preds = df_preds.sort_values("pred_value", ascending=False)
-
-    await run_in_threadpool(
-        log_predictions,
-        sync_engine,
-        df_preds,
-        "assists",
-        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
-    )
-
-    return df_to_dict(df_preds)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "assists", day)
+    if not payload:
+        return {"message": f"No games found for {day}", "data": [], "source": source}
+    return {"data": payload, "source": source}
 
 
 @router.get("/predictions/rebounds")
@@ -561,61 +597,10 @@ async def predict_rebounds_api(
     Predict player rebounds for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
-    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
-    df_preds = await run_in_threadpool(
-        predict_rebounds,
-        sync_engine,
-        day,
-        expected_players_by_team=expected_map,
-        excluded_players_by_team=excluded_map,
-    )
-
-    if df_preds.empty:
-        return {"message": f"No games found for {day}", "data": []}
-
-    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
-    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
-
-    under_risk = fetch_under_risk(
-        sync_engine, "rebounds", df_preds["player_id"].tolist()
-    )
-    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "rebounds")
-    good_ids = fetch_good_player_ids(sync_engine, "rebounds")
-    df_preds["under_risk"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
-    )
-    df_preds["under_risk_n"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
-    )
-    df_preds["last_under_date"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
-    )
-    df_preds["last_under_value"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
-    )
-    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
-    )
-    df_preds["last_under_matchup"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
-    )
-    df_preds["last_under_minutes"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
-    )
-    apply_under_risk_boost(df_preds, "rebounds", good_ids)
-
-    df_preds = df_preds.sort_values("pred_value", ascending=False)
-
-    await run_in_threadpool(
-        log_predictions,
-        sync_engine,
-        df_preds,
-        "rebounds",
-        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
-    )
-
-    return df_to_dict(df_preds)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "rebounds", day)
+    if not payload:
+        return {"message": f"No games found for {day}", "data": [], "source": source}
+    return {"data": payload, "source": source}
 
 
 @router.get("/predictions/threept")
@@ -626,61 +611,10 @@ async def predict_threept_api(
     Predict player made 3-pointers for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
-    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
-    df_preds = await run_in_threadpool(
-        predict_threept,
-        sync_engine,
-        day,
-        expected_players_by_team=expected_map,
-        excluded_players_by_team=excluded_map,
-    )
-
-    if df_preds.empty:
-        return {"message": f"No games found for {day}", "data": []}
-
-    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
-    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
-
-    under_risk = fetch_under_risk(
-        sync_engine, "threept", df_preds["player_id"].tolist()
-    )
-    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "threept")
-    good_ids = fetch_good_player_ids(sync_engine, "threept")
-    df_preds["under_risk"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
-    )
-    df_preds["under_risk_n"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
-    )
-    df_preds["last_under_date"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
-    )
-    df_preds["last_under_value"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
-    )
-    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
-    )
-    df_preds["last_under_matchup"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
-    )
-    df_preds["last_under_minutes"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
-    )
-    apply_under_risk_boost(df_preds, "threept", good_ids)
-
-    df_preds = df_preds.sort_values("pred_value", ascending=False)
-
-    await run_in_threadpool(
-        log_predictions,
-        sync_engine,
-        df_preds,
-        "threept",
-        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
-    )
-
-    return df_to_dict(df_preds)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "threept", day)
+    if not payload:
+        return {"message": f"No games found for {day}", "data": [], "source": source}
+    return {"data": payload, "source": source}
 
 
 @router.get("/predictions/threepa")
@@ -691,61 +625,79 @@ async def predict_threepa_api(
     Predict player 3-point attempts for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    lineups_payload = await run_in_threadpool(fetch_lineups_payload, sync_engine, day)
-    expected_map, excluded_map = build_expected_lineup_sets(lineups_payload)
-    df_preds = await run_in_threadpool(
-        predict_threepa,
-        sync_engine,
-        day,
-        expected_players_by_team=expected_map,
-        excluded_players_by_team=excluded_map,
-    )
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "threepa", day)
+    if not payload:
+        return {"message": f"No games found for {day}", "data": [], "source": source}
+    return {"data": payload, "source": source}
 
-    if df_preds.empty:
-        return {"message": f"No games found for {day}", "data": []}
 
-    df_preds = _apply_lineup_filters(df_preds, day, lineups_payload=lineups_payload)
-    df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
+def _run_prediction_precompute_job(job_id: str, days: list[str], stat_types: list[str]):
+    prediction_precompute_jobs[job_id]["status"] = "running"
+    results: dict[str, dict[str, dict[str, int | str]]] = {}
+    total_steps = len(days) * len(stat_types)
+    step = 0
+    try:
+        for day in days:
+            results[day] = {}
+            for stat_type in stat_types:
+                step += 1
+                prediction_precompute_jobs[job_id]["current_day"] = day
+                prediction_precompute_jobs[job_id]["current_stat"] = stat_type
+                prediction_precompute_jobs[job_id]["steps_done"] = step
+                prediction_precompute_jobs[job_id]["steps_total"] = total_steps
+                payload, source = _get_or_compute_predictions(stat_type, day)
+                results[day][stat_type] = {"rows": len(payload), "source": source}
 
-    under_risk = fetch_under_risk(
-        sync_engine, "threepa", df_preds["player_id"].tolist()
-    )
-    last_under = compute_last_under_by_threshold(sync_engine, df_preds, "threepa")
-    good_ids = fetch_good_player_ids(sync_engine, "threepa")
-    df_preds["under_risk"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("under_rate")
-    )
-    df_preds["under_risk_n"] = df_preds["player_id"].map(
-        lambda pid: under_risk.get(int(pid), {}).get("sample_size")
-    )
-    df_preds["last_under_date"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_date")
-    )
-    df_preds["last_under_value"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_value")
-    )
-    df_preds["last_under_games_ago"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_games_ago")
-    )
-    df_preds["last_under_matchup"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_matchup")
-    )
-    df_preds["last_under_minutes"] = df_preds["player_id"].map(
-        lambda pid: last_under.get(int(pid), {}).get("last_under_minutes")
-    )
-    apply_under_risk_boost(df_preds, "threepa", good_ids)
+        prediction_precompute_jobs[job_id]["status"] = "completed"
+        prediction_precompute_jobs[job_id]["result"] = results
+        prediction_precompute_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+    except Exception as exc:
+        prediction_precompute_jobs[job_id]["status"] = "failed"
+        prediction_precompute_jobs[job_id]["error"] = str(exc)
+        prediction_precompute_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
 
-    df_preds = df_preds.sort_values("pred_value", ascending=False)
 
-    await run_in_threadpool(
-        log_predictions,
-        sync_engine,
-        df_preds,
-        "threepa",
-        df_preds["model_version"].iloc[0] if "model_version" in df_preds else None,
+@router.post("/predictions/precompute/start")
+async def start_prediction_precompute(
+    days: str = "today,tomorrow",
+    stats: str = "points,assists,rebounds,threept,threepa",
+):
+    day_values = [value.strip() for value in days.split(",") if value.strip()]
+    stat_values = [value.strip() for value in stats.split(",") if value.strip()]
+    valid_days = {"today", "tomorrow", "yesterday", "two_days_ago", "auto"}
+    valid_stats = {"points", "assists", "rebounds", "threept", "threepa"}
+
+    if any(day not in valid_days for day in day_values):
+        return {"status": "error", "detail": "Invalid day in days parameter."}
+    if any(stat not in valid_stats for stat in stat_values):
+        return {"status": "error", "detail": "Invalid stat in stats parameter."}
+
+    job_id = datetime.utcnow().strftime("pred-%Y%m%d%H%M%S%f")
+    prediction_precompute_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "days": day_values,
+        "stats": stat_values,
+        "steps_done": 0,
+        "steps_total": len(day_values) * len(stat_values),
+        "current_day": None,
+        "current_stat": None,
+        "result": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    asyncio.create_task(
+        run_in_threadpool(_run_prediction_precompute_job, job_id, day_values, stat_values)
     )
+    return {"status": "queued", "job_id": job_id, "days": day_values, "stats": stat_values}
 
-    return df_to_dict(df_preds)
+
+@router.get("/predictions/precompute/jobs/{job_id}")
+async def get_prediction_precompute_job(job_id: str):
+    job = prediction_precompute_jobs.get(job_id)
+    if not job:
+        return {"status": "not_found", "job_id": job_id}
+    return job
 
 
 @router.get("/predictions/doubles")
