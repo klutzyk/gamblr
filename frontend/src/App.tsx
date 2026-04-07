@@ -129,12 +129,6 @@ function normalizeTeamToAbbr(teamName: string) {
   return trimmed;
 }
 
-function toAbbrMatchup(awayTeam: string, homeTeam: string) {
-  const away = normalizeTeamToAbbr(awayTeam);
-  const home = normalizeTeamToAbbr(homeTeam);
-  return `${away} @ ${home}`;
-}
-
 function normalizeMatchupKey(raw: string) {
   if (!raw) return "";
   const cleaned = raw
