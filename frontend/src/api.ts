@@ -277,6 +277,7 @@ export type ReviewRecentResponse = {
 export type ReviewPlayerGame = {
   game_date: string;
   matchup: string;
+  minutes?: number | null;
   predicted?: number | null;
   actual?: number | null;
   average_miss?: number | null;

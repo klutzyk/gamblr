@@ -555,6 +555,7 @@ async def get_review_player_detail(
                 SELECT
                     pl.game_date,
                     COALESCE(pgs.matchup, '') AS matchup,
+                    pgs.minutes,
                     pl.pred_value,
                     pl.actual_value,
                     pl.abs_error,
@@ -611,6 +612,7 @@ async def get_review_player_detail(
             {
                 "game_date": _fmt_date(row.game_date),
                 "matchup": row.matchup,
+                "minutes": _safe_float(row.minutes),
                 "predicted": _safe_float(row.pred_value),
                 "actual": _safe_float(row.actual_value),
                 "average_miss": _safe_float(row.abs_error),
