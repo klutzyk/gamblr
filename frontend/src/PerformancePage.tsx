@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import "./App.css";
 import "./PerformancePage.css";
 import logo from "./assets/logo2.png";
@@ -90,7 +90,37 @@ function getAverageMissExplanation(value: number | null | undefined, unit: strin
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "Not enough completed results yet.";
   }
-  return `On average, the prediction finished about ${value.toFixed(1)} ${unit} above or below the real result. Lower is better.`;
+  return `This is the average gap between the prediction and the real result. Lower is better.`;
+}
+
+function getMissToneClass(value: number | null | undefined, statType: StatType) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "tone-neutral";
+  const thresholds: Record<StatType, { good: number; mixed: number }> = {
+    points: { good: 4.0, mixed: 6.0 },
+    assists: { good: 1.8, mixed: 2.7 },
+    rebounds: { good: 2.0, mixed: 3.0 },
+    threept: { good: 0.9, mixed: 1.3 },
+    threepa: { good: 1.8, mixed: 2.8 },
+  };
+  const { good, mixed } = thresholds[statType];
+  if (value <= good) return "tone-good";
+  if (value <= mixed) return "tone-neutral";
+  return "tone-warm";
+}
+
+function getMissReadLabel(value: number | null | undefined, statType: StatType) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Still building";
+  const thresholds: Record<StatType, { good: number; mixed: number }> = {
+    points: { good: 4.0, mixed: 6.0 },
+    assists: { good: 1.8, mixed: 2.7 },
+    rebounds: { good: 2.0, mixed: 3.0 },
+    threept: { good: 0.9, mixed: 1.3 },
+    threepa: { good: 1.8, mixed: 2.8 },
+  };
+  const { good, mixed } = thresholds[statType];
+  if (value <= good) return "Good";
+  if (value <= mixed) return "Mixed";
+  return "Needs work";
 }
 
 function getBiasText(value: number | null | undefined, unit: string) {
@@ -117,11 +147,26 @@ function getTrendToneClass(label: string | null | undefined) {
   return "tone-neutral";
 }
 
-function getResultTone(bias: number | null | undefined) {
-  if (typeof bias !== "number") return "neutral";
-  if (bias > 0.75) return "high";
-  if (bias < -0.75) return "low";
-  return "neutral";
+function getResultTone(
+  miss: number | null | undefined,
+  threshold: number | null | undefined
+) {
+  if (typeof miss !== "number" || !Number.isFinite(miss)) return "neutral";
+  const safeThreshold = typeof threshold === "number" && Number.isFinite(threshold) ? threshold : 1;
+  if (miss <= safeThreshold) return "good";
+  if (miss <= safeThreshold * 1.5) return "neutral";
+  return "high";
+}
+
+function getCloseCallExplanation(
+  threshold: number | null | undefined,
+  unit: string,
+  statLabel: string
+) {
+  if (typeof threshold !== "number" || !Number.isFinite(threshold)) {
+    return "Close calls are the predictions that landed near the real result.";
+  }
+  return `A close call for ${statLabel.toLowerCase()} means finishing within ${threshold.toFixed(1)} ${unit} of the real result.`;
 }
 
 function getPerformanceHeadline(overview: ReviewOverview | null) {
@@ -183,36 +228,98 @@ function Sparkline({
   );
 }
 
-function TrendBars({
+function TrendChart({
   points,
   regionConfig,
+  statType,
 }: {
   points: ReviewTrendResponse["points"];
   regionConfig: (typeof REGION_CONFIG)[UserRegion];
+  statType: StatType;
 }) {
   const visible = points.slice(-14);
-  const maxMiss = Math.max(...visible.map((point) => point.average_miss ?? 0), 1);
+  const numericMisses = visible
+    .map((point) => point.average_miss)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  if (visible.length === 0 || numericMisses.length === 0) {
+    return <div className="perf-empty-chart">No completed days in this window yet.</div>;
+  }
+
+  const threshold = {
+    points: 4,
+    assists: 2,
+    rebounds: 2,
+    threept: 1,
+    threepa: 2,
+  }[statType];
+  const maxMiss = Math.max(...numericMisses, threshold + 1);
+  const chartHeight = 250;
+  const chartWidth = 640;
+  const leftPad = 42;
+  const rightPad = 12;
+  const topPad = 12;
+  const bottomPad = 38;
+  const innerHeight = chartHeight - topPad - bottomPad;
+  const innerWidth = chartWidth - leftPad - rightPad;
+  const stepX = innerWidth / Math.max(visible.length, 1);
+  const yTicks = [0, maxMiss / 2, maxMiss].map((tick) => Number(tick.toFixed(1)));
+
+  const getBarTone = (miss: number) => {
+    if (miss <= threshold) return "var(--perf-accent-deep)";
+    if (miss <= threshold * 1.5) return "#d8b15b";
+    return "var(--perf-danger)";
+  };
+
   return (
-    <div className="perf-trend-wrap">
-      {visible.length === 0 ? (
-        <div className="perf-empty-chart">No completed days in this window yet.</div>
-      ) : (
-        visible.map((point) => {
-          const miss = point.average_miss ?? 0;
-          const height = Math.max(8, (miss / maxMiss) * 100);
-          const closeRate = point.close_rate ?? 0;
+    <div className="perf-trend-chart-wrap">
+      <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="perf-trend-chart" preserveAspectRatio="none">
+        {yTicks.map((tick) => {
+          const y = topPad + innerHeight - (tick / maxMiss) * innerHeight;
           return (
-            <div key={point.game_date} className="perf-trend-bar">
-              <div
-                className="perf-trend-fill"
-                style={{ height: `${height}%`, opacity: 0.35 + closeRate * 0.65 }}
-                title={`${formatDateByRegion(point.game_date, regionConfig)} • Avg miss ${formatNumber(miss)}`}
-              />
-              <span>{formatDateByRegion(point.game_date, regionConfig)}</span>
-            </div>
+            <g key={tick}>
+              <line x1={leftPad} x2={chartWidth - rightPad} y1={y} y2={y} className="perf-trend-grid" />
+              <text x={leftPad - 8} y={y + 4} textAnchor="end" className="perf-trend-axis-label">
+                {tick.toFixed(1)}
+              </text>
+            </g>
           );
-        })
-      )}
+        })}
+        {visible.map((point, index) => {
+          const miss = point.average_miss ?? 0;
+          const barHeight = (miss / maxMiss) * innerHeight;
+          const x = leftPad + index * stepX + stepX * 0.16;
+          const width = stepX * 0.68;
+          const y = topPad + innerHeight - barHeight;
+          const showLabel = visible.length <= 8 || index % 2 === 0 || index === visible.length - 1;
+          return (
+            <g key={point.game_date}>
+              <rect
+                x={x}
+                y={y}
+                width={width}
+                height={barHeight}
+                rx={Math.min(10, width / 3)}
+                fill={getBarTone(miss)}
+              >
+                <title>
+                  {formatDateByRegion(point.game_date, regionConfig)} - Average miss {formatNumber(miss)}
+                </title>
+              </rect>
+              {showLabel ? (
+                <text
+                  x={x + width / 2}
+                  y={chartHeight - 14}
+                  textAnchor="middle"
+                  className="perf-trend-x-label"
+                >
+                  {formatDateByRegion(point.game_date, regionConfig)}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }
@@ -223,6 +330,7 @@ export default function PerformancePage() {
   const [days, setDays] = useState<number>(30);
   const [playerSearch, setPlayerSearch] = useState("");
   const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
+  const playerFocusRef = useRef<HTMLElement | null>(null);
 
   const [overviewState, setOverviewState] = useState<ApiState<ReviewOverview>>(initialState);
   const [trendState, setTrendState] = useState<ApiState<ReviewTrendResponse>>(initialState);
@@ -266,6 +374,11 @@ export default function PerformancePage() {
       getReviewPlayerDetail(selectedPlayerId, { stat_type: statType, days: Math.max(days, 30) })
     ).catch(() => undefined);
   }, [selectedPlayerId, statType, days]);
+
+  useEffect(() => {
+    if (!playerSearch.trim() || !selectedPlayerId || !playerDetailState.data) return;
+    playerFocusRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [playerSearch, selectedPlayerId, playerDetailState.data]);
 
   const selectedPlayer = useMemo(
     () =>
@@ -404,20 +517,35 @@ export default function PerformancePage() {
                 <strong>{overviewState.data?.tracked_predictions ?? "-"}</strong>
                 <p>Completed {statMeta.label.toLowerCase()} results in this window.</p>
               </article>
-              <article className="perf-stat-card tone-neutral">
+              <article className={`perf-stat-card ${getMissToneClass(overviewState.data?.average_miss, statType)}`}>
                 <span className="perf-card-label">Average miss</span>
-                <strong>{formatNumber(overviewState.data?.average_miss)} {statMeta.unit}</strong>
+                <div className="perf-stat-value-meta">
+                  <strong>{formatNumber(overviewState.data?.average_miss)} {statMeta.unit}</strong>
+                  <em>{getMissReadLabel(overviewState.data?.average_miss, statType)}</em>
+                </div>
                 <p>{getAverageMissExplanation(overviewState.data?.average_miss, statMeta.unit)}</p>
               </article>
               <article className="perf-stat-card tone-neutral">
-                <span className="perf-card-label">Typical miss</span>
-                <strong>{formatNumber(overviewState.data?.median_miss)} {statMeta.unit}</strong>
-                <p>This is the more typical miss, without being skewed by a few wild results.</p>
+                <span className="perf-card-label">Overall read</span>
+                <strong>{getMissReadLabel(overviewState.data?.average_miss, statType)}</strong>
+                <p>
+                  {getMissReadLabel(overviewState.data?.average_miss, statType) === "Good"
+                    ? "The model has been landing fairly close to the real result in this window."
+                    : getMissReadLabel(overviewState.data?.average_miss, statType) === "Mixed"
+                      ? "There have been solid calls, but the misses have been uneven."
+                      : "The gap to the real result has been wider than you would want."}
+                </p>
               </article>
               <article className="perf-stat-card tone-good">
                 <span className="perf-card-label">Close-call rate</span>
                 <strong>{formatPercent(overviewState.data?.close_rate)}</strong>
-                <p>Share of tracked picks that landed in a tight range around the real result.</p>
+                <p>
+                  {getCloseCallExplanation(
+                    overviewState.data?.close_call_threshold,
+                    statMeta.unit,
+                    statMeta.label
+                  )}
+                </p>
               </article>
               <article className={`perf-stat-card ${getBiasToneClass(overviewState.data?.bias)}`}>
                 <span className="perf-card-label">Tends to run</span>
@@ -441,9 +569,15 @@ export default function PerformancePage() {
                     <p className="perf-kicker">Recent accuracy trend</p>
                     <h3>Has the model been getting closer or drifting away?</h3>
                   </div>
-                  <span className="perf-panel-hint">Lower bars mean the predictions were closer that day.</span>
+                  <span className="perf-panel-hint">
+                    Lower bars are better. Green is stronger, yellow is mixed, red is weaker.
+                  </span>
                 </div>
-                <TrendBars points={trendState.data?.points ?? []} regionConfig={regionConfig} />
+                <TrendChart
+                  points={trendState.data?.points ?? []}
+                  regionConfig={regionConfig}
+                  statType={statType}
+                />
               </article>
 
               <article className="perf-panel perf-panel-story" id="about">
@@ -518,7 +652,7 @@ export default function PerformancePage() {
                 </div>
               </article>
 
-              <article className="perf-panel perf-player-focus">
+              <article className="perf-panel perf-player-focus" ref={playerFocusRef}>
                 <div className="perf-panel-head">
                   <div>
                     <p className="perf-kicker">Player deep dive</p>
@@ -604,11 +738,13 @@ export default function PerformancePage() {
                   <p className="perf-kicker">Recent results</p>
                   <h3>How the latest predictions stacked up against reality</h3>
                 </div>
-                <span className="perf-panel-hint">Green means the prediction came in close. Red means it ran further off.</span>
+                <span className="perf-panel-hint">
+                  Green means the prediction landed close. Yellow is middling. Red means it missed by more.
+                </span>
               </div>
               <div className="perf-recent-grid">
                 {(recentState.data?.results ?? []).map((row) => {
-                  const tone = getResultTone(row.bias);
+                  const tone = getResultTone(row.average_miss, overviewState.data?.close_call_threshold);
                   const predicted = row.predicted ?? 0;
                   const actual = row.actual ?? 0;
                   const maxValue = Math.max(predicted, actual, 1);
@@ -619,6 +755,7 @@ export default function PerformancePage() {
                           <strong>{row.full_name}</strong>
                           <small>
                             {formatDateByRegion(row.game_date, regionConfig)} · {row.matchup || row.team_abbreviation}
+                            {typeof row.minutes === "number" ? ` · ${Math.round(row.minutes)} min` : ""}
                           </small>
                         </div>
                         <span>{row.result_label}</span>
@@ -657,3 +794,4 @@ export default function PerformancePage() {
     </div>
   );
 }
+

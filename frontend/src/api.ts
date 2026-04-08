@@ -203,6 +203,7 @@ export type ReviewOverview = {
   stat_type: string;
   stat_label: string;
   days: number;
+  close_call_threshold?: number | null;
   tracked_predictions: number;
   average_miss?: number | null;
   median_miss?: number | null;
@@ -258,6 +259,7 @@ export type ReviewRecentRow = {
   team_abbreviation: string;
   game_date: string;
   matchup: string;
+  minutes?: number | null;
   predicted?: number | null;
   actual?: number | null;
   average_miss?: number | null;

@@ -37,6 +37,26 @@ def _close_threshold(stat_type: str) -> float:
     }[stat_type]
 
 
+def _stat_column(stat_type: str) -> str:
+    return {
+        "points": "points",
+        "assists": "assists",
+        "rebounds": "rebounds",
+        "threept": "fg3m",
+        "threepa": "fg3a",
+    }[stat_type]
+
+
+def _relevance_threshold(stat_type: str) -> float:
+    return {
+        "points": 10.0,
+        "assists": 3.0,
+        "rebounds": 5.0,
+        "threept": 1.2,
+        "threepa": 3.0,
+    }[stat_type]
+
+
 def _fmt_date(value: date | None) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -206,6 +226,7 @@ async def get_review_overview(
         "stat_type": stat_type,
         "stat_label": stat_label,
         "days": days,
+        "close_call_threshold": close_threshold,
         "tracked_predictions": tracked_predictions,
         "average_miss": avg_abs_error,
         "median_miss": median_abs_error,
@@ -294,6 +315,8 @@ async def get_review_players(
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 100.")
     close_threshold = _close_threshold(stat_type)
+    stat_column = _stat_column(stat_type)
+    relevance_threshold = _relevance_threshold(stat_type)
     window_start = date.today() - timedelta(days=days - 1)
     search_value = f"%{(search or '').strip().lower()}%"
 
@@ -301,7 +324,18 @@ async def get_review_players(
         await db.execute(
             text(
                 """
-                WITH base AS (
+                WITH relevant_players AS (
+                    SELECT
+                        player_id,
+                        AVG(minutes) AS avg_minutes,
+                        AVG(""" + stat_column + """) AS avg_stat_value
+                    FROM player_game_stats
+                    WHERE game_date IS NOT NULL
+                      AND game_date >= :window_start
+                    GROUP BY player_id
+                    HAVING AVG(minutes) >= 18 OR AVG(""" + stat_column + """) >= :relevance_threshold
+                ),
+                base AS (
                     SELECT
                         pl.player_id,
                         p.full_name,
@@ -312,6 +346,7 @@ async def get_review_players(
                         ROW_NUMBER() OVER (PARTITION BY pl.player_id ORDER BY pl.game_date DESC, pl.id DESC) AS rn
                     FROM prediction_logs pl
                     JOIN players p ON p.id = pl.player_id
+                    JOIN relevant_players rp ON rp.player_id = pl.player_id
                     WHERE pl.stat_type = :stat_type
                       AND pl.actual_value IS NOT NULL
                       AND pl.game_date IS NOT NULL
@@ -332,7 +367,7 @@ async def get_review_players(
                     MAX(game_date) AS last_game_date
                 FROM base
                 GROUP BY player_id, full_name, team_abbreviation
-                HAVING COUNT(*) >= 2
+                HAVING COUNT(*) >= 5
                 ORDER BY avg_abs_error ASC, tracked_predictions DESC
                 LIMIT :limit
                 """
@@ -341,6 +376,7 @@ async def get_review_players(
                 "stat_type": stat_type,
                 "window_start": window_start,
                 "close_threshold": close_threshold,
+                "relevance_threshold": relevance_threshold,
                 "search": search_value if search_value != "%%" else "%%",
                 "limit": limit,
             },
@@ -389,18 +425,30 @@ async def get_review_recent(
     days = _validate_days(days)
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 100.")
+    stat_column = _stat_column(stat_type)
+    relevance_threshold = _relevance_threshold(stat_type)
     window_start = date.today() - timedelta(days=days - 1)
 
     rows = (
         await db.execute(
             text(
                 """
+                WITH relevant_players AS (
+                    SELECT
+                        player_id
+                    FROM player_game_stats
+                    WHERE game_date IS NOT NULL
+                      AND game_date >= :window_start
+                    GROUP BY player_id
+                    HAVING AVG(minutes) >= 18 OR AVG(""" + stat_column + """) >= :relevance_threshold
+                )
                 SELECT
                     pl.player_id,
                     p.full_name,
                     COALESCE(p.team_abbreviation, '') AS team_abbreviation,
                     pl.game_date,
                     COALESCE(pgs.matchup, '') AS matchup,
+                    pgs.minutes,
                     pl.pred_value,
                     pl.actual_value,
                     pl.abs_error,
@@ -408,6 +456,7 @@ async def get_review_recent(
                     (pl.pred_value - pl.actual_value) AS bias
                 FROM prediction_logs pl
                 JOIN players p ON p.id = pl.player_id
+                JOIN relevant_players rp ON rp.player_id = pl.player_id
                 LEFT JOIN player_game_stats pgs
                   ON pgs.player_id = pl.player_id
                  AND pgs.game_id = pl.game_id
@@ -415,13 +464,14 @@ async def get_review_recent(
                   AND pl.actual_value IS NOT NULL
                   AND pl.game_date IS NOT NULL
                   AND pl.game_date >= :window_start
-                ORDER BY pl.game_date DESC, pl.id DESC
+                ORDER BY pl.game_date DESC, COALESCE(pgs.minutes, 0) DESC, pl.abs_error DESC, pl.id DESC
                 LIMIT :limit
                 """
             ),
             {
                 "stat_type": stat_type,
                 "window_start": window_start,
+                "relevance_threshold": relevance_threshold,
                 "limit": limit,
             },
         )
@@ -437,6 +487,7 @@ async def get_review_recent(
                 "team_abbreviation": row.team_abbreviation,
                 "game_date": _fmt_date(row.game_date),
                 "matchup": row.matchup,
+                "minutes": _safe_float(row.minutes),
                 "predicted": _safe_float(row.pred_value),
                 "actual": _safe_float(row.actual_value),
                 "average_miss": _safe_float(row.abs_error),

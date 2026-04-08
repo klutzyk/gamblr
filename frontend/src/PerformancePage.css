@@ -44,6 +44,11 @@
   font-family: inherit;
   font-weight: 700;
   line-height: 1.15;
+  font-size: clamp(1.2rem, 2vw, 1.9rem);
+}
+
+.perf-panel-story h3 {
+  font-size: 1.35rem;
 }
 
 .perf-main {
@@ -155,6 +160,22 @@
   line-height: 1;
 }
 
+.perf-stat-value-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.perf-stat-value-meta em {
+  font-style: normal;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(16, 42, 28, 0.6);
+}
+
 .perf-card-label {
   font-size: 0.72rem;
   letter-spacing: 0.1em;
@@ -211,8 +232,8 @@
 }
 
 .perf-story-pill {
-  border-radius: 1rem;
-  padding: 0.95rem 1rem;
+  border-radius: 0.9rem;
+  padding: 0.8rem 0.9rem;
   background: rgba(16, 42, 28, 0.04);
 }
 
@@ -226,42 +247,33 @@
 }
 
 .perf-story-pill strong {
-  font-size: 0.95rem;
-  line-height: 1.45;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  font-weight: 600;
   color: var(--perf-ink);
 }
 
-.perf-trend-wrap {
-  height: 220px;
-  display: flex;
-  align-items: end;
-  gap: 0.55rem;
-}
-
-.perf-trend-bar {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: end;
-  gap: 8px;
-  height: 100%;
-}
-
-.perf-trend-fill {
+.perf-trend-chart-wrap {
+  height: 280px;
   width: 100%;
-  max-width: 28px;
-  border-radius: 14px 14px 8px 8px;
-  background: linear-gradient(180deg, var(--perf-accent), var(--perf-accent-deep));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
-.perf-trend-bar span {
-  font-size: 0.74rem;
-  color: rgba(16, 42, 28, 0.62);
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
+.perf-trend-chart {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.perf-trend-grid {
+  stroke: rgba(16, 42, 28, 0.1);
+  stroke-width: 1;
+}
+
+.perf-trend-axis-label,
+.perf-trend-x-label {
+  fill: rgba(16, 42, 28, 0.58);
+  font-size: 11px;
+  font-family: inherit;
 }
 
 .perf-player-table {
@@ -311,6 +323,7 @@
 
 .perf-player-focus {
   background: var(--perf-card);
+  scroll-margin-top: 110px;
 }
 
 .perf-player-story {
@@ -424,8 +437,19 @@
   border: 1px solid rgba(16, 42, 28, 0.08);
 }
 
+.perf-recent-card.tone-good {
+  border-color: rgba(107, 208, 111, 0.55);
+  box-shadow: 0 16px 28px rgba(107, 208, 111, 0.12);
+}
+
+.perf-recent-card.tone-neutral {
+  border-color: rgba(216, 177, 91, 0.5);
+  box-shadow: 0 16px 28px rgba(216, 177, 91, 0.12);
+}
+
 .perf-recent-card.tone-high {
   border-color: rgba(227, 123, 106, 0.45);
+  box-shadow: 0 16px 28px rgba(227, 123, 106, 0.12);
 }
 
 .perf-recent-card.tone-low {
@@ -529,8 +553,7 @@
     max-width: none;
   }
 
-  .perf-trend-bar span {
-    writing-mode: initial;
-    transform: none;
+  .perf-trend-chart-wrap {
+    height: 240px;
   }
 }
