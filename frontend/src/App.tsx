@@ -2816,12 +2816,12 @@ function App() {
               </div>
             </div>
             <div className="ms-auto d-flex flex-column align-items-end gap-2">
-              <div className="d-flex align-items-center gap-3">
+              <div className="d-flex align-items-center gap-2">
                 <a className="nav-link text-white opacity-9 px-0 py-1" href="/">
-                  Home
+                  Home |
                 </a>
                 <a className="nav-link text-white opacity-9 px-0 py-1" href="/performance">
-                  How We&apos;re Doing
+                  How We&apos;re Doing |
                 </a>
                 <a className="nav-link text-white opacity-9 px-0 py-1" href="#about">
                   About

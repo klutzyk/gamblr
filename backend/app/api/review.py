@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+﻿from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
@@ -97,7 +97,7 @@ def _build_overview_story(
     close_rate: float | None,
 ) -> str:
     if tracked_predictions == 0 or average_miss is None:
-        return f"We do not have enough completed {stat_label.lower()} results yet to judge how we’re doing."
+        return f"We do not have enough completed {stat_label.lower()} results yet to judge how we're doing."
 
     bias_text = _bias_label(bias)
     close_pct = f"{round(close_rate * 100)}%" if close_rate is not None else "n/a"
@@ -109,7 +109,7 @@ def _build_overview_story(
         bias_sentence = "The predictions have been fairly balanced overall."
 
     return (
-        f"Our {stat_label.lower()} predictions are averaging {average_miss:.1f} off the actual result "
+        f"Our {stat_label.lower()} predictions have been missing the real result by {average_miss:.1f} on average "
         f"across {tracked_predictions} tracked games. {bias_sentence} "
         f"{recent_label}. About {close_pct} of tracked picks finished within the close-call range."
     )
@@ -569,3 +569,6 @@ async def get_review_player_detail(
             for row in game_rows
         ],
     }
+
+
+
