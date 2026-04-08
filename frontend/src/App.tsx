@@ -2866,20 +2866,33 @@ function App() {
                 <h2 className="mb-0 text-white brand-title">GAMBLR</h2>
               </div>
             </div>
-            <div className="ms-auto d-flex align-items-center gap-2">
-              <label className="text-xs text-white opacity-8 mb-0" htmlFor="region-select">
-                Region
-              </label>
-              <select
-                id="region-select"
-                className="form-select form-select-sm region-select"
-                value={userRegion}
-                onChange={(e) => setUserRegion(e.target.value as UserRegion)}
-              >
-                <option value="au">Australia</option>
-                <option value="us">USA</option>
-                <option value="uk">England</option>
-              </select>
+            <div className="ms-auto d-flex flex-column align-items-end gap-2">
+              <div className="d-flex align-items-center gap-2">
+                <a className="nav-link text-white opacity-9 px-0 py-1" href="/">
+                  Home |
+                </a>
+                <a className="nav-link text-white opacity-9 px-0 py-1" href="/performance">
+                  How We&apos;re Doing |
+                </a>
+                <a className="nav-link text-white opacity-9 px-0 py-1" href="#about">
+                  About
+                </a>
+              </div>
+              <div className="d-flex align-items-center gap-2">
+                <label className="text-xs text-white opacity-8 mb-0" htmlFor="region-select">
+                  Region
+                </label>
+                <select
+                  id="region-select"
+                  className="form-select form-select-sm region-select"
+                  value={userRegion}
+                  onChange={(e) => setUserRegion(e.target.value as UserRegion)}
+                >
+                  <option value="au">Australia</option>
+                  <option value="us">USA</option>
+                  <option value="uk">England</option>
+                </select>
+              </div>
             </div>
           </nav>
 
@@ -3068,7 +3081,7 @@ function App() {
                   </button>
                 </div>
               </div>
-              <div className="card shadow-lg border-radius-xl mb-4">
+              <div className="card shadow-lg border-radius-xl mb-4" id="about">
                 <div className="card-header pb-0">
                   <h5 className="mb-0">How to Read This</h5>
                 </div>
