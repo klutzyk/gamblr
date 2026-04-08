@@ -183,13 +183,6 @@ function formatGameDateShortByRegion(
   return `${month}/${day}`;
 }
 
-function getAverageMissExplanation(value: number | null | undefined, unit: string) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "Not enough completed results yet.";
-  }
-  return `This is the average gap between the prediction and the real result. Lower is better.`;
-}
-
 function getBiasDirectionLabel(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Balanced";
   if (value >= 0.35) return "Above actual";
@@ -305,30 +298,6 @@ function getMissReadLabel(value: number | null | undefined, statType: StatType) 
   return "Needs work";
 }
 
-function getBiasText(value: number | null | undefined, unit: string) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "Not enough completed results yet.";
-  }
-  if (value >= 1) return `Usually about ${Math.abs(value).toFixed(1)} ${unit} too high.`;
-  if (value <= -1) return `Usually about ${Math.abs(value).toFixed(1)} ${unit} too low.`;
-  return `Usually within ${Math.abs(value).toFixed(1)} ${unit} of balanced.`;
-}
-
-function getBiasToneClass(value: number | null | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "tone-neutral";
-  if (value >= 1) return "tone-warm";
-  if (value <= -1) return "tone-cool";
-  return "tone-good";
-}
-
-function getTrendToneClass(label: string | null | undefined) {
-  if (!label) return "tone-neutral";
-  const lower = label.toLowerCase();
-  if (lower.includes("improving")) return "tone-good";
-  if (lower.includes("cooling")) return "tone-warm";
-  return "tone-neutral";
-}
-
 function getResultTone(
   miss: number | null | undefined,
   threshold: number | null | undefined
@@ -397,43 +366,6 @@ function safeLoad<T>(
       setState({ loading: false, error: message, data: null });
       throw error;
     });
-}
-
-function Sparkline({
-  values,
-  stroke,
-}: {
-  values: Array<number | null | undefined>;
-  stroke: string;
-}) {
-  const numeric = values.filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value)
-  );
-  if (numeric.length < 2) {
-    return <div className="perf-empty-chart">Not enough data yet</div>;
-  }
-
-  const min = Math.min(...numeric);
-  const max = Math.max(...numeric);
-  const range = Math.max(max - min, 0.001);
-  const points = numeric.map((value, index) => {
-    const x = (index / Math.max(numeric.length - 1, 1)) * 100;
-    const y = 100 - ((value - min) / range) * 100;
-    return `${x},${y}`;
-  });
-
-  return (
-    <svg viewBox="0 0 100 100" className="perf-sparkline" preserveAspectRatio="none">
-      <polyline
-        fill="none"
-        stroke={stroke}
-        strokeWidth="3"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        points={points.join(" ")}
-      />
-    </svg>
-  );
 }
 
 function TrendChart({
@@ -544,12 +476,10 @@ function TrendChart({
 function LineComparisonChart({
   games,
   unit,
-  regionConfig,
   userRegion,
 }: {
   games: ReviewPlayerDetail["games"];
   unit: string;
-  regionConfig: (typeof REGION_CONFIG)[UserRegion];
   userRegion: UserRegion;
 }) {
   const [hoveredPoint, setHoveredPoint] = useState<{ index: number; x: number; y: number } | null>(null);
@@ -1083,7 +1013,6 @@ export default function PerformancePage() {
               <LineComparisonChart
                 games={playerDetailState.data.games}
                 unit={statMeta.unit}
-                regionConfig={regionConfig}
                 userRegion={userRegion}
               />
             </div>
