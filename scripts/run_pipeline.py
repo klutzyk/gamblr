@@ -12,14 +12,13 @@ from sqlalchemy import text
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT_DIR / "backend"
-ML_DIR = ROOT_DIR / "ml"
 
+sys.path.insert(0, str(ROOT_DIR))
 sys.path.insert(0, str(BACKEND_DIR))
-sys.path.insert(0, str(ML_DIR))
 
 from app.core.config import settings  # noqa: E402
 from app.db.url_utils import to_sync_db_url  # noqa: E402
-from update_rolling import update_rolling_stats  # noqa: E402
+from ml.update_rolling import update_rolling_stats  # noqa: E402
 
 
 def prompt(text: str, default: str | None = None) -> str:
