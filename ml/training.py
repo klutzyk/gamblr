@@ -100,6 +100,9 @@ def _train_model(
             lineup_team, on="team_abbreviation", how="left"
         )
 
+    df_features[target] = pd.to_numeric(df_features[target], errors="coerce")
+    df_features["minutes"] = pd.to_numeric(df_features["minutes"], errors="coerce")
+    df_features = df_features.replace([np.inf, -np.inf], np.nan)
     df_features = df_features.dropna(subset=[target])
 
     unique_dates = sorted(df_features["game_date"].dt.date.unique())
@@ -112,11 +115,19 @@ def _train_model(
     train_mask = df_features["game_date"].dt.date <= split_date
 
     minutes_model_path = None
+    minutes_rows_dropped = 0
     if use_minutes_model:
         X_minutes = df_features[MINUTES_FEATURES].fillna(0)
-        y_minutes = df_features["minutes"]
+        y_minutes = pd.to_numeric(df_features["minutes"], errors="coerce")
 
         X_minutes_train, y_minutes_train = X_minutes[train_mask], y_minutes[train_mask]
+        valid_minutes_mask = y_minutes_train.notna() & np.isfinite(y_minutes_train)
+        minutes_rows_dropped = int((~valid_minutes_mask).sum())
+        X_minutes_train = X_minutes_train.loc[valid_minutes_mask]
+        y_minutes_train = y_minutes_train.loc[valid_minutes_mask]
+
+        if X_minutes_train.empty:
+            raise ValueError("Not enough valid minutes labels to train the minutes model.")
 
         minutes_model = XGBRegressor(
             n_estimators=800,
@@ -145,10 +156,17 @@ def _train_model(
             df_features[col] = 0
 
     X = df_features[features].fillna(0)
-    y = df_features[target]
+    y = pd.to_numeric(df_features[target], errors="coerce")
 
     X_train, y_train = X[train_mask], y[train_mask]
     X_valid, y_valid = X[~train_mask], y[~train_mask]
+    valid_train_mask = y_train.notna() & np.isfinite(y_train)
+    valid_valid_mask = y_valid.notna() & np.isfinite(y_valid)
+    X_train, y_train = X_train.loc[valid_train_mask], y_train.loc[valid_train_mask]
+    X_valid, y_valid = X_valid.loc[valid_valid_mask], y_valid.loc[valid_valid_mask]
+
+    if X_train.empty or X_valid.empty:
+        raise ValueError(f"Not enough valid {target} labels to train/validate the model.")
 
     calibration = None
     if use_ensemble:
@@ -222,6 +240,7 @@ def _train_model(
         "rows_total": int(len(df_features)),
         "rows_train": int(len(X_train)),
         "rows_valid": int(len(X_valid)),
+        "minutes_rows_dropped": minutes_rows_dropped,
         "target": target,
     }
 

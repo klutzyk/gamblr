@@ -11,6 +11,7 @@ from app.api import (
     ml_routes,
     best_bets,
     lineups,
+    review,
 )
 from app.db.base import Base
 from app.db.session import engine
@@ -49,6 +50,7 @@ app.include_router(db_routes.router, prefix="/db", tags=["DB Storage"])
 app.include_router(ml_routes.router, prefix="/ml", tags=["ML"])
 app.include_router(best_bets.router, prefix="/bets", tags=["Best Bets"])
 app.include_router(lineups.router, prefix="/lineups", tags=["Lineups"])
+app.include_router(review.router, prefix="/review", tags=["Review"])
 # @app.on_event("startup")
 # async def startup():
 #     async with engine.begin() as conn:

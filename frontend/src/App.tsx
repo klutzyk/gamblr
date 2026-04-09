@@ -8,6 +8,7 @@ import {
   getGuardStats,
   getRecentPerformers,
   getNbaEvents,
+  getOddsUsageSnapshot,
   getOddsEventProps,
   getPointsPredictions,
   getAssistsPredictions,
@@ -17,15 +18,18 @@ import {
   getFirstBasketPredictions,
   getDoublesPredictions,
   getBestBets,
+  getBestBetsProgress,
   syncPlayerPropsWindow,
   getApiHealth,
   type PlayerRow,
   type OddsEvent,
   type OddsEventPropsResponse,
+  type OddsUsageSnapshot,
   type PredictionRow,
   type FirstBasketPredictionRow,
   type DoubleTriplePredictionRow,
   type BestBetsResponse,
+  type BestBetsProgress,
   type PredictionDayParam,
 } from "./api";
 
@@ -48,6 +52,7 @@ type TabKey =
   | "guards"
   | "recent"
   | "props"
+  | "matchups"
   | "predictions"
   | "best_bets"
   | "first_basket"
@@ -78,6 +83,67 @@ const REGION_CONFIG: Record<
     short: "UK",
   },
 };
+
+const TEAM_NAME_TO_ABBR: Record<string, string> = {
+  "atlanta hawks": "ATL",
+  "boston celtics": "BOS",
+  "brooklyn nets": "BKN",
+  "charlotte hornets": "CHA",
+  "chicago bulls": "CHI",
+  "cleveland cavaliers": "CLE",
+  "dallas mavericks": "DAL",
+  "denver nuggets": "DEN",
+  "detroit pistons": "DET",
+  "golden state warriors": "GSW",
+  "houston rockets": "HOU",
+  "indiana pacers": "IND",
+  "los angeles clippers": "LAC",
+  "la clippers": "LAC",
+  "los angeles lakers": "LAL",
+  "la lakers": "LAL",
+  "memphis grizzlies": "MEM",
+  "miami heat": "MIA",
+  "milwaukee bucks": "MIL",
+  "minnesota timberwolves": "MIN",
+  "new orleans pelicans": "NOP",
+  "new york knicks": "NYK",
+  "ny knicks": "NYK",
+  "oklahoma city thunder": "OKC",
+  "orlando magic": "ORL",
+  "philadelphia 76ers": "PHI",
+  "phoenix suns": "PHX",
+  "portland trail blazers": "POR",
+  "sacramento kings": "SAC",
+  "san antonio spurs": "SAS",
+  "toronto raptors": "TOR",
+  "utah jazz": "UTA",
+  "washington wizards": "WAS",
+};
+
+function normalizeTeamToAbbr(teamName: string) {
+  const trimmed = (teamName ?? "").trim();
+  if (!trimmed) return trimmed;
+  const cleaned = trimmed.toLowerCase().replace(/\./g, "");
+  if (TEAM_NAME_TO_ABBR[cleaned]) return TEAM_NAME_TO_ABBR[cleaned];
+  if (/^[a-z]{2,4}$/.test(cleaned)) return cleaned.toUpperCase();
+  return trimmed;
+}
+
+function normalizeMatchupKey(raw: string) {
+  if (!raw) return "";
+  const cleaned = raw
+    .replace(/\s+/g, " ")
+    .replace(/vs\.?/gi, "@")
+    .replace(/v\.?/gi, "@")
+    .trim();
+  const parts = cleaned.split("@").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const away = normalizeTeamToAbbr(parts[0]);
+    const home = normalizeTeamToAbbr(parts[1]);
+    return `${away}@${home}`;
+  }
+  return normalizeTeamToAbbr(cleaned);
+}
 
 type ApiState<T> = {
   loading: boolean;
@@ -632,6 +698,7 @@ function App() {
   const [predictionSearch, setPredictionSearch] = useState("");
   const [predictionTeams, setPredictionTeams] = useState<string[]>([]);
   const [predictionLine, setPredictionLine] = useState<number | "all">("all");
+  const [selectedPredictionMatchup, setSelectedPredictionMatchup] = useState("");
   const [firstBasketSort, setFirstBasketSort] = useState<
     "prob_desc" | "prob_asc"
   >("prob_desc");
@@ -646,6 +713,14 @@ function App() {
   const [selectedBestBetEventIds, setSelectedBestBetEventIds] = useState<string[]>([]);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const [isSyncingBestBets, setIsSyncingBestBets] = useState(false);
+  const [oddsUsage, setOddsUsage] = useState<ApiState<OddsUsageSnapshot>>(initialState);
+  const [bestBetsProgress, setBestBetsProgress] =
+    useState<ApiState<BestBetsProgress>>(initialState);
+  const [bestBetLoadingPhase, setBestBetLoadingPhase] = useState<
+    "idle" | "syncing" | "scoring" | "ranking"
+  >("idle");
+  const [bestBetLoadingStartedAt, setBestBetLoadingStartedAt] = useState<number | null>(null);
+  const [bestBetLoadingTick, setBestBetLoadingTick] = useState(0);
   const [backendHealth, setBackendHealth] = useState<
     "checking" | "up" | "down"
   >("checking");
@@ -761,14 +836,50 @@ function App() {
     });
   };
 
-  const formatDateTimeByRegion = (value: string | Date | number) =>
-    new Date(value).toLocaleString(regionConfig.locale, {
+  const formatMatchupKickoffLabel = (
+    value: string | Date | number,
+    includeZoneSuffix = userRegion === "au"
+  ) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Date tbd";
+    const parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: regionConfig.timeZone,
-      month: "short",
       day: "numeric",
+      month: "short",
       hour: "2-digit",
       minute: "2-digit",
-    });
+      hour12: true,
+    }).formatToParts(date);
+    const day = parts.find((part) => part.type === "day")?.value ?? "";
+    const month = parts.find((part) => part.type === "month")?.value ?? "";
+    const hour = parts.find((part) => part.type === "hour")?.value ?? "";
+    const minute = parts.find((part) => part.type === "minute")?.value ?? "";
+    const period = (parts.find((part) => part.type === "dayPeriod")?.value ?? "").toLowerCase();
+    const zoneSuffix = includeZoneSuffix
+      ? ` ${userRegion === "au" ? "AEST" : regionConfig.short}`
+      : "";
+    return `${day} ${month}, ${hour}:${minute} ${period}${zoneSuffix}`;
+  };
+
+  const formatPredictionMatchupKickoff = (row: PredictionRow) => {
+    if (userRegion === "au" && row.tipoff_au) {
+      const parsedAu = new Date(row.tipoff_au);
+      if (!Number.isNaN(parsedAu.getTime())) {
+        return formatMatchupKickoffLabel(parsedAu, true);
+      }
+      return row.tipoff_au;
+    }
+    if (row.tipoff_et && row.game_date) {
+      const parsed = new Date(`${row.game_date}T00:00:00`);
+      if (!Number.isNaN(parsed.getTime())) {
+        return `${formatSlateDateForRegion(row.game_date)}${userRegion === "au" ? " AEST" : ""}`;
+      }
+    }
+    return row.game_date ? formatSlateDateForRegion(row.game_date) : "Date tbd";
+  };
+
+  const formatDateTimeByRegion = (value: string | Date | number) =>
+    formatMatchupKickoffLabel(value, userRegion === "au");
 
   const formatTimeByRegion = (value: string | Date | number) =>
     new Date(value).toLocaleTimeString(regionConfig.locale, {
@@ -895,6 +1006,96 @@ function App() {
     },
   };
 
+  const bestBetMatchupOptions = (eventsState.data ?? []).map((event) => ({
+    id: event.id,
+    label: `${event.away_team} @ ${event.home_team}`,
+    kickoff: formatDateTimeByRegion(event.commence_time),
+  }));
+  const activeBestBetMatchups =
+    selectedBestBetEventIds.length > 0
+      ? bestBetMatchupOptions.filter((event) => selectedBestBetEventIds.includes(event.id))
+      : bestBetMatchupOptions.slice(0, bestBetEvents);
+  const bestBetFocusLabel =
+    activeBestBetMatchups.length > 0
+      ? activeBestBetMatchups[bestBetLoadingTick % activeBestBetMatchups.length]
+      : null;
+  const bestBetsProgressData = bestBetsProgress.data;
+  const bestBetsProgressMatchup = bestBetsProgressData?.current_matchup
+    ? activeBestBetMatchups.find(
+        (event) => normalizeMatchupKey(event.label) === normalizeMatchupKey(bestBetsProgressData.current_matchup ?? "")
+      ) ?? {
+        id: "",
+        label: bestBetsProgressData.current_matchup,
+        kickoff: "",
+      }
+    : null;
+  const bestBetsProgressPhase = bestBetsProgressData?.phase ?? null;
+  const bestBetElapsedSeconds = bestBetLoadingStartedAt
+    ? Math.max(0, Math.round((Date.now() - bestBetLoadingStartedAt) / 1000))
+    : 0;
+  const bestBetsProgressSummaryParts = [
+    (bestBetsProgressPhase === "scoring" || bestBetsProgressPhase === "ranking") &&
+    typeof bestBetsProgressData?.rows_processed === "number" &&
+    typeof bestBetsProgressData?.rows_total === "number" &&
+    bestBetsProgressData.rows_total > 0
+      ? `${bestBetsProgressData.rows_processed}/${bestBetsProgressData.rows_total} props`
+      : null,
+    (bestBetsProgressPhase === "scoring" || bestBetsProgressPhase === "ranking") &&
+    typeof bestBetsProgressData?.candidates_kept === "number" &&
+    bestBetsProgressData.candidates_kept > 0
+      ? `${bestBetsProgressData.candidates_kept} candidates`
+      : null,
+    bestBetsProgressPhase === "ranking" &&
+    typeof bestBetsProgressData?.combos_considered === "number" &&
+    bestBetsProgressData.combos_considered > 0
+      ? `${bestBetsProgressData.combos_considered} combos`
+      : null,
+  ].filter(Boolean) as string[];
+  const oddsCreditsRemaining =
+    typeof oddsUsage.data?.requests_remaining === "number"
+      ? oddsUsage.data.requests_remaining
+      : null;
+
+  const currentPredictionRows = predictionConfig[predictionStat].state.data ?? [];
+  const predictionMatchupMap = currentPredictionRows.reduce(
+    (map, row) => {
+      const matchup = row.matchup;
+      if (!matchup) return map;
+      const matchupKey = normalizeMatchupKey(matchup);
+      if (!map.has(matchupKey)) {
+        map.set(matchupKey, {
+          key: matchupKey,
+          label: matchup,
+          kickoff: formatPredictionMatchupKickoff(row),
+        });
+      }
+      return map;
+    },
+    new Map<string, { key: string; label: string; kickoff: string }>()
+  );
+
+  const eventMatchupMap = new Map(
+    bestBetMatchupOptions.map((event) => {
+      const key = normalizeMatchupKey(event.label);
+      return [
+        key,
+        {
+          key,
+          label: event.label,
+          kickoff: event.kickoff,
+        },
+      ] as const;
+    })
+  );
+
+  const currentPredictionMatchups = Array.from(
+    predictionMatchupMap.entries(),
+    ([key, fallback]) => eventMatchupMap.get(key) ?? fallback
+  ).sort((a, b) => a.label.localeCompare(b.label));
+
+  const selectedPredictionMatchupOption =
+    currentPredictionMatchups.find((item) => item.key === selectedPredictionMatchup) ?? null;
+
   const handleLoadPredictions = (force = false) => {
     const config = predictionConfig[predictionStat];
     return safeLoad(
@@ -958,6 +1159,11 @@ function App() {
           ? "today"
           : "auto");
 
+    setBestBetLoadingStartedAt(Date.now());
+    setBestBetLoadingTick(0);
+    setBestBetsProgress(initialState<BestBetsProgress>());
+    void loadBestBetsProgress(true);
+
     await safeLoad(
       bestBetsState,
       setBestBetsState,
@@ -982,11 +1188,17 @@ function App() {
       2 * 60 * 1000,
       force
     );
+    void loadBestBetsProgress(true);
   };
 
   const handleSyncAndLoadBestBets = async () => {
     setSyncSummary(null);
     setIsSyncingBestBets(true);
+    setBestBetLoadingPhase("syncing");
+    setBestBetLoadingStartedAt(Date.now());
+    setBestBetLoadingTick(0);
+    setBestBetsProgress(initialState<BestBetsProgress>());
+    void loadBestBetsProgress(true);
     try {
       const selectedMarkets = includeComboMarkets
         ? "player_points,player_assists,player_rebounds," +
@@ -1012,12 +1224,32 @@ function App() {
         usage && typeof usage.requests_remaining !== "undefined"
           ? ` | credits left: ${usage.requests_remaining}`
           : "";
+      if (usage) {
+        setOddsUsage({
+          loading: false,
+          error: null,
+          data: {
+            requests_last:
+              typeof usage.requests_last === "number" ? usage.requests_last : null,
+            requests_remaining:
+              typeof usage.requests_remaining === "number"
+                ? usage.requests_remaining
+                : null,
+            requests_used:
+              typeof usage.requests_used === "number" ? usage.requests_used : null,
+          },
+          lastFetched: Date.now(),
+        });
+      }
       setSyncSummary(`Synced ${processed}/${considered} events${remaining}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to sync props.";
       setSyncSummary(`Sync error: ${message}`);
     } finally {
+      setBestBetLoadingPhase("scoring");
       await handleLoadBestBets(true);
+      setBestBetLoadingPhase("idle");
+      setBestBetLoadingStartedAt(null);
       setIsSyncingBestBets(false);
     }
   };
@@ -1059,9 +1291,43 @@ function App() {
     }
   };
 
+  const loadOddsUsageSnapshot = (force = false) =>
+    safeLoad(
+      oddsUsage,
+      setOddsUsage,
+      () => getOddsUsageSnapshot(),
+      30 * 1000,
+      force
+    );
+
+  const loadBestBetsProgress = (force = false) =>
+    safeLoad(
+      bestBetsProgress,
+      setBestBetsProgress,
+      () => getBestBetsProgress(),
+      1000,
+      force
+    );
+
   useEffect(() => {
     handleLoadPredictions(true);
   }, [predictionApiDay, predictionStat]);
+
+  useEffect(() => {
+    if (currentPredictionMatchups.length === 0) {
+      setSelectedPredictionMatchup("");
+      return;
+    }
+    setSelectedPredictionMatchup((prev) =>
+      currentPredictionMatchups.some((item) => item.key === prev)
+        ? prev
+        : currentPredictionMatchups[0].key
+    );
+  }, [
+    predictionStat,
+    predictionApiDay,
+    currentPredictionMatchups.map((item) => item.key).join("|"),
+  ]);
 
   useEffect(() => {
     if (activeTab === "first_basket") {
@@ -1088,6 +1354,12 @@ function App() {
       void handleLoadEvents();
     }
     if (activeTab === "best_bets") {
+      void (async () => {
+        await handleLoadEvents(true);
+        await loadOddsUsageSnapshot(true);
+      })();
+    }
+    if (activeTab === "matchups") {
       void handleLoadEvents(true);
     }
   }, [activeTab]);
@@ -1103,6 +1375,21 @@ function App() {
     const validIds = new Set(eventsState.data.map((e) => e.id));
     setSelectedBestBetEventIds((prev) => prev.filter((id) => validIds.has(id)));
   }, [eventsState.data]);
+
+  useEffect(() => {
+    if (!isSyncingBestBets && !bestBetsState.loading) return;
+    const interval = setInterval(() => {
+      setBestBetLoadingTick((prev) => prev + 1);
+      void loadBestBetsProgress(true);
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [isSyncingBestBets, bestBetsState.loading]);
+
+  useEffect(() => {
+    if (isSyncingBestBets || bestBetsState.loading) return;
+    setBestBetLoadingStartedAt(null);
+    setBestBetLoadingPhase("idle");
+  }, [isSyncingBestBets, bestBetsState.loading]);
 
   useEffect(() => {
     void checkBackendHealth();
@@ -1472,16 +1759,26 @@ function App() {
         );
       case "best_bets":
         const estimatedMarketsPerEvent = includeComboMarkets ? 7 : 3;
-        const bestBetMatchupOptions = (eventsState.data ?? []).map((event) => ({
-          id: event.id,
-          label: `${event.away_team} @ ${event.home_team}`,
-          kickoff: formatDateTimeByRegion(event.commence_time),
-        }));
         const selectedMatchupCount =
           selectedBestBetEventIds.length > 0
             ? selectedBestBetEventIds.length
             : bestBetEvents;
         const estimatedCredits = selectedMatchupCount * estimatedMarketsPerEvent;
+        const bestBetPhaseLabel =
+          bestBetsProgressData?.message ??
+          (bestBetLoadingPhase === "syncing"
+            ? `Syncing Sportsbet props${bestBetFocusLabel ? ` for ${bestBetFocusLabel.label}` : ""}`
+            : bestBetLoadingPhase === "ranking"
+              ? `Ranking parlay combinations${bestBetFocusLabel ? ` around ${bestBetFocusLabel.label}` : ""}`
+              : `Scoring candidate legs${bestBetFocusLabel ? ` for ${bestBetFocusLabel.label}` : ""}`);
+        const bestBetLoadingSummary =
+          bestBetsProgressData?.phase
+            ? `${bestBetsProgressData.phase[0].toUpperCase()}${bestBetsProgressData.phase.slice(1)}`
+            : bestBetLoadingPhase === "syncing"
+              ? "Syncing"
+              : bestBetLoadingPhase === "ranking"
+                ? "Ranking"
+                : "Scoring";
         return (
           <div className="card card-body border-radius-xl shadow-lg best-bets-panel">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
@@ -1653,10 +1950,37 @@ function App() {
             </div>
             <p className="text-sm text-secondary mb-3">
               Estimated sync cost: ~{estimatedCredits} credits ({selectedMatchupCount} events x{" "}
-              {estimatedMarketsPerEvent} markets/event, Sportsbet only). 
+              {estimatedMarketsPerEvent} markets/event, Sportsbet only)
+              {oddsCreditsRemaining !== null ? ` | Credits left: ${oddsCreditsRemaining}` : ""}
             </p>
-            {isSyncingBestBets && (
-              <p className="text-sm text-secondary mb-3">Sync in progress...</p>
+            {oddsUsage.error && (
+              <p className="text-sm text-secondary mb-3">
+                Could not load current credits snapshot.
+              </p>
+            )}
+            {(isSyncingBestBets || bestBetsState.loading) && (
+              <div className="mb-3">
+                <p className="text-sm text-secondary mb-1">
+                  {bestBetLoadingSummary}: {bestBetPhaseLabel}
+                </p>
+                <p className="text-xs text-secondary mb-0">
+                  {bestBetsProgressMatchup
+                    ? `Current matchup: ${bestBetsProgressMatchup.label}${
+                        bestBetsProgressMatchup.kickoff
+                          ? ` (${bestBetsProgressMatchup.kickoff})`
+                          : ""
+                      }`
+                    : !bestBetsProgressPhase || bestBetsProgressPhase === "syncing"
+                      ? bestBetFocusLabel
+                      ? `Focus matchup: ${bestBetFocusLabel.label} (${bestBetFocusLabel.kickoff})`
+                      : "Preparing selected matchups."
+                      : "Preparing candidate pool."}
+                  {bestBetsProgressSummaryParts.length > 0
+                    ? ` | ${bestBetsProgressSummaryParts.join(" | ")}`
+                    : ""}
+                  {` | ${bestBetElapsedSeconds}s elapsed`}
+                </p>
+              </div>
             )}
             {syncSummary && <p className="text-sm text-secondary mb-3">{syncSummary}</p>}
             {bestBetsState.error && (
@@ -2066,6 +2390,184 @@ function App() {
             )}
           </div>
         );
+      case "matchups":
+        const matchupPrediction = predictionConfig[predictionStat];
+        const matchupRows = matchupPrediction.state.data
+          ? matchupPrediction.state.data
+              .filter(
+                (row) => normalizeMatchupKey(row.matchup) === selectedPredictionMatchup
+              )
+              .sort((a, b) => (b.pred_value ?? 0) - (a.pred_value ?? 0))
+          : [];
+        return (
+          <div className="card card-body border-radius-xl shadow-lg prediction-focus">
+            <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
+              <div>
+                <h4 className="mb-1">Matchup Predictions</h4>
+                <p className="text-sm text-secondary mb-0">
+                  View both teams together for one matchup on the selected slate.
+                </p>
+              </div>
+              <div className="d-flex flex-wrap gap-2 align-items-center">
+                <div className="stat-toggle">
+                  {(["points", "assists", "rebounds", "threept", "threepa"] as const).map((stat) => (
+                    <button
+                      key={stat}
+                      className={`stat-chip ${predictionStat === stat ? "active" : ""}`}
+                      onClick={() => setPredictionStat(stat)}
+                    >
+                      {predictionConfig[stat].label}
+                    </button>
+                  ))}
+                </div>
+                <div className="prediction-select-group">
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Day</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionDay}
+                      aria-label="Matchup prediction day"
+                      onChange={(e) =>
+                        setPredictionDay(
+                          e.target.value as "today" | "tomorrow" | "yesterday" | "auto"
+                        )
+                      }
+                    >
+                      {dayOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="prediction-select-field">
+                    <span className="prediction-select-label">Sort</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={predictionSort}
+                      aria-label="Matchup prediction sort order"
+                      onChange={(e) =>
+                        setPredictionSort(
+                          e.target.value as
+                            | "pred_value_desc"
+                            | "pred_value_asc"
+                            | "confidence_desc"
+                        )
+                      }
+                    >
+                      <option value="pred_value_desc">Value (High &gt;&gt; Low)</option>
+                      <option value="pred_value_asc">Value (Low &gt;&gt; High)</option>
+                      <option value="confidence_desc">Confidence (High &gt;&gt; Low)</option>
+                    </select>
+                  </label>
+                </div>
+                <button
+                  className="btn btn-sm bg-gradient-primary mb-0"
+                  onClick={() => {
+                    void handleLoadPredictions(true);
+                  }}
+                  disabled={matchupPrediction.state.loading}
+                >
+                  {matchupPrediction.state.loading ? (
+                    <span
+                      className="spinner-border spinner-border-sm me-2"
+                      role="status"
+                      aria-hidden="true"
+                    ></span>
+                  ) : (
+                    <i
+                      className="material-symbols-rounded me-2"
+                      style={{ fontSize: "16px" }}
+                    >
+                      sports_basketball
+                    </i>
+                  )}
+                  Refresh Matchups
+                </button>
+              </div>
+            </div>
+            <div className="best-bets-matchups mb-4">
+              <label className="form-label">Select matchup</label>
+              <p className="text-xs text-secondary mb-2">
+                {bestBetMatchupOptions.length > 0
+                  ? `Event times loaded: ${bestBetMatchupOptions.length}`
+                  : "No event times available (showing slate dates)."}
+              </p>
+              <div className="matchup-chip-wrap">
+                {currentPredictionMatchups.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`matchup-chip ${selectedPredictionMatchup === item.key ? "active" : ""}`}
+                    onClick={() => setSelectedPredictionMatchup(item.key)}
+                  >
+                    <span>{item.label}</span>
+                    <small>{item.kickoff}</small>
+                  </button>
+                ))}
+                {currentPredictionMatchups.length === 0 && (
+                  <span className="text-sm text-secondary">No matchups available for this slate.</span>
+                )}
+              </div>
+            </div>
+            {selectedPredictionMatchup && (
+              <div className="mb-3">
+                <span className="badge badge-sm bg-gradient-info me-2">
+                  {selectedPredictionMatchupOption?.label ?? selectedPredictionMatchup}
+                </span>
+                <span className="text-sm text-secondary">
+                  {matchupRows.length} player predictions
+                </span>
+              </div>
+            )}
+            {matchupPrediction.state.error && (
+              <div className="alert alert-danger text-white" role="alert">
+                <strong>Error:</strong> {matchupPrediction.state.error}
+              </div>
+            )}
+            {matchupPrediction.state.loading && !matchupPrediction.state.data && (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                <p className="text-secondary mt-3">Loading matchup predictions...</p>
+              </div>
+            )}
+            {!matchupPrediction.state.loading &&
+              matchupPrediction.state.data &&
+              selectedPredictionMatchup &&
+              matchupRows.length === 0 && (
+                <div className="text-center py-5">
+                  <p className="text-secondary mb-0">No predictions found for that matchup.</p>
+                </div>
+              )}
+            {matchupRows.length > 0 && (
+              <PredictionsGrid
+                predictions={[...matchupRows].sort((a, b) => {
+                  const valA = a.pred_value ?? 0;
+                  const valB = b.pred_value ?? 0;
+                  const confA = a.confidence ?? -1;
+                  const confB = b.confidence ?? -1;
+
+                  if (predictionSort === "pred_value_asc" && valA !== valB) {
+                    return valA - valB;
+                  }
+                  if (predictionSort === "pred_value_desc" && valA !== valB) {
+                    return valB - valA;
+                  }
+                  if (predictionSort === "confidence_desc" && confA !== confB) {
+                    return confB - confA;
+                  }
+                  return valB - valA;
+                })}
+                statLabel={matchupPrediction.label}
+                unitLabel={matchupPrediction.unit}
+                statKey={predictionStat}
+                formatGameDate={formatSlateDateForRegion}
+              />
+            )}
+          </div>
+        );
       case "double_triple":
         const dtSearch = predictionSearch.trim().toLowerCase();
         const dtRows = doubleTripleState.data
@@ -2364,20 +2866,33 @@ function App() {
                 <h2 className="mb-0 text-white brand-title">GAMBLR</h2>
               </div>
             </div>
-            <div className="ms-auto d-flex align-items-center gap-2">
-              <label className="text-xs text-white opacity-8 mb-0" htmlFor="region-select">
-                Region
-              </label>
-              <select
-                id="region-select"
-                className="form-select form-select-sm region-select"
-                value={userRegion}
-                onChange={(e) => setUserRegion(e.target.value as UserRegion)}
-              >
-                <option value="au">Australia</option>
-                <option value="us">USA</option>
-                <option value="uk">England</option>
-              </select>
+            <div className="ms-auto d-flex flex-column align-items-end gap-2">
+              <div className="d-flex align-items-center gap-2">
+                <a className="nav-link text-white opacity-9 px-0 py-1" href="/">
+                  Home |
+                </a>
+                <a className="nav-link text-white opacity-9 px-0 py-1" href="/performance">
+                  How We&apos;re Doing |
+                </a>
+                <a className="nav-link text-white opacity-9 px-0 py-1" href="#about">
+                  About
+                </a>
+              </div>
+              <div className="d-flex align-items-center gap-2">
+                <label className="text-xs text-white opacity-8 mb-0" htmlFor="region-select">
+                  Region
+                </label>
+                <select
+                  id="region-select"
+                  className="form-select form-select-sm region-select"
+                  value={userRegion}
+                  onChange={(e) => setUserRegion(e.target.value as UserRegion)}
+                >
+                  <option value="au">Australia</option>
+                  <option value="us">USA</option>
+                  <option value="uk">England</option>
+                </select>
+              </div>
             </div>
           </nav>
 
@@ -2423,6 +2938,17 @@ function App() {
                       >
                         <i className="material-symbols-rounded me-2">psychology</i>
                         Predictions
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${activeTab === "matchups" ? "active" : ""}`}
+                        onClick={() => setActiveTab("matchups")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">groups</i>
+                        Matchups
                       </a>
                     </li>
                     <li className="nav-item">
@@ -2555,7 +3081,7 @@ function App() {
                   </button>
                 </div>
               </div>
-              <div className="card shadow-lg border-radius-xl mb-4">
+              <div className="card shadow-lg border-radius-xl mb-4" id="about">
                 <div className="card-header pb-0">
                   <h5 className="mb-0">How to Read This</h5>
                 </div>

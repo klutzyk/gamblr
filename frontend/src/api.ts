@@ -65,6 +65,12 @@ export type OddsEventPropsResponse = {
   estimated_cost?: number;
 };
 
+export type OddsUsageSnapshot = {
+  requests_last?: number | null;
+  requests_remaining?: number | null;
+  requests_used?: number | null;
+};
+
 export type PredictionRow = {
   player_id: number;
   full_name: string;
@@ -73,6 +79,8 @@ export type PredictionRow = {
   matchup: string;
   game_date: string;
   game_id?: string;
+  tipoff_et?: string | null;
+  tipoff_au?: string | null;
   pred_value: number;
   pred_p10?: number;
   pred_p50?: number;
@@ -176,6 +184,122 @@ export type BestBetsResponse = {
   recommended_parlays?: BestBetParlay[];
   message?: string;
   debug?: Record<string, number>;
+};
+
+export type BestBetsProgress = {
+  request_id?: string | null;
+  status?: string | null;
+  phase?: string | null;
+  message?: string | null;
+  current_matchup?: string | null;
+  rows_processed?: number | null;
+  rows_total?: number | null;
+  candidates_kept?: number | null;
+  combos_considered?: number | null;
+  updated_at?: string | null;
+};
+
+export type ReviewOverview = {
+  stat_type: string;
+  stat_label: string;
+  days: number;
+  close_call_threshold?: number | null;
+  tracked_predictions: number;
+  average_miss?: number | null;
+  median_miss?: number | null;
+  bias?: number | null;
+  bias_label?: string | null;
+  close_rate?: number | null;
+  recent_avg_miss?: number | null;
+  prior_avg_miss?: number | null;
+  recent_trend_label?: string | null;
+  updated_through?: string | null;
+  story?: string | null;
+};
+
+export type ReviewTrendPoint = {
+  game_date: string;
+  prediction_count: number;
+  average_miss?: number | null;
+  bias?: number | null;
+  close_rate?: number | null;
+};
+
+export type ReviewTrendResponse = {
+  stat_type: string;
+  days: number;
+  points: ReviewTrendPoint[];
+};
+
+export type ReviewPlayerRow = {
+  player_id: number;
+  full_name: string;
+  team_abbreviation: string;
+  tracked_predictions: number;
+  average_miss?: number | null;
+  median_miss?: number | null;
+  close_rate?: number | null;
+  bias?: number | null;
+  recent_avg_miss?: number | null;
+  prior_avg_miss?: number | null;
+  trend_label?: string | null;
+  reliability_tag?: string | null;
+  last_game_date?: string | null;
+};
+
+export type ReviewPlayersResponse = {
+  stat_type: string;
+  days: number;
+  players: ReviewPlayerRow[];
+};
+
+export type ReviewRecentRow = {
+  player_id: number;
+  full_name: string;
+  team_abbreviation: string;
+  game_date: string;
+  matchup: string;
+  minutes?: number | null;
+  predicted?: number | null;
+  actual?: number | null;
+  average_miss?: number | null;
+  confidence?: number | null;
+  bias?: number | null;
+  result_label?: string | null;
+};
+
+export type ReviewRecentResponse = {
+  stat_type: string;
+  days: number;
+  results: ReviewRecentRow[];
+};
+
+export type ReviewPlayerGame = {
+  game_date: string;
+  matchup: string;
+  minutes?: number | null;
+  predicted?: number | null;
+  actual?: number | null;
+  average_miss?: number | null;
+  confidence?: number | null;
+  bias?: number | null;
+};
+
+export type ReviewPlayerDetail = {
+  player_id: number;
+  full_name: string;
+  team_abbreviation: string;
+  stat_type: string;
+  days: number;
+  tracked_predictions: number;
+  average_miss?: number | null;
+  median_miss?: number | null;
+  close_rate?: number | null;
+  bias?: number | null;
+  reliability_tag?: string | null;
+  last_game_date?: string | null;
+  story?: string | null;
+  games: ReviewPlayerGame[];
 };
 
 const API_BASE =
@@ -320,6 +444,52 @@ export function getNbaEvents(): Promise<OddsEvent[]> {
     undefined,
     5 * 60 * 1000
   );
+}
+
+export function getOddsUsageSnapshot(): Promise<OddsUsageSnapshot> {
+  return fetchWithCache<OddsUsageSnapshot>("/odds/usage/snapshot", undefined, 30 * 1000);
+}
+
+export function getBestBetsProgress(): Promise<BestBetsProgress> {
+  return fetchWithCache<BestBetsProgress>("/bets/best/progress", undefined, 1000);
+}
+
+export function getReviewOverview(params: {
+  stat_type: string;
+  days: number;
+}): Promise<ReviewOverview> {
+  return fetchWithCache<ReviewOverview>("/review/overview", params, 60 * 1000);
+}
+
+export function getReviewTrend(params: {
+  stat_type: string;
+  days: number;
+}): Promise<ReviewTrendResponse> {
+  return fetchWithCache<ReviewTrendResponse>("/review/trend", params, 60 * 1000);
+}
+
+export function getReviewPlayers(params: {
+  stat_type: string;
+  days: number;
+  limit?: number;
+  search?: string;
+}): Promise<ReviewPlayersResponse> {
+  return fetchWithCache<ReviewPlayersResponse>("/review/players", params, 60 * 1000);
+}
+
+export function getReviewRecent(params: {
+  stat_type: string;
+  days: number;
+  limit?: number;
+}): Promise<ReviewRecentResponse> {
+  return fetchWithCache<ReviewRecentResponse>("/review/recent", params, 60 * 1000);
+}
+
+export function getReviewPlayerDetail(
+  playerId: number,
+  params: { stat_type: string; days: number }
+): Promise<ReviewPlayerDetail> {
+  return fetchWithCache<ReviewPlayerDetail>(`/review/player/${playerId}`, params, 60 * 1000);
 }
 
 export function getOddsEventProps(
