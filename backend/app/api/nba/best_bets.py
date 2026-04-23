@@ -20,8 +20,8 @@ from app.models.event import Event
 from app.models.market import Market
 from app.models.player_prop import PlayerProp
 from app.services.lineup_context import fetch_lineups_payload, build_expected_lineup_sets
-from ml.predict import predict_assists, predict_points, predict_rebounds
-from ml.under_side_model import load_latest_under_side_model, predict_under_probability
+from ml.nba.predict import predict_assists, predict_points, predict_rebounds
+from ml.nba.under_side_model import load_latest_under_side_model, predict_under_probability
 
 router = APIRouter()
 sync_engine = create_engine(to_sync_db_url(settings.DATABASE_URL))

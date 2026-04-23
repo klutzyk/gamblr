@@ -24,7 +24,7 @@ from .utils import (
     build_lineup_team_features,
 )
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 MODELS_DIR = BASE_DIR / "models"
 
 
