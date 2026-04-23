@@ -12,7 +12,7 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sqlalchemy import text
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 MODELS_DIR = BASE_DIR / "models"
 
 SUPPORTED_STATS = ("points", "assists", "rebounds")

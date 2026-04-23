@@ -13,7 +13,7 @@ from sqlalchemy import text
 from xgboost import XGBClassifier
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 MODELS_DIR = BASE_DIR / "models"
 
 TEAM_FEATURES = [

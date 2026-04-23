@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query
 import asyncio
-from ..services.nba_client import NBAClient
+from app.services.nba_client import NBAClient
 from sqlalchemy import create_engine, text
 from app.core.config import settings
 from fastapi.concurrency import run_in_threadpool
@@ -8,7 +8,7 @@ from app.services.rotowire_lineups_client import RotoWireLineupsClient
 from app.services.jedibets_first_basket_client import JediBetsFirstBasketClient
 from app.services.lineup_resolver import LineupResolver
 from app.services.lineup_context import fetch_lineups_payload, build_expected_lineup_sets
-from app.db.store_first_basket import upsert_first_basket_prediction_logs
+from app.db.nba.store_first_basket import upsert_first_basket_prediction_logs
 from app.db.url_utils import to_sync_db_url
 import sys
 from pathlib import Path
@@ -28,15 +28,15 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from ml.predict import (
+from ml.nba.predict import (
     predict_points,
     predict_assists,
     predict_rebounds,
     predict_threept,
     predict_threepa,
 )
-from ml.first_basket_model import predict_first_basket_with_models
-from app.db.store_prediction_logs import log_predictions
+from ml.nba.first_basket_model import predict_first_basket_with_models
+from app.db.nba.store_prediction_logs import log_predictions
 
 router = APIRouter()
 client = NBAClient(timeout=15)

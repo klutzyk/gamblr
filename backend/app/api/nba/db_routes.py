@@ -7,14 +7,14 @@ from app.core.config import settings
 from app.db.url_utils import to_sync_db_url
 from app.services.theodds_client import TheOddsClient
 from app.services.nba_client import NBAClient
-from app.db.store_odds import save_event_odds
-from app.db.store_player_game_stats import save_last_n_games
-from app.db.store_team_game_stats import save_team_game_stats
-from app.db.store_lineup_stats import save_lineup_stats
-from app.db.store_teams import load_teams
-from app.db.store_schedule import load_schedule
-from app.db.under_risk import compute_under_risk
-from app.db.store_prediction_logs import update_prediction_actuals, log_predictions
+from app.db.nba.store_odds import save_event_odds
+from app.db.nba.store_player_game_stats import save_last_n_games
+from app.db.nba.store_team_game_stats import save_team_game_stats
+from app.db.nba.store_lineup_stats import save_lineup_stats
+from app.db.nba.store_teams import load_teams
+from app.db.nba.store_schedule import load_schedule
+from app.db.nba.under_risk import compute_under_risk
+from app.db.nba.store_prediction_logs import update_prediction_actuals, log_predictions
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as nba_teams
 from sqlalchemy import select, func, text
@@ -33,8 +33,8 @@ from asyncio_throttle import Throttler
 import pandas as pd
 from app.core.constants import MAX_GAMES_PER_PLAYER
 from zoneinfo import ZoneInfo
-from ml.backtest import walk_forward_backtest
-from ml.update_rolling import update_rolling_stats
+from ml.nba.backtest import walk_forward_backtest
+from ml.nba.update_rolling import update_rolling_stats
 
 
 def _parse_minutes(value):
