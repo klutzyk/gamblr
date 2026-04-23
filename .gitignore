@@ -64,3 +64,13 @@ uvicorn.log
 *.tmp
 ml/models/
 docs
+
+# =========================
+# Local Data / ML Artifacts
+# =========================
+data/raw/
+data/staging/
+data/cache/
+data/features/
+data/exports/
+tmp_*.json

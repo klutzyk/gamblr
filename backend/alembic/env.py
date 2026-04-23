@@ -1,11 +1,13 @@
 from logging.config import fileConfig
-
 import asyncio
+import os
 from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
+from app.core.config import settings
 from app.db.base import Base
-from app.db.session import engine
+from app.db.url_utils import to_async_db_url, to_sync_db_url
 from app.models import (
     event,
     bookmaker,
@@ -20,6 +22,7 @@ from app.models import (
     first_basket_label,
     first_basket_prediction_log,
     ingestion_run,
+    mlb,
 )
 
 
@@ -31,6 +34,9 @@ config = context.config
 # This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+database_url = os.getenv("ALEMBIC_DATABASE_URL") or settings.DATABASE_URL
+config.set_main_option("sqlalchemy.url", to_sync_db_url(database_url))
 
 # add your model's MetaData object here
 # for 'autogenerate' support
@@ -70,8 +76,10 @@ def run_migrations_online() -> None:
 
     async def async_run():
         # Alembic expects a sync connection, so we use run_sync
+        engine = create_async_engine(to_async_db_url(database_url), poolclass=pool.NullPool)
         async with engine.begin() as conn:
             await conn.run_sync(do_run_migrations)
+        await engine.dispose()
 
     asyncio.run(async_run())
 
