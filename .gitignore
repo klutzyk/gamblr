@@ -63,3 +63,4 @@ uvicorn.log
 *.swp
 *.tmp
 ml/models/
+docs
