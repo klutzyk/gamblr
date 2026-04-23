@@ -202,6 +202,23 @@
   color: #f4bf5a !important;
 }
 
+.nav-link-top {
+  transition: color 0.18s ease, opacity 0.18s ease;
+}
+
+.nav-link-top:hover,
+.nav-link-top:focus {
+  color: #f4bf5a !important;
+  opacity: 1 !important;
+}
+
+.nav-separator {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.95rem;
+  line-height: 1;
+  user-select: none;
+}
+
 .brand-text-wrap {
   display: flex;
   flex-direction: column;
