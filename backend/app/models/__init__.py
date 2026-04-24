@@ -15,6 +15,7 @@ from .mlb import (
     MlbBatTrackingBatterSeason,
     MlbBattedBallEvent,
     MlbGame,
+    MlbGameOfficialAssignment,
     MlbGameSnapshot,
     MlbLineupSnapshot,
     MlbParkFactor,
@@ -27,5 +28,7 @@ from .mlb import (
     MlbStatcastPitcherSeason,
     MlbSwingPathBatterSeason,
     MlbTeam,
+    MlbUmpire,
     MlbVenue,
+    MlbWeatherSnapshot,
 )

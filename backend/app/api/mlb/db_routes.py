@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.mlb.session import get_mlb_db
 from app.db.mlb.store_ingestion import (
     bootstrap_mlb_ingestion,
+    ingest_context_window,
     ingest_game_feed,
     ingest_game_feeds,
+    ingest_umpire_roster,
     ingest_savant_bat_tracking,
     ingest_savant_park_factors,
     ingest_savant_statcast_batters,
@@ -15,6 +17,8 @@ from app.db.mlb.store_ingestion import (
     ingest_savant_swing_path,
     ingest_schedule,
     ingest_teams,
+    ingest_weather_for_game,
+    ingest_weather_for_games,
 )
 
 
@@ -96,6 +100,105 @@ async def ingest_single_mlb_game(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/umpires/load")
+async def load_mlb_umpires(
+    date_value: str = Query(..., alias="date", description="YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    try:
+        return await ingest_umpire_roster(db, date_value=date_value)
+    except Exception as exc:
+        logger.exception("MLB umpire ingest failed for date=%s", date_value)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/weather/game/{game_pk}/load")
+async def load_mlb_game_weather(
+    game_pk: int,
+    dataset: str = Query("auto", description="auto, forecast, or historical_forecast"),
+    hours_before: int = Query(6, ge=0, le=48),
+    hours_after: int = Query(6, ge=0, le=48),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    try:
+        return await ingest_weather_for_game(
+            db,
+            game_pk=game_pk,
+            dataset=dataset,
+            hours_before=hours_before,
+            hours_after=hours_after,
+        )
+    except Exception as exc:
+        logger.exception("MLB weather ingest failed for game_pk=%s", game_pk)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/weather/load")
+async def load_mlb_weather_window(
+    season: int = Query(..., description="MLB season year, e.g. 2026"),
+    start_date: str = Query(..., description="YYYY-MM-DD"),
+    end_date: str = Query(..., description="YYYY-MM-DD"),
+    dataset: str = Query("auto", description="auto, forecast, or historical_forecast"),
+    hours_before: int = Query(6, ge=0, le=48),
+    hours_after: int = Query(6, ge=0, le=48),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    try:
+        return await ingest_weather_for_games(
+            db,
+            season=season,
+            start_date=start_date,
+            end_date=end_date,
+            dataset=dataset,
+            hours_before=hours_before,
+            hours_after=hours_after,
+        )
+    except Exception as exc:
+        logger.exception(
+            "MLB weather window ingest failed for season=%s start=%s end=%s",
+            season,
+            start_date,
+            end_date,
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/context/load")
+async def load_mlb_context_window(
+    season: int = Query(..., description="MLB season year, e.g. 2026"),
+    start_date: str = Query(..., description="YYYY-MM-DD"),
+    end_date: str = Query(..., description="YYYY-MM-DD"),
+    final_only: bool = Query(False),
+    include_weather: bool = Query(True),
+    weather_dataset: str = Query("auto", description="auto, forecast, or historical_forecast"),
+    weather_hours_before: int = Query(6, ge=0, le=48),
+    weather_hours_after: int = Query(6, ge=0, le=48),
+    include_umpire_roster: bool = Query(True),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    try:
+        return await ingest_context_window(
+            db,
+            season=season,
+            start_date=start_date,
+            end_date=end_date,
+            final_only=final_only,
+            include_weather=include_weather,
+            weather_dataset=weather_dataset,
+            weather_hours_before=weather_hours_before,
+            weather_hours_after=weather_hours_after,
+            include_umpire_roster=include_umpire_roster,
+        )
+    except Exception as exc:
+        logger.exception(
+            "MLB context ingest failed for season=%s start=%s end=%s",
+            season,
+            start_date,
+            end_date,
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/season/statcast-batters/load")
 async def load_mlb_statcast_batters(
     season: int = Query(..., description="MLB season year, e.g. 2026"),
@@ -165,6 +268,9 @@ async def bootstrap_mlb_pipeline(
     until: str = Query(..., description="YYYY-MM-DD"),
     final_only: bool = Query(False),
     include_savant: bool = Query(True),
+    include_weather: bool = Query(False),
+    include_umpire_roster: bool = Query(False),
+    weather_dataset: str = Query("auto", description="auto, forecast, or historical_forecast"),
     db: AsyncSession = Depends(get_mlb_db),
 ):
     try:
@@ -175,6 +281,9 @@ async def bootstrap_mlb_pipeline(
             end_date=until,
             final_only=final_only,
             include_savant=include_savant,
+            include_weather=include_weather,
+            include_umpire_roster=include_umpire_roster,
+            weather_dataset=weather_dataset,
         )
     except Exception as exc:
         logger.exception(

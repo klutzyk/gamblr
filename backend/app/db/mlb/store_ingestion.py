@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -14,6 +14,7 @@ from app.models.mlb import (
     MlbBatTrackingBatterSeason,
     MlbBattedBallEvent,
     MlbGame,
+    MlbGameOfficialAssignment,
     MlbGameSnapshot,
     MlbLineupSnapshot,
     MlbParkFactor,
@@ -26,7 +27,9 @@ from app.models.mlb import (
     MlbStatcastPitcherSeason,
     MlbSwingPathBatterSeason,
     MlbTeam,
+    MlbUmpire,
     MlbVenue,
+    MlbWeatherSnapshot,
 )
 from app.services.baseballsavant_client import (
     BATTER_CUSTOM_SELECTIONS,
@@ -34,9 +37,15 @@ from app.services.baseballsavant_client import (
     BaseballSavantClient,
 )
 from app.services.mlb_statsapi_client import MlbStatsApiClient
+from app.services.open_meteo_client import OpenMeteoClient
 
 
 UTC = timezone.utc
+
+
+def _daterange(start_value: date, end_value: date) -> list[date]:
+    total_days = (end_value - start_value).days
+    return [start_value + timedelta(days=offset) for offset in range(total_days + 1)]
 
 
 def _chunked(values: list[int], size: int) -> list[list[int]]:
@@ -281,6 +290,26 @@ def _minimal_player_row(player_id: int | None, full_name: str | None) -> dict[st
     }
 
 
+def _build_umpire_row(umpire_payload: dict[str, Any], *, active: bool = True) -> dict[str, Any] | None:
+    person = umpire_payload.get("person") or umpire_payload.get("official") or umpire_payload
+    umpire_id = _safe_int(person.get("id"))
+    full_name = _safe_text(_candidate(person, "fullName", "full_name", "name"))
+    if umpire_id is None or not full_name:
+        return None
+
+    return {
+        "id": umpire_id,
+        "full_name": full_name,
+        "first_name": _safe_text(_candidate(person, "firstName", "first_name")),
+        "last_name": _safe_text(_candidate(person, "lastName", "last_name")),
+        "jersey_number": _safe_text(umpire_payload.get("jerseyNumber")),
+        "job": _safe_text(_candidate(umpire_payload, "job", "officialType")),
+        "job_id": _safe_text(umpire_payload.get("jobId")),
+        "title": _safe_text(_candidate(umpire_payload, "title", "officialType")),
+        "active": active,
+    }
+
+
 async def _create_source_pull(
     db: AsyncSession,
     *,
@@ -505,6 +534,94 @@ def _extract_lineup_rows(
                     "is_substitute": is_substitute,
                 }
             )
+    return rows
+
+
+def _extract_official_assignment_rows(
+    *,
+    snapshot_id: int,
+    game_pk: int,
+    officials: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    umpire_rows: dict[int, dict[str, Any]] = {}
+    assignment_rows: list[dict[str, Any]] = []
+
+    for official in officials or []:
+        umpire_row = _build_umpire_row(official)
+        if not umpire_row:
+            continue
+        umpire_id = umpire_row["id"]
+        official_type = _safe_text(official.get("officialType"))
+        if not official_type:
+            continue
+
+        umpire_rows[umpire_id] = umpire_row
+        assignment_rows.append(
+            {
+                "snapshot_id": snapshot_id,
+                "game_pk": game_pk,
+                "umpire_id": umpire_id,
+                "official_type": official_type,
+                "is_home_plate": official_type.lower() == "home plate",
+            }
+        )
+
+    return list(umpire_rows.values()), assignment_rows
+
+
+def _extract_weather_snapshot_rows(
+    *,
+    payload: dict[str, Any],
+    game: MlbGame,
+    pulled_at: datetime,
+    source_pull_id: int,
+    dataset: str,
+) -> list[dict[str, Any]]:
+    hourly = payload.get("hourly") or {}
+    time_values = hourly.get("time") or []
+    if not time_values or game.start_time_utc is None:
+        return []
+
+    def hourly_value(key: str, index: int) -> Any:
+        values = hourly.get(key) or []
+        return values[index] if index < len(values) else None
+
+    rows: list[dict[str, Any]] = []
+    for index, target_time in enumerate(time_values):
+        parsed_time = _parse_datetime(target_time)
+        if parsed_time is None:
+            continue
+
+        offset_hours = (parsed_time - game.start_time_utc).total_seconds() / 3600.0
+        rows.append(
+            {
+                "game_pk": game.game_pk,
+                "venue_id": game.venue_id,
+                "source_pull_id": source_pull_id,
+                "provider": "open_meteo",
+                "dataset": dataset,
+                "pulled_at": pulled_at,
+                "target_time_utc": parsed_time,
+                "game_time_offset_hours": offset_hours,
+                "temperature_2m_c": _safe_float(hourly_value("temperature_2m", index)),
+                "relative_humidity_2m": _safe_float(hourly_value("relative_humidity_2m", index)),
+                "dew_point_2m_c": _safe_float(hourly_value("dew_point_2m", index)),
+                "surface_pressure_hpa": _safe_float(hourly_value("surface_pressure", index)),
+                "pressure_msl_hpa": _safe_float(hourly_value("pressure_msl", index)),
+                "wind_speed_10m_kph": _safe_float(hourly_value("wind_speed_10m", index)),
+                "wind_direction_10m_deg": _safe_float(hourly_value("wind_direction_10m", index)),
+                "wind_gusts_10m_kph": _safe_float(hourly_value("wind_gusts_10m", index)),
+                "cloud_cover_percent": _safe_float(hourly_value("cloud_cover", index)),
+                "visibility_m": _safe_float(hourly_value("visibility", index)),
+                "precipitation_probability": _safe_float(hourly_value("precipitation_probability", index)),
+                "precipitation_mm": _safe_float(hourly_value("precipitation", index)),
+                "rain_mm": _safe_float(hourly_value("rain", index)),
+                "showers_mm": _safe_float(hourly_value("showers", index)),
+                "snowfall_cm": _safe_float(hourly_value("snowfall", index)),
+                "weather_code": _safe_int(hourly_value("weather_code", index)),
+            }
+        )
+
     return rows
 
 
@@ -884,6 +1001,7 @@ async def ingest_schedule(
         start_date=start_date,
         end_date=end_date,
         game_types="R,F,D,L,W",
+        hydrate="probablePitcher,team,venue,weather,linescore",
     )
     raw_schedule = write_json_payload(
         "statsapi",
@@ -908,6 +1026,7 @@ async def ingest_schedule(
             "startDate": start_date,
             "endDate": end_date,
             "gameTypes": "R,F,D,L,W",
+            "hydrate": "probablePitcher,team,venue,weather,linescore",
         },
         local_path=raw_schedule.relative_path,
         response_format="json",
@@ -966,6 +1085,7 @@ async def ingest_game_feed(
 
     game_data = payload.get("gameData") or {}
     live_data = payload.get("liveData") or {}
+    officials = ((live_data.get("boxscore") or {}).get("officials") or [])
     boxscore_teams = (live_data.get("boxscore") or {}).get("teams") or {}
     all_plays = (live_data.get("plays") or {}).get("allPlays") or []
     status_payload = game_data.get("status") or {}
@@ -1079,6 +1199,20 @@ async def ingest_game_feed(
         away_team_id=away_team_id,
         boxscore_teams=boxscore_teams,
     )
+    umpire_rows, official_rows = _extract_official_assignment_rows(
+        snapshot_id=snapshot.id,
+        game_pk=game_pk,
+        officials=officials,
+    )
+    if umpire_rows:
+        await _upsert_rows(db, MlbUmpire, umpire_rows, conflict_columns=["id"])
+    if official_rows:
+        await _upsert_rows(
+            db,
+            MlbGameOfficialAssignment,
+            official_rows,
+            constraint="uq_mlb_game_official_assignment",
+        )
     if lineup_rows:
         await _upsert_rows(
             db,
@@ -1135,6 +1269,7 @@ async def ingest_game_feed(
         "game_pk": game_pk,
         "source_pull_id": source_pull.id,
         "snapshot_id": snapshot.id,
+        "official_rows": len(official_rows),
         "lineup_rows": len(lineup_rows),
         "batting_rows": len(batting_rows),
         "pitching_rows": len(pitching_rows),
@@ -1192,6 +1327,268 @@ async def ingest_game_feeds(
         "games_ingested": len(per_game_results),
         "schedule": schedule_result,
         "games": per_game_results,
+    }
+
+
+async def ingest_umpire_roster(
+    db: AsyncSession,
+    *,
+    date_value: str,
+    sport_id: int = 1,
+    client: MlbStatsApiClient | None = None,
+) -> dict[str, Any]:
+    stats_client = client or MlbStatsApiClient()
+    payload, request_url = await stats_client.get_umpires(date=date_value, sport_id=sport_id)
+    raw_payload = write_json_payload("statsapi", "umpires", f"date_{date_value}", payload)
+
+    umpire_rows = [
+        row
+        for row in (
+            _build_umpire_row(umpire_payload)
+            for umpire_payload in (payload.get("roster") or [])
+        )
+        if row
+    ]
+    source_pull = await _create_source_pull(
+        db,
+        source="statsapi",
+        resource_type="umpires",
+        request_url=request_url,
+        request_params={"date": date_value, "sportId": sport_id},
+        local_path=raw_payload.relative_path,
+        response_format="json",
+        start_date=_parse_date(date_value),
+        end_date=_parse_date(date_value),
+        row_count=len(umpire_rows),
+        fetched_at=raw_payload.fetched_at,
+    )
+    inserted = await _upsert_rows(db, MlbUmpire, umpire_rows, conflict_columns=["id"])
+    await db.commit()
+    return {
+        "status": "success",
+        "date": date_value,
+        "source_pull_id": source_pull.id,
+        "umpires_upserted": inserted,
+    }
+
+
+async def ingest_weather_for_game(
+    db: AsyncSession,
+    *,
+    game_pk: int,
+    dataset: str = "auto",
+    hours_before: int = 6,
+    hours_after: int = 6,
+    client: OpenMeteoClient | None = None,
+) -> dict[str, Any]:
+    weather_client = client or OpenMeteoClient()
+    result = await db.execute(
+        select(MlbGame, MlbVenue)
+        .join(MlbVenue, MlbVenue.id == MlbGame.venue_id, isouter=True)
+        .where(MlbGame.game_pk == game_pk)
+    )
+    record = result.first()
+    if record is None:
+        raise ValueError(f"Game {game_pk} was not found in mlb_games.")
+
+    game, venue = record
+    if venue is None or venue.latitude is None or venue.longitude is None:
+        raise ValueError(f"Game {game_pk} is missing venue coordinates.")
+    if game.start_time_utc is None:
+        raise ValueError(f"Game {game_pk} is missing a scheduled start time.")
+
+    target_dataset = dataset
+    if dataset == "auto":
+        target_dataset = "forecast" if game.start_time_utc >= datetime.now(UTC) else "historical_forecast"
+    if target_dataset not in {"forecast", "historical_forecast"}:
+        raise ValueError("dataset must be one of: auto, forecast, historical_forecast")
+
+    window_start = game.start_time_utc - timedelta(hours=hours_before)
+    window_end = game.start_time_utc + timedelta(hours=hours_after)
+    start_date = window_start.date().isoformat()
+    end_date = window_end.date().isoformat()
+
+    if target_dataset == "forecast":
+        payload, request_url = await weather_client.get_forecast(
+            latitude=venue.latitude,
+            longitude=venue.longitude,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    else:
+        payload, request_url = await weather_client.get_historical_forecast(
+            latitude=venue.latitude,
+            longitude=venue.longitude,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    raw_payload = write_json_payload("open_meteo", target_dataset, f"game_{game_pk}", payload)
+    weather_rows = [
+        row
+        for row in _extract_weather_snapshot_rows(
+            payload=payload,
+            game=game,
+            pulled_at=raw_payload.fetched_at,
+            source_pull_id=0,
+            dataset=target_dataset,
+        )
+        if window_start <= row["target_time_utc"] <= window_end
+    ]
+    source_pull = await _create_source_pull(
+        db,
+        source="open_meteo",
+        resource_type=target_dataset,
+        request_url=request_url,
+        request_params={
+            "gamePk": game_pk,
+            "latitude": venue.latitude,
+            "longitude": venue.longitude,
+            "start_date": start_date,
+            "end_date": end_date,
+            "hours_before": hours_before,
+            "hours_after": hours_after,
+        },
+        local_path=raw_payload.relative_path,
+        response_format="json",
+        season=game.season,
+        game_pk=game_pk,
+        start_date=game.official_date,
+        end_date=game.official_date,
+        row_count=len(weather_rows),
+        fetched_at=raw_payload.fetched_at,
+    )
+    for row in weather_rows:
+        row["source_pull_id"] = source_pull.id
+
+    inserted = 0
+    if weather_rows:
+        inserted = await _upsert_rows(
+            db,
+            MlbWeatherSnapshot,
+            weather_rows,
+            constraint="uq_mlb_weather_snapshot_lookup",
+        )
+    await db.commit()
+    return {
+        "status": "success",
+        "game_pk": game_pk,
+        "dataset": target_dataset,
+        "source_pull_id": source_pull.id,
+        "weather_rows": inserted,
+    }
+
+
+async def ingest_weather_for_games(
+    db: AsyncSession,
+    *,
+    season: int,
+    start_date: str,
+    end_date: str,
+    dataset: str = "auto",
+    hours_before: int = 6,
+    hours_after: int = 6,
+    client: OpenMeteoClient | None = None,
+) -> dict[str, Any]:
+    start_date_value = _parse_date(start_date)
+    end_date_value = _parse_date(end_date)
+    stmt = select(MlbGame.game_pk).where(MlbGame.season == season)
+    if start_date_value is not None:
+        stmt = stmt.where(MlbGame.official_date >= start_date_value)
+    if end_date_value is not None:
+        stmt = stmt.where(MlbGame.official_date <= end_date_value)
+    stmt = stmt.order_by(MlbGame.official_date, MlbGame.game_pk)
+    result = await db.execute(stmt)
+    game_pks = [int(game_pk) for game_pk in result.scalars().all()]
+
+    per_game_results = []
+    for game_pk in game_pks:
+        per_game_results.append(
+            await ingest_weather_for_game(
+                db,
+                game_pk=game_pk,
+                dataset=dataset,
+                hours_before=hours_before,
+                hours_after=hours_after,
+                client=client,
+            )
+        )
+
+    return {
+        "status": "success",
+        "season": season,
+        "start_date": start_date,
+        "end_date": end_date,
+        "games_targeted": len(game_pks),
+        "games_processed": len(per_game_results),
+        "games": per_game_results,
+    }
+
+
+async def ingest_context_window(
+    db: AsyncSession,
+    *,
+    season: int,
+    start_date: str,
+    end_date: str,
+    final_only: bool = False,
+    include_weather: bool = True,
+    weather_dataset: str = "auto",
+    weather_hours_before: int = 6,
+    weather_hours_after: int = 6,
+    include_umpire_roster: bool = True,
+    stats_client: MlbStatsApiClient | None = None,
+    weather_client: OpenMeteoClient | None = None,
+) -> dict[str, Any]:
+    start_date_value = _parse_date(start_date)
+    end_date_value = _parse_date(end_date)
+    if start_date_value is None or end_date_value is None:
+        raise ValueError("start_date and end_date must be valid YYYY-MM-DD values.")
+
+    shared_stats_client = stats_client or MlbStatsApiClient()
+    shared_weather_client = weather_client or OpenMeteoClient()
+
+    games_result = await ingest_game_feeds(
+        db,
+        season=season,
+        start_date=start_date,
+        end_date=end_date,
+        final_only=final_only,
+        client=shared_stats_client,
+    )
+
+    umpire_results = None
+    if include_umpire_roster:
+        umpire_results = []
+        for current_date in _daterange(start_date_value, end_date_value):
+            umpire_results.append(
+                await ingest_umpire_roster(
+                    db,
+                    date_value=current_date.isoformat(),
+                    client=shared_stats_client,
+                )
+            )
+
+    weather_result = None
+    if include_weather:
+        weather_result = await ingest_weather_for_games(
+            db,
+            season=season,
+            start_date=start_date,
+            end_date=end_date,
+            dataset=weather_dataset,
+            hours_before=weather_hours_before,
+            hours_after=weather_hours_after,
+            client=shared_weather_client,
+        )
+
+    return {
+        "status": "success",
+        "season": season,
+        "window": {"start_date": start_date, "end_date": end_date},
+        "games": games_result,
+        "umpires": umpire_results,
+        "weather": weather_result,
     }
 
 
@@ -1668,9 +2065,13 @@ async def bootstrap_mlb_ingestion(
     end_date: str,
     final_only: bool = False,
     include_savant: bool = True,
+    include_weather: bool = False,
+    include_umpire_roster: bool = False,
+    weather_dataset: str = "auto",
 ) -> dict[str, Any]:
     stats_client = MlbStatsApiClient()
     savant_client = BaseballSavantClient()
+    weather_client = OpenMeteoClient()
 
     teams_result = await ingest_teams(db, season=season, client=stats_client)
     games_result = await ingest_game_feeds(
@@ -1681,6 +2082,31 @@ async def bootstrap_mlb_ingestion(
         final_only=final_only,
         client=stats_client,
     )
+
+    umpire_results = None
+    start_date_value = _parse_date(start_date)
+    end_date_value = _parse_date(end_date)
+    if include_umpire_roster and start_date_value and end_date_value:
+        umpire_results = []
+        for current_date in _daterange(start_date_value, end_date_value):
+            umpire_results.append(
+                await ingest_umpire_roster(
+                    db,
+                    date_value=current_date.isoformat(),
+                    client=stats_client,
+                )
+            )
+
+    weather_result = None
+    if include_weather:
+        weather_result = await ingest_weather_for_games(
+            db,
+            season=season,
+            start_date=start_date,
+            end_date=end_date,
+            dataset=weather_dataset,
+            client=weather_client,
+        )
 
     savant_results = None
     if include_savant:
@@ -1699,5 +2125,7 @@ async def bootstrap_mlb_ingestion(
         "teams": teams_result,
         "schedule": games_result.get("schedule"),
         "games": games_result,
+        "umpires": umpire_results,
+        "weather": weather_result,
         "savant": savant_results,
     }

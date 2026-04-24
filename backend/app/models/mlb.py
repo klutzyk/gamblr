@@ -157,6 +157,40 @@ class MlbGameSnapshot(Base):
     payload = Column(JSON, nullable=True)
 
 
+class MlbUmpire(Base):
+    __tablename__ = "mlb_umpires"
+
+    id = Column(Integer, primary_key=True)
+    full_name = Column(Text, nullable=False)
+    first_name = Column(Text, nullable=True)
+    last_name = Column(Text, nullable=True)
+    jersey_number = Column(Text, nullable=True)
+    job = Column(Text, nullable=True)
+    job_id = Column(Text, nullable=True)
+    title = Column(Text, nullable=True)
+    active = Column(Boolean, nullable=False, default=True)
+
+
+class MlbGameOfficialAssignment(Base):
+    __tablename__ = "mlb_game_official_assignments"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_id = Column(Integer, ForeignKey("mlb_game_snapshots.id", ondelete="CASCADE"), nullable=False)
+    game_pk = Column(BigInteger, ForeignKey("mlb_games.game_pk", ondelete="CASCADE"), nullable=False)
+    umpire_id = Column(Integer, ForeignKey("mlb_umpires.id"), nullable=False)
+    official_type = Column(Text, nullable=False)
+    is_home_plate = Column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id",
+            "umpire_id",
+            "official_type",
+            name="uq_mlb_game_official_assignment",
+        ),
+    )
+
+
 class MlbLineupSnapshot(Base):
     __tablename__ = "mlb_lineup_snapshots"
 
@@ -504,5 +538,46 @@ class MlbParkFactor(Base):
             "speed_bucket",
             "angle_bucket",
             name="uq_mlb_park_factor_lookup",
+        ),
+    )
+
+
+class MlbWeatherSnapshot(Base):
+    __tablename__ = "mlb_weather_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    game_pk = Column(BigInteger, ForeignKey("mlb_games.game_pk", ondelete="CASCADE"), nullable=False)
+    venue_id = Column(Integer, ForeignKey("mlb_venues.id"), nullable=True)
+    source_pull_id = Column(Integer, ForeignKey("mlb_source_pulls.id"), nullable=True)
+    provider = Column(Text, nullable=False)
+    dataset = Column(Text, nullable=False)
+    pulled_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    target_time_utc = Column(DateTime(timezone=True), nullable=False)
+    game_time_offset_hours = Column(Float, nullable=True)
+    temperature_2m_c = Column(Float, nullable=True)
+    relative_humidity_2m = Column(Float, nullable=True)
+    dew_point_2m_c = Column(Float, nullable=True)
+    surface_pressure_hpa = Column(Float, nullable=True)
+    pressure_msl_hpa = Column(Float, nullable=True)
+    wind_speed_10m_kph = Column(Float, nullable=True)
+    wind_direction_10m_deg = Column(Float, nullable=True)
+    wind_gusts_10m_kph = Column(Float, nullable=True)
+    cloud_cover_percent = Column(Float, nullable=True)
+    visibility_m = Column(Float, nullable=True)
+    precipitation_probability = Column(Float, nullable=True)
+    precipitation_mm = Column(Float, nullable=True)
+    rain_mm = Column(Float, nullable=True)
+    showers_mm = Column(Float, nullable=True)
+    snowfall_cm = Column(Float, nullable=True)
+    weather_code = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "game_pk",
+            "provider",
+            "dataset",
+            "pulled_at",
+            "target_time_utc",
+            name="uq_mlb_weather_snapshot_lookup",
         ),
     )

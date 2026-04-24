@@ -111,3 +111,17 @@ class MlbStatsApiClient:
             },
             feed_version=True,
         )
+
+    async def get_umpires(
+        self,
+        *,
+        date: str | None = None,
+        sport_id: int = 1,
+    ) -> tuple[dict[str, Any], str]:
+        return await self._get_json(
+            "jobs/umpires",
+            params={
+                "date": date,
+                "sportId": sport_id,
+            },
+        )
