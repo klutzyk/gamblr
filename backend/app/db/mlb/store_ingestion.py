@@ -2018,10 +2018,11 @@ async def ingest_savant_park_factors(
             stat_value = _safe_float(record.get(normalized_stat_key))
             if not venue_name or stat_value is None:
                 continue
+            local_venue_id = venue_name_lookup.get(venue_name.strip().lower())
             rows.append(
                 {
                     "season": season,
-                    "venue_id": _safe_int(record.get("venue_id")) or venue_name_lookup.get(venue_name.strip().lower()),
+                    "venue_id": local_venue_id,
                     "venue_name": venue_name,
                     "factor_type": combo["factor_type"],
                     "stat_key": combo["stat"],
