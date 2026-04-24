@@ -1604,12 +1604,14 @@ async def ingest_savant_statcast_batters(
     season: int,
     client: BaseballSavantClient | None = None,
     selections: list[str] | None = None,
+    minimum: str = "0",
 ) -> dict[str, Any]:
     savant_client = client or BaseballSavantClient()
     dataframe, csv_text, request_url = await savant_client.get_custom_leaderboard(
         season=season,
         player_type="batter",
         selections=selections or BATTER_CUSTOM_SELECTIONS,
+        minimum=minimum,
     )
     normalized = _normalize_dataframe(dataframe)
     raw_csv = write_text_payload("savant", "custom_batter", f"season_{season}", csv_text)
@@ -1618,7 +1620,7 @@ async def ingest_savant_statcast_batters(
         source="savant",
         resource_type="custom_batter",
         request_url=request_url,
-        request_params={"season": season, "type": "batter"},
+        request_params={"season": season, "type": "batter", "minimum": minimum},
         local_path=raw_csv.relative_path,
         response_format="csv",
         season=season,
@@ -1686,6 +1688,7 @@ async def ingest_savant_statcast_batters(
     return {
         "status": "success",
         "season": season,
+        "minimum": minimum,
         "source_pull_id": source_pull.id,
         "rows_upserted": inserted,
     }
@@ -1697,12 +1700,14 @@ async def ingest_savant_statcast_pitchers(
     season: int,
     client: BaseballSavantClient | None = None,
     selections: list[str] | None = None,
+    minimum: str = "0",
 ) -> dict[str, Any]:
     savant_client = client or BaseballSavantClient()
     dataframe, csv_text, request_url = await savant_client.get_custom_leaderboard(
         season=season,
         player_type="pitcher",
         selections=selections or PITCHER_CUSTOM_SELECTIONS,
+        minimum=minimum,
     )
     normalized = _normalize_dataframe(dataframe)
     raw_csv = write_text_payload("savant", "custom_pitcher", f"season_{season}", csv_text)
@@ -1711,7 +1716,7 @@ async def ingest_savant_statcast_pitchers(
         source="savant",
         resource_type="custom_pitcher",
         request_url=request_url,
-        request_params={"season": season, "type": "pitcher"},
+        request_params={"season": season, "type": "pitcher", "minimum": minimum},
         local_path=raw_csv.relative_path,
         response_format="csv",
         season=season,
@@ -1768,6 +1773,7 @@ async def ingest_savant_statcast_pitchers(
     return {
         "status": "success",
         "season": season,
+        "minimum": minimum,
         "source_pull_id": source_pull.id,
         "rows_upserted": inserted,
     }
@@ -1778,7 +1784,7 @@ async def ingest_savant_bat_tracking(
     *,
     season: int,
     client: BaseballSavantClient | None = None,
-    min_swings: int = 100,
+    min_swings: int = 0,
 ) -> dict[str, Any]:
     savant_client = client or BaseballSavantClient()
     dataframe, csv_text, request_url = await savant_client.get_bat_tracking(
@@ -1875,7 +1881,7 @@ async def ingest_savant_swing_path(
     *,
     season: int,
     client: BaseballSavantClient | None = None,
-    min_swings: int = 100,
+    min_swings: int = 0,
 ) -> dict[str, Any]:
     savant_client = client or BaseballSavantClient()
     dataframe, csv_text, request_url = await savant_client.get_swing_path(
@@ -2068,6 +2074,8 @@ async def bootstrap_mlb_ingestion(
     include_weather: bool = False,
     include_umpire_roster: bool = False,
     weather_dataset: str = "auto",
+    statcast_minimum: str = "0",
+    bat_tracking_min_swings: int = 0,
 ) -> dict[str, Any]:
     stats_client = MlbStatsApiClient()
     savant_client = BaseballSavantClient()
@@ -2111,10 +2119,30 @@ async def bootstrap_mlb_ingestion(
     savant_results = None
     if include_savant:
         savant_results = {
-            "statcast_batters": await ingest_savant_statcast_batters(db, season=season, client=savant_client),
-            "statcast_pitchers": await ingest_savant_statcast_pitchers(db, season=season, client=savant_client),
-            "bat_tracking": await ingest_savant_bat_tracking(db, season=season, client=savant_client),
-            "swing_path": await ingest_savant_swing_path(db, season=season, client=savant_client),
+            "statcast_batters": await ingest_savant_statcast_batters(
+                db,
+                season=season,
+                client=savant_client,
+                minimum=statcast_minimum,
+            ),
+            "statcast_pitchers": await ingest_savant_statcast_pitchers(
+                db,
+                season=season,
+                client=savant_client,
+                minimum=statcast_minimum,
+            ),
+            "bat_tracking": await ingest_savant_bat_tracking(
+                db,
+                season=season,
+                client=savant_client,
+                min_swings=bat_tracking_min_swings,
+            ),
+            "swing_path": await ingest_savant_swing_path(
+                db,
+                season=season,
+                client=savant_client,
+                min_swings=bat_tracking_min_swings,
+            ),
             "park_factors": await ingest_savant_park_factors(db, season=season, client=savant_client),
         }
 

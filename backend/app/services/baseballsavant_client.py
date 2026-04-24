@@ -125,7 +125,7 @@ class BaseballSavantClient:
         *,
         season: int,
         player_type: str = "batter",
-        min_swings: int = 100,
+        min_swings: int = 0,
         game_type: str = "Regular",
     ) -> tuple[pd.DataFrame, str, str]:
         return await self._fetch_csv(
@@ -146,7 +146,7 @@ class BaseballSavantClient:
         *,
         season: int,
         player_type: str = "batter",
-        min_swings: int = 100,
+        min_swings: int = 0,
         game_type: str = "Regular",
     ) -> tuple[pd.DataFrame, str, str]:
         return await self._fetch_csv(

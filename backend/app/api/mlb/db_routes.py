@@ -202,10 +202,11 @@ async def load_mlb_context_window(
 @router.post("/season/statcast-batters/load")
 async def load_mlb_statcast_batters(
     season: int = Query(..., description="MLB season year, e.g. 2026"),
+    minimum: str = Query("0", description="Savant minimum threshold; use 0 for exhaustive"),
     db: AsyncSession = Depends(get_mlb_db),
 ):
     try:
-        return await ingest_savant_statcast_batters(db, season=season)
+        return await ingest_savant_statcast_batters(db, season=season, minimum=minimum)
     except Exception as exc:
         logger.exception("MLB Savant batter ingest failed for season=%s", season)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -214,10 +215,11 @@ async def load_mlb_statcast_batters(
 @router.post("/season/statcast-pitchers/load")
 async def load_mlb_statcast_pitchers(
     season: int = Query(..., description="MLB season year, e.g. 2026"),
+    minimum: str = Query("0", description="Savant minimum threshold; use 0 for exhaustive"),
     db: AsyncSession = Depends(get_mlb_db),
 ):
     try:
-        return await ingest_savant_statcast_pitchers(db, season=season)
+        return await ingest_savant_statcast_pitchers(db, season=season, minimum=minimum)
     except Exception as exc:
         logger.exception("MLB Savant pitcher ingest failed for season=%s", season)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -226,7 +228,7 @@ async def load_mlb_statcast_pitchers(
 @router.post("/season/bat-tracking/load")
 async def load_mlb_bat_tracking(
     season: int = Query(..., description="MLB season year, e.g. 2026"),
-    min_swings: int = Query(100, ge=1),
+    min_swings: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_mlb_db),
 ):
     try:
@@ -239,7 +241,7 @@ async def load_mlb_bat_tracking(
 @router.post("/season/swing-path/load")
 async def load_mlb_swing_path(
     season: int = Query(..., description="MLB season year, e.g. 2026"),
-    min_swings: int = Query(100, ge=1),
+    min_swings: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_mlb_db),
 ):
     try:
@@ -271,6 +273,8 @@ async def bootstrap_mlb_pipeline(
     include_weather: bool = Query(False),
     include_umpire_roster: bool = Query(False),
     weather_dataset: str = Query("auto", description="auto, forecast, or historical_forecast"),
+    statcast_minimum: str = Query("0", description="Savant minimum threshold; use 0 for exhaustive"),
+    bat_tracking_min_swings: int = Query(0, ge=0, description="Bat-tracking and swing-path threshold; use 0 for exhaustive"),
     db: AsyncSession = Depends(get_mlb_db),
 ):
     try:
@@ -284,6 +288,8 @@ async def bootstrap_mlb_pipeline(
             include_weather=include_weather,
             include_umpire_roster=include_umpire_roster,
             weather_dataset=weather_dataset,
+            statcast_minimum=statcast_minimum,
+            bat_tracking_min_swings=bat_tracking_min_swings,
         )
     except Exception as exc:
         logger.exception(
