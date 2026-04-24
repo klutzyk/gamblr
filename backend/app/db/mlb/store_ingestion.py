@@ -361,8 +361,31 @@ async def _upsert_rows(
         return 0
 
     cleaned_rows = [_clean_row(row) for row in rows]
-    stmt = insert(model).values(cleaned_rows)
-    sample = cleaned_rows[0]
+    deduped_rows: list[dict[str, Any]] = []
+    seen_keys: set[Any] = set()
+
+    if conflict_columns:
+        for row in cleaned_rows:
+            key = tuple(row.get(column) for column in conflict_columns)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped_rows.append(row)
+    elif "id" in cleaned_rows[0]:
+        for row in cleaned_rows:
+            key = row.get("id")
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped_rows.append(row)
+    else:
+        deduped_rows = cleaned_rows
+
+    if not deduped_rows:
+        return 0
+
+    stmt = insert(model).values(deduped_rows)
+    sample = deduped_rows[0]
     update_columns = [
         key
         for key in sample.keys()
@@ -382,7 +405,7 @@ async def _upsert_rows(
             stmt = stmt.on_conflict_do_nothing(index_elements=conflict_columns)
 
     await db.execute(stmt)
-    return len(cleaned_rows)
+    return len(deduped_rows)
 
 
 async def _venue_lookup(db: AsyncSession) -> dict[str, int]:
