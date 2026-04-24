@@ -12,6 +12,7 @@ from app.db.mlb.store_ingestion import (
     ingest_umpire_roster,
     ingest_savant_bat_tracking,
     ingest_savant_park_factors,
+    ingest_savant_season_bundle,
     ingest_savant_statcast_batters,
     ingest_savant_statcast_pitchers,
     ingest_savant_swing_path,
@@ -260,6 +261,27 @@ async def load_mlb_park_factors(
         return await ingest_savant_park_factors(db, season=season)
     except Exception as exc:
         logger.exception("MLB park-factor ingest failed for season=%s", season)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/season/savant/load")
+async def load_mlb_savant_season_bundle(
+    season: int = Query(..., description="MLB season year, e.g. 2026"),
+    statcast_minimum: str = Query("0", description="Savant minimum threshold; use 0 for exhaustive"),
+    bat_tracking_min_swings: int = Query(0, ge=0, description="Bat-tracking and swing-path threshold; use 0 for exhaustive"),
+    include_park_factors: bool = Query(True),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    try:
+        return await ingest_savant_season_bundle(
+            db,
+            season=season,
+            statcast_minimum=statcast_minimum,
+            bat_tracking_min_swings=bat_tracking_min_swings,
+            include_park_factors=include_park_factors,
+        )
+    except Exception as exc:
+        logger.exception("MLB Savant season bundle ingest failed for season=%s", season)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

@@ -2063,6 +2063,58 @@ async def ingest_savant_park_factors(
     }
 
 
+async def ingest_savant_season_bundle(
+    db: AsyncSession,
+    *,
+    season: int,
+    client: BaseballSavantClient | None = None,
+    statcast_minimum: str = "0",
+    bat_tracking_min_swings: int = 0,
+    include_park_factors: bool = True,
+) -> dict[str, Any]:
+    savant_client = client or BaseballSavantClient()
+    results = {
+        "statcast_batters": await ingest_savant_statcast_batters(
+            db,
+            season=season,
+            client=savant_client,
+            minimum=statcast_minimum,
+        ),
+        "statcast_pitchers": await ingest_savant_statcast_pitchers(
+            db,
+            season=season,
+            client=savant_client,
+            minimum=statcast_minimum,
+        ),
+        "bat_tracking": await ingest_savant_bat_tracking(
+            db,
+            season=season,
+            client=savant_client,
+            min_swings=bat_tracking_min_swings,
+        ),
+        "swing_path": await ingest_savant_swing_path(
+            db,
+            season=season,
+            client=savant_client,
+            min_swings=bat_tracking_min_swings,
+        ),
+    }
+    if include_park_factors:
+        results["park_factors"] = await ingest_savant_park_factors(
+            db,
+            season=season,
+            client=savant_client,
+        )
+    return {
+        "status": "success",
+        "season": season,
+        "statcast_minimum": statcast_minimum,
+        "bat_tracking_min_swings": bat_tracking_min_swings,
+        "include_park_factors": include_park_factors,
+        "results": results,
+    }
+
+
 async def bootstrap_mlb_ingestion(
     db: AsyncSession,
     *,
@@ -2118,33 +2170,14 @@ async def bootstrap_mlb_ingestion(
 
     savant_results = None
     if include_savant:
-        savant_results = {
-            "statcast_batters": await ingest_savant_statcast_batters(
-                db,
-                season=season,
-                client=savant_client,
-                minimum=statcast_minimum,
-            ),
-            "statcast_pitchers": await ingest_savant_statcast_pitchers(
-                db,
-                season=season,
-                client=savant_client,
-                minimum=statcast_minimum,
-            ),
-            "bat_tracking": await ingest_savant_bat_tracking(
-                db,
-                season=season,
-                client=savant_client,
-                min_swings=bat_tracking_min_swings,
-            ),
-            "swing_path": await ingest_savant_swing_path(
-                db,
-                season=season,
-                client=savant_client,
-                min_swings=bat_tracking_min_swings,
-            ),
-            "park_factors": await ingest_savant_park_factors(db, season=season, client=savant_client),
-        }
+        savant_results = await ingest_savant_season_bundle(
+            db,
+            season=season,
+            client=savant_client,
+            statcast_minimum=statcast_minimum,
+            bat_tracking_min_swings=bat_tracking_min_swings,
+            include_park_factors=True,
+        )
 
     return {
         "status": "success",
