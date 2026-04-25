@@ -357,6 +357,9 @@ async def _upsert_rows(
     conflict_columns: list[str] | None = None,
     constraint: str | None = None,
 ) -> int:
+    MAX_QUERY_ARGS = 32767
+    QUERY_ARG_HEADROOM = 512
+
     if not rows:
         return 0
 
@@ -384,27 +387,33 @@ async def _upsert_rows(
     if not deduped_rows:
         return 0
 
-    stmt = insert(model).values(deduped_rows)
     sample = deduped_rows[0]
+    column_count = max(len(sample), 1)
+    max_rows_per_batch = max(1, (MAX_QUERY_ARGS - QUERY_ARG_HEADROOM) // column_count)
     update_columns = [
         key
         for key in sample.keys()
         if key not in set(conflict_columns or []) and key != "id"
     ]
 
-    if update_columns:
-        set_map = {column: getattr(stmt.excluded, column) for column in update_columns}
-        if constraint:
-            stmt = stmt.on_conflict_do_update(constraint=constraint, set_=set_map)
-        else:
-            stmt = stmt.on_conflict_do_update(index_elements=conflict_columns, set_=set_map)
-    else:
-        if constraint:
-            stmt = stmt.on_conflict_do_nothing(constraint=constraint)
-        else:
-            stmt = stmt.on_conflict_do_nothing(index_elements=conflict_columns)
+    for start_index in range(0, len(deduped_rows), max_rows_per_batch):
+        batch_rows = deduped_rows[start_index : start_index + max_rows_per_batch]
+        stmt = insert(model).values(batch_rows)
 
-    await db.execute(stmt)
+        if update_columns:
+            set_map = {column: getattr(stmt.excluded, column) for column in update_columns}
+            if constraint:
+                stmt = stmt.on_conflict_do_update(constraint=constraint, set_=set_map)
+            else:
+                stmt = stmt.on_conflict_do_update(index_elements=conflict_columns, set_=set_map)
+        else:
+            if constraint:
+                stmt = stmt.on_conflict_do_nothing(constraint=constraint)
+            else:
+                stmt = stmt.on_conflict_do_nothing(index_elements=conflict_columns)
+
+        await db.execute(stmt)
+
     return len(deduped_rows)
 
 
