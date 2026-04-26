@@ -251,6 +251,7 @@ export type MlbPredictionRow = {
 export type MlbPredictionsResponse = {
   sport: "mlb" | string;
   status: string;
+  source?: string;
   market: MlbMarketName | string;
   day: string;
   date: string;
@@ -264,6 +265,7 @@ export type MlbPredictionsResponse = {
 export type MlbPredictionSlateResponse = {
   sport: "mlb" | string;
   status: string;
+  source?: string;
   day: string;
   date: string;
   data_load?: Record<string, unknown>;

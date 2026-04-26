@@ -15,6 +15,8 @@ import logo from "./assets/logo2.png";
 
 type UserRegion = "au" | "us" | "uk";
 type MainTab = "predictions" | "home_run_ev" | "model_status";
+type MlbDay = "auto" | "today" | "tomorrow" | "yesterday";
+type MlbSort = "value_desc" | "value_asc" | "lineup_asc" | "player_az";
 type ApiState<T> = {
   data: T | null;
   loading: boolean;
@@ -27,12 +29,33 @@ const REGION_TIMEZONE: Record<UserRegion, string> = {
   uk: "Europe/London",
 };
 
+const REGION_SHORT: Record<UserRegion, string> = {
+  au: "AET",
+  us: "ET",
+  uk: "UK",
+};
+
+const DAY_OPTIONS: Array<{ value: MlbDay; label: string }> = [
+  { value: "auto", label: "Auto" },
+  { value: "today", label: "Today" },
+  { value: "tomorrow", label: "Tomorrow" },
+  { value: "yesterday", label: "Yesterday" },
+];
+
+const SORT_OPTIONS: Array<{ value: MlbSort; label: string }> = [
+  { value: "value_desc", label: "Value (High >> Low)" },
+  { value: "value_asc", label: "Value (Low >> High)" },
+  { value: "lineup_asc", label: "Lineup Order" },
+  { value: "player_az", label: "Player A-Z" },
+];
+
 const MARKET_CONFIG: Record<
   MlbMarketName,
-  { label: string; shortLabel: string; unit: string; icon: string; valueKey: "probability" | "prediction" }
+  { label: string; tabLabel: string; shortLabel: string; unit: string; icon: string; valueKey: "probability" | "prediction" }
 > = {
   batter_home_runs: {
     label: "Home Runs",
+    tabLabel: "Home Runs",
     shortLabel: "HR",
     unit: "chance",
     icon: "sports_baseball",
@@ -40,6 +63,7 @@ const MARKET_CONFIG: Record<
   },
   batter_hits: {
     label: "Hits",
+    tabLabel: "Hits",
     shortLabel: "Hits",
     unit: "hits",
     icon: "ads_click",
@@ -47,6 +71,7 @@ const MARKET_CONFIG: Record<
   },
   batter_total_bases: {
     label: "Total Bases",
+    tabLabel: "Total Bases",
     shortLabel: "Bases",
     unit: "bases",
     icon: "analytics",
@@ -54,6 +79,7 @@ const MARKET_CONFIG: Record<
   },
   pitcher_strikeouts: {
     label: "Pitcher Strikeouts",
+    tabLabel: "Strikeouts",
     shortLabel: "Ks",
     unit: "Ks",
     icon: "bolt",
@@ -72,25 +98,6 @@ const initialEvState: ApiState<MlbHrEvBoardResponse> = {
   loading: false,
   error: null,
 };
-
-function dateValueInTimeZone(date: Date, timeZone: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function mlbTomorrowDateValue() {
-  const now = new Date();
-  const mlbToday = dateValueInTimeZone(now, "America/New_York");
-  const noonUtc = new Date(`${mlbToday}T12:00:00Z`);
-  noonUtc.setUTCDate(noonUtc.getUTCDate() + 1);
-  return dateValueInTimeZone(noonUtc, "America/New_York");
-}
 
 function formatGameTime(value: string | null | undefined, region: UserRegion) {
   if (!value) return "-";
@@ -144,6 +151,25 @@ function getMatchup(row: MlbPredictionRow) {
   const team = row.team_abbreviation ?? "-";
   const opponent = row.opponent_team_abbreviation ?? "-";
   return row.is_home ? `${opponent} @ ${team}` : `${team} @ ${opponent}`;
+}
+
+function sortPredictionRows(rows: MlbPredictionRow[], market: MlbMarketName, sort: MlbSort) {
+  const config = MARKET_CONFIG[market];
+  return [...rows].sort((a, b) => {
+    const valueA = a[config.valueKey] ?? -1;
+    const valueB = b[config.valueKey] ?? -1;
+    if (sort === "value_asc") return valueA - valueB;
+    if (sort === "lineup_asc") {
+      const orderA = a.batting_order ?? Number.MAX_SAFE_INTEGER;
+      const orderB = b.batting_order ?? Number.MAX_SAFE_INTEGER;
+      if (orderA !== orderB) return orderA - orderB;
+      return valueB - valueA;
+    }
+    if (sort === "player_az") {
+      return (a.player_name ?? "").localeCompare(b.player_name ?? "");
+    }
+    return valueB - valueA;
+  });
 }
 
 function MlbPredictionsGrid({
@@ -315,7 +341,10 @@ function ModelStatusGrid({ markets }: { markets: MlbMarketStatus[] }) {
 
 export default function MlbPage() {
   const [userRegion, setUserRegion] = useState<UserRegion>("au");
-  const [targetDate, setTargetDate] = useState(mlbTomorrowDateValue());
+  const [predictionDay, setPredictionDay] = useState<MlbDay>("auto");
+  const [predictionSort, setPredictionSort] = useState<MlbSort>("value_desc");
+  const [predictionSearch, setPredictionSearch] = useState("");
+  const [predictionTeams, setPredictionTeams] = useState<string[]>([]);
   const [mainTab, setMainTab] = useState<MainTab>("predictions");
   const [market, setMarket] = useState<MlbMarketName>("batter_home_runs");
   const [evView, setEvView] = useState<"positive" | "all">("positive");
@@ -323,6 +352,7 @@ export default function MlbPage() {
   const [predictionsState, setPredictionsState] =
     useState<ApiState<MlbPredictionSlateResponse>>(initialPredictionsState);
   const [evState, setEvState] = useState<ApiState<MlbHrEvBoardResponse>>(initialEvState);
+  const [evRequestKey, setEvRequestKey] = useState<string | null>(null);
   const [marketStatus, setMarketStatus] = useState<ApiState<{ markets: MlbMarketStatus[] }>>({
     data: null,
     loading: false,
@@ -335,7 +365,7 @@ export default function MlbPage() {
     setPredictionsState((current) => ({ ...current, loading: true, error: null }));
     try {
       const data = await getMlbPredictionSlate({
-        date: targetDate,
+        day: predictionDay,
         limit_per_market: 60,
         ensure_data: true,
         refresh: force,
@@ -351,17 +381,22 @@ export default function MlbPage() {
     }
   };
 
-  const loadEvBoard = async () => {
+  const loadEvBoard = async (force = false) => {
+    const requestKey = `${predictionDay}:${bookmaker}`;
+    if (!force && evState.data && evRequestKey === requestKey) {
+      return;
+    }
     setEvState((current) => ({ ...current, loading: true, error: null }));
     try {
       const data = await getMlbHrEvBoard({
-        date: targetDate,
+        day: predictionDay,
         bookmaker,
         max_events: 30,
         prediction_limit: 300,
         limit: 75,
       });
       setEvState({ data, loading: false, error: null });
+      setEvRequestKey(requestKey);
     } catch (error) {
       setEvState({
         data: null,
@@ -387,13 +422,13 @@ export default function MlbPage() {
 
   useEffect(() => {
     void loadPredictions();
-  }, [targetDate]);
+  }, [predictionDay]);
 
   useEffect(() => {
     if (mainTab === "home_run_ev") {
       void loadEvBoard();
     }
-  }, [mainTab, targetDate, bookmaker]);
+  }, [mainTab, predictionDay, bookmaker]);
 
   useEffect(() => {
     if (mainTab === "model_status") {
@@ -401,13 +436,21 @@ export default function MlbPage() {
     }
   }, [mainTab]);
 
+  const handleDayChange = (day: MlbDay) => {
+    setPredictionDay(day);
+    setPredictionTeams([]);
+    setPredictionSearch("");
+    setEvState(initialEvState);
+    setEvRequestKey(null);
+  };
+
   const forceRefreshSlate = async () => {
     setRefreshing(true);
     setRefreshMessage(null);
     try {
       await loadPredictions(true);
       if (mainTab === "home_run_ev") {
-        await loadEvBoard();
+        await loadEvBoard(true);
       }
       setRefreshMessage("Slate data and predictions refreshed.");
     } catch (error) {
@@ -423,7 +466,33 @@ export default function MlbPage() {
   const activeMarketCount = predictionsState.data?.markets?.[market]?.count ?? 0;
   const activeMissingFeatures =
     predictionsState.data?.markets?.[market]?.missing_model_feature_count ?? 0;
-  const topPrediction = activeMarketRows[0] ?? null;
+  const normalizedSearch = predictionSearch.trim().toLowerCase();
+  const teamOptions = Array.from(
+    new Set(
+      activeMarketRows
+        .map((row) => row.team_abbreviation)
+        .filter((team): team is string => Boolean(team))
+    )
+  ).sort();
+  const filteredPredictionRows = sortPredictionRows(
+    activeMarketRows.filter((row) => {
+      if (predictionTeams.length > 0 && !predictionTeams.includes(row.team_abbreviation ?? "")) {
+        return false;
+      }
+      if (!normalizedSearch) return true;
+      return Boolean(
+        row.player_name?.toLowerCase().includes(normalizedSearch) ||
+          row.team_abbreviation?.toLowerCase().includes(normalizedSearch) ||
+          row.opponent_team_abbreviation?.toLowerCase().includes(normalizedSearch)
+      );
+    }),
+    market,
+    predictionSort
+  );
+  const topPrediction = filteredPredictionRows[0] ?? activeMarketRows[0] ?? null;
+  const slateDate = predictionsState.data?.date ?? evState.data?.date ?? "-";
+  const dayLabelSuffix = REGION_SHORT[userRegion];
+  const evLoadedForCurrentView = Boolean(evState.data && evRequestKey === `${predictionDay}:${bookmaker}`);
 
   return (
     <div className="app-shell min-vh-100">
@@ -496,26 +565,15 @@ export default function MlbPage() {
                     <h3 className="mb-1">MLB Hub</h3>
                     <p className="text-secondary mb-0">
                       {mainTab === "predictions"
-                        ? `${MARKET_CONFIG[market].label} for ${targetDate}`
+                        ? `${MARKET_CONFIG[market].label} for ${slateDate}`
                         : mainTab === "home_run_ev"
-                          ? `FanDuel HR value for ${targetDate}`
+                          ? `FanDuel HR value for ${slateDate}`
                           : "Model and data status"}
                     </p>
                   </div>
-                  <div className="best-bets-controls mlb-controls">
-                    <div className="control-group">
-                      <label className="form-label" htmlFor="mlb-date">
-                        MLB date
-                      </label>
-                      <input
-                        id="mlb-date"
-                        type="date"
-                        className="form-control form-control-sm"
-                        value={targetDate}
-                        onChange={(event) => setTargetDate(event.target.value)}
-                      />
-                    </div>
-                  </div>
+                  <span className="badge badge-sm bg-gradient-light text-dark">
+                    Official MLB date
+                  </span>
                 </div>
 
                 <div className="nav-wrapper position-relative mt-4">
@@ -560,27 +618,122 @@ export default function MlbPage() {
 
                 {mainTab === "predictions" && (
                   <>
-                    <div className="d-flex flex-wrap align-items-center justify-content-between mt-4 gap-3">
-                      <div className="stat-toggle">
-                        {(Object.keys(MARKET_CONFIG) as MlbMarketName[]).map((key) => (
+                    <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mt-4 mb-4">
+                      <div>
+                        <h4 className="mb-1">Predictions</h4>
+                        <p className="text-xs text-secondary mb-0">
+                          Day follows the official MLB slate. Times and labels respect your selected region.
+                        </p>
+                      </div>
+                      <div className="d-flex flex-wrap gap-2 align-items-center">
+                        <div className="stat-toggle">
+                          {(Object.keys(MARKET_CONFIG) as MlbMarketName[]).map((key) => (
+                            <button
+                              key={key}
+                              className={`stat-chip ${market === key ? "active" : ""}`}
+                              type="button"
+                              onClick={() => setMarket(key)}
+                            >
+                              {MARKET_CONFIG[key].tabLabel}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="prediction-select-group">
+                          <label className="prediction-select-field">
+                            <span className="prediction-select-label">Day</span>
+                            <select
+                              className="form-select form-select-sm"
+                              value={predictionDay}
+                              aria-label="MLB prediction day"
+                              onChange={(event) => handleDayChange(event.target.value as MlbDay)}
+                            >
+                              {DAY_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label} ({dayLabelSuffix})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="prediction-select-field">
+                            <span className="prediction-select-label">Sort</span>
+                            <select
+                              className="form-select form-select-sm"
+                              value={predictionSort}
+                              aria-label="MLB prediction sort order"
+                              onChange={(event) => setPredictionSort(event.target.value as MlbSort)}
+                            >
+                              {SORT_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <button
+                          className="btn btn-sm bg-gradient-primary mb-0"
+                          type="button"
+                          onClick={() => void loadPredictions()}
+                          disabled={predictionsState.loading}
+                        >
+                          {predictionsState.loading ? (
+                            <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                          ) : (
+                            <i className="material-symbols-rounded me-2" style={{ fontSize: "16px" }}>
+                              psychology
+                            </i>
+                          )}
+                          Get Predictions
+                        </button>
+                      </div>
+                    </div>
+                    <div className="prediction-filters mb-4">
+                      <div className="prediction-search">
+                        <i className="material-symbols-rounded">search</i>
+                        <input
+                          type="search"
+                          placeholder="Search player or team"
+                          value={predictionSearch}
+                          onChange={(event) => setPredictionSearch(event.target.value)}
+                        />
+                      </div>
+                      <div className="prediction-team-chips">
+                        <button
+                          className={`team-chip ${predictionTeams.length === 0 ? "active" : ""}`}
+                          type="button"
+                          onClick={() => setPredictionTeams([])}
+                        >
+                          All teams
+                        </button>
+                        {teamOptions.map((team) => (
                           <button
-                            key={key}
-                            className={`stat-chip ${market === key ? "active" : ""}`}
+                            key={team}
+                            className={`team-chip ${predictionTeams.includes(team) ? "active" : ""}`}
                             type="button"
-                            onClick={() => setMarket(key)}
+                            onClick={() =>
+                              setPredictionTeams((current) =>
+                                current.includes(team)
+                                  ? current.filter((selected) => selected !== team)
+                                  : [...current, team]
+                              )
+                            }
                           >
-                            {MARKET_CONFIG[key].shortLabel}
+                            {team}
                           </button>
                         ))}
                       </div>
+                    </div>
+                    <div className="d-flex justify-content-between align-items-center gap-3">
                       <span className="text-xs text-secondary">
-                        {activeMarketCount} rows | Missing features {activeMissingFeatures}
+                        {filteredPredictionRows.length} shown from {activeMarketCount} rows
+                        {predictionsState.data?.source ? ` | ${predictionsState.data.source}` : ""}
                       </span>
+                      <span className="text-xs text-secondary">Missing features {activeMissingFeatures}</span>
                     </div>
                     {predictionsState.error && <div className="alert alert-danger text-sm mt-3">{predictionsState.error}</div>}
                     {predictionsState.loading && <p className="text-secondary mt-3">Loading MLB predictions...</p>}
                     {!predictionsState.loading && (
-                      <MlbPredictionsGrid rows={activeMarketRows} market={market} />
+                      <MlbPredictionsGrid rows={filteredPredictionRows} market={market} />
                     )}
                   </>
                 )}
@@ -590,6 +743,23 @@ export default function MlbPage() {
                     <div className="d-flex flex-wrap align-items-end justify-content-between mt-4 gap-3">
                       <div className="best-bets-controls">
                         <div className="control-group">
+                          <label className="form-label" htmlFor="mlb-ev-day">
+                            Day
+                          </label>
+                          <select
+                            id="mlb-ev-day"
+                            className="form-select form-select-sm"
+                            value={predictionDay}
+                            onChange={(event) => handleDayChange(event.target.value as MlbDay)}
+                          >
+                            {DAY_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label} ({dayLabelSuffix})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="control-group">
                           <label className="form-label" htmlFor="mlb-bookie">
                             Book
                           </label>
@@ -597,7 +767,11 @@ export default function MlbPage() {
                             id="mlb-bookie"
                             className="form-select form-select-sm"
                             value={bookmaker}
-                            onChange={(event) => setBookmaker(event.target.value)}
+                            onChange={(event) => {
+                              setBookmaker(event.target.value);
+                              setEvState(initialEvState);
+                              setEvRequestKey(null);
+                            }}
                           >
                             <option value="fanduel">FanDuel</option>
                           </select>
@@ -616,11 +790,22 @@ export default function MlbPage() {
                             <option value="all">All matched</option>
                           </select>
                         </div>
+                        <button
+                          className="btn btn-sm bg-gradient-primary mb-0 align-self-end"
+                          type="button"
+                          onClick={() => void loadEvBoard()}
+                          disabled={evState.loading || evLoadedForCurrentView}
+                        >
+                          {evState.loading ? "Loading..." : evLoadedForCurrentView ? "Loaded" : "Load HR EV"}
+                        </button>
                       </div>
                       <span className="text-xs text-secondary">
                         {evState.data?.matched ?? 0} matched | {evState.data?.props_count ?? 0} props
                       </span>
                     </div>
+                    <p className="text-xs text-secondary mt-2 mb-0">
+                      PropLine is only called from this tab to protect the free request limit.
+                    </p>
                     {evState.error && <div className="alert alert-danger text-sm mt-3">{evState.error}</div>}
                     {evState.loading && <p className="text-secondary mt-3">Loading MLB EV board...</p>}
                     {!evState.loading && <EvRowTable rows={evRows.slice(0, 40)} userRegion={userRegion} />}
@@ -640,7 +825,7 @@ export default function MlbPage() {
             <div className="col-lg-4">
               <div className="section-card mb-4 prediction-focus">
                 <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Slate Snapshot</p>
-                <h4 className="mb-3">{targetDate}</h4>
+                <h4 className="mb-3">{slateDate}</h4>
                 <div className="row g-3">
                   <div className="col-6">
                     <div className="mlb-stat-tile">
