@@ -1534,17 +1534,26 @@ async def ingest_weather_for_games(
     game_pks = [int(game_pk) for game_pk in result.scalars().all()]
 
     per_game_results = []
+    skipped_games = []
     for game_pk in game_pks:
-        per_game_results.append(
-            await ingest_weather_for_game(
-                db,
-                game_pk=game_pk,
-                dataset=dataset,
-                hours_before=hours_before,
-                hours_after=hours_after,
-                client=client,
+        try:
+            per_game_results.append(
+                await ingest_weather_for_game(
+                    db,
+                    game_pk=game_pk,
+                    dataset=dataset,
+                    hours_before=hours_before,
+                    hours_after=hours_after,
+                    client=client,
+                )
             )
-        )
+        except ValueError as exc:
+            skipped_games.append(
+                {
+                    "game_pk": game_pk,
+                    "reason": str(exc),
+                }
+            )
 
     return {
         "status": "success",
@@ -1553,6 +1562,8 @@ async def ingest_weather_for_games(
         "end_date": end_date,
         "games_targeted": len(game_pks),
         "games_processed": len(per_game_results),
+        "games_skipped": len(skipped_games),
+        "skipped": skipped_games,
         "games": per_game_results,
     }
 
