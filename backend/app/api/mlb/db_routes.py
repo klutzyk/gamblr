@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.mlb.session import get_mlb_db
 from app.db.mlb.store_ingestion import (
     bootstrap_mlb_ingestion,
+    ingest_active_rosters,
     ingest_context_window,
     ingest_game_feed,
     ingest_game_feeds,
+    ingest_team_roster,
     ingest_umpire_roster,
     ingest_savant_bat_tracking,
     ingest_savant_park_factors,
@@ -36,6 +38,46 @@ async def load_mlb_teams(
         return await ingest_teams(db, season=season)
     except Exception as exc:
         logger.exception("MLB team ingestion failed for season %s", season)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/rosters/team/{team_id}/load")
+async def load_mlb_team_roster(
+    team_id: int,
+    roster_date: str = Query(..., alias="date", description="YYYY-MM-DD"),
+    season: int | None = Query(None, description="MLB season year, e.g. 2026"),
+    roster_type: str = Query("active", description="active, 40Man, depthChart, etc."),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    try:
+        return await ingest_team_roster(
+            db,
+            team_id=team_id,
+            roster_date=roster_date,
+            season=season,
+            roster_type=roster_type,
+        )
+    except Exception as exc:
+        logger.exception("MLB team roster ingest failed for team_id=%s date=%s", team_id, roster_date)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/rosters/active/load")
+async def load_mlb_active_rosters(
+    season: int = Query(..., description="MLB season year, e.g. 2026"),
+    roster_date: str = Query(..., alias="date", description="YYYY-MM-DD"),
+    roster_type: str = Query("active", description="Usually active"),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    try:
+        return await ingest_active_rosters(
+            db,
+            season=season,
+            roster_date=roster_date,
+            roster_type=roster_type,
+        )
+    except Exception as exc:
+        logger.exception("MLB active roster ingest failed for season=%s date=%s", season, roster_date)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

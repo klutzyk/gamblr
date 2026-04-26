@@ -125,3 +125,22 @@ class MlbStatsApiClient:
                 "sportId": sport_id,
             },
         )
+
+    async def get_team_roster(
+        self,
+        *,
+        team_id: int,
+        roster_type: str = "active",
+        season: int | None = None,
+        date: str | None = None,
+        hydrate: str | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        return await self._get_json(
+            f"teams/{team_id}/roster",
+            params={
+                "rosterType": roster_type,
+                "season": season,
+                "date": date,
+                "hydrate": hydrate,
+            },
+        )

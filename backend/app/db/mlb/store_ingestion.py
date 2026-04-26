@@ -22,6 +22,7 @@ from app.models.mlb import (
     MlbPlayer,
     MlbPlayerGameBatting,
     MlbPlayerGamePitching,
+    MlbRosterSnapshot,
     MlbSourcePull,
     MlbStatcastBatterSeason,
     MlbStatcastPitcherSeason,
@@ -308,6 +309,54 @@ def _build_umpire_row(umpire_payload: dict[str, Any], *, active: bool = True) ->
         "title": _safe_text(_candidate(umpire_payload, "title", "officialType")),
         "active": active,
     }
+
+
+def _build_roster_snapshot_row(
+    roster_entry: dict[str, Any],
+    *,
+    team_id: int,
+    roster_type: str,
+    roster_date: date,
+    season: int | None,
+    source_pull_id: int | None,
+    captured_at: datetime,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    person = roster_entry.get("person") or {}
+    player_row = _build_player_row(person) or _minimal_player_row(
+        _safe_int(person.get("id")),
+        _safe_text(_candidate(person, "fullName", "full_name", "name")),
+    )
+    if not player_row:
+        return None, None
+
+    position = roster_entry.get("position") or person.get("primaryPosition") or {}
+    position_type = _safe_text(position.get("type"))
+    position_abbreviation = _safe_text(position.get("abbreviation"))
+    position_code = _safe_text(position.get("code"))
+    is_pitcher = (
+        (position_type or "").lower() == "pitcher"
+        or (position_abbreviation or "").upper() == "P"
+        or (position_code or "") == "1"
+    )
+    status = roster_entry.get("status") or {}
+    roster_row = {
+        "team_id": team_id,
+        "player_id": player_row["id"],
+        "roster_type": roster_type,
+        "roster_date": roster_date,
+        "season": season,
+        "jersey_number": _safe_text(roster_entry.get("jerseyNumber")),
+        "status_code": _safe_text(status.get("code")),
+        "status_description": _safe_text(status.get("description")),
+        "position_code": position_code,
+        "position_name": _safe_text(position.get("name")),
+        "position_type": position_type,
+        "position_abbreviation": position_abbreviation,
+        "is_pitcher": is_pitcher,
+        "source_pull_id": source_pull_id,
+        "captured_at": captured_at,
+    }
+    return player_row, roster_row
 
 
 async def _create_source_pull(
@@ -1012,6 +1061,139 @@ async def ingest_teams(
         "source_pull_id": teams_pull.id,
         "teams_upserted": team_count,
         "venues_upserted": venue_count,
+    }
+
+
+async def ingest_team_roster(
+    db: AsyncSession,
+    *,
+    team_id: int,
+    roster_date: str | date,
+    season: int | None = None,
+    roster_type: str = "active",
+    client: MlbStatsApiClient | None = None,
+) -> dict[str, Any]:
+    stats_client = client or MlbStatsApiClient()
+    roster_date_value = _parse_date(roster_date)
+    if roster_date_value is None:
+        raise ValueError("roster_date must be YYYY-MM-DD")
+
+    payload, request_url = await stats_client.get_team_roster(
+        team_id=team_id,
+        roster_type=roster_type,
+        season=season,
+        date=roster_date_value.isoformat(),
+        hydrate="person",
+    )
+    raw_roster = write_json_payload(
+        "statsapi",
+        "team_roster",
+        f"{team_id}_{roster_type}_{roster_date_value.isoformat()}",
+        payload,
+    )
+    source_pull = await _create_source_pull(
+        db,
+        source="statsapi",
+        resource_type="team_roster",
+        request_url=request_url,
+        request_params={
+            "team_id": team_id,
+            "roster_type": roster_type,
+            "season": season,
+            "date": roster_date_value.isoformat(),
+        },
+        local_path=raw_roster.relative_path,
+        response_format="json",
+        season=season,
+        start_date=roster_date_value,
+        end_date=roster_date_value,
+        row_count=len(payload.get("roster") or []),
+        fetched_at=raw_roster.fetched_at,
+    )
+
+    player_rows_by_id: dict[int, dict[str, Any]] = {}
+    roster_rows: list[dict[str, Any]] = []
+    for entry in payload.get("roster") or []:
+        player_row, roster_row = _build_roster_snapshot_row(
+            entry,
+            team_id=team_id,
+            roster_type=roster_type,
+            roster_date=roster_date_value,
+            season=season,
+            source_pull_id=source_pull.id,
+            captured_at=raw_roster.fetched_at,
+        )
+        if player_row:
+            player_rows_by_id[player_row["id"]] = player_row
+        if roster_row:
+            roster_rows.append(roster_row)
+
+    player_count = await _upsert_rows(db, MlbPlayer, list(player_rows_by_id.values()), conflict_columns=["id"])
+    roster_count = await _upsert_rows(
+        db,
+        MlbRosterSnapshot,
+        roster_rows,
+        constraint="uq_mlb_roster_snapshot_player",
+    )
+    await db.commit()
+
+    return {
+        "status": "success",
+        "team_id": team_id,
+        "roster_type": roster_type,
+        "roster_date": roster_date_value.isoformat(),
+        "source_pull_id": source_pull.id,
+        "players_upserted": player_count,
+        "roster_rows_upserted": roster_count,
+        "pitchers": sum(1 for row in roster_rows if row.get("is_pitcher")),
+    }
+
+
+async def ingest_active_rosters(
+    db: AsyncSession,
+    *,
+    season: int,
+    roster_date: str | date,
+    roster_type: str = "active",
+    client: MlbStatsApiClient | None = None,
+) -> dict[str, Any]:
+    stats_client = client or MlbStatsApiClient()
+    roster_date_value = _parse_date(roster_date)
+    if roster_date_value is None:
+        raise ValueError("roster_date must be YYYY-MM-DD")
+
+    result = await db.execute(select(MlbTeam.id).where(MlbTeam.active.is_(True)))
+    team_ids = [int(row[0]) for row in result.all()]
+    if not team_ids:
+        teams_payload, _ = await stats_client.get_teams(season=season, hydrate="venue")
+        team_ids = [
+            team_id
+            for team_id in (_safe_int(team_payload.get("id")) for team_payload in teams_payload.get("teams") or [])
+            if team_id is not None
+        ]
+
+    summaries = []
+    for team_id in sorted(team_ids):
+        summaries.append(
+            await ingest_team_roster(
+                db,
+                team_id=team_id,
+                roster_date=roster_date_value,
+                season=season,
+                roster_type=roster_type,
+                client=stats_client,
+            )
+        )
+
+    return {
+        "status": "success",
+        "season": season,
+        "roster_type": roster_type,
+        "roster_date": roster_date_value.isoformat(),
+        "teams": len(summaries),
+        "roster_rows_upserted": sum(item["roster_rows_upserted"] for item in summaries),
+        "pitchers": sum(item["pitchers"] for item in summaries),
+        "team_results": summaries,
     }
 
 

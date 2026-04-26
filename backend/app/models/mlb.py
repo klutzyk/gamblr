@@ -218,6 +218,37 @@ class MlbLineupSnapshot(Base):
     )
 
 
+class MlbRosterSnapshot(Base):
+    __tablename__ = "mlb_roster_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    team_id = Column(Integer, ForeignKey("mlb_teams.id"), nullable=False)
+    player_id = Column(Integer, ForeignKey("mlb_players.id"), nullable=False)
+    roster_type = Column(Text, nullable=False)
+    roster_date = Column(Date, nullable=False)
+    season = Column(Integer, nullable=True)
+    jersey_number = Column(Text, nullable=True)
+    status_code = Column(Text, nullable=True)
+    status_description = Column(Text, nullable=True)
+    position_code = Column(Text, nullable=True)
+    position_name = Column(Text, nullable=True)
+    position_type = Column(Text, nullable=True)
+    position_abbreviation = Column(Text, nullable=True)
+    is_pitcher = Column(Boolean, nullable=False, default=False)
+    source_pull_id = Column(Integer, ForeignKey("mlb_source_pulls.id"), nullable=True)
+    captured_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "team_id",
+            "player_id",
+            "roster_type",
+            "roster_date",
+            name="uq_mlb_roster_snapshot_player",
+        ),
+    )
+
+
 class MlbPlayerGameBatting(Base):
     __tablename__ = "mlb_player_game_batting"
 

@@ -335,6 +335,139 @@ def _load_pitcher_batted_ball_allowed_history(engine) -> pd.DataFrame:
     return history[keep_cols]
 
 
+def _load_bullpen_history(engine) -> pd.DataFrame:
+    relief = _read_sql(
+        """
+        select
+            p.game_pk,
+            p.team_id as opponent_team_id,
+            g.official_date as game_date,
+            count(*)::float as bullpen_pitchers_used,
+            sum(coalesce(p.outs_recorded, 0))::float as bullpen_outs_recorded,
+            sum(coalesce(p.batters_faced, 0))::float as bullpen_batters_faced,
+            sum(coalesce(p.pitches_thrown, 0))::float as bullpen_pitches_thrown,
+            sum(coalesce(p.strikeouts, 0))::float as bullpen_strikeouts,
+            sum(coalesce(p.walks, 0))::float as bullpen_walks,
+            sum(coalesce(p.hits_allowed, 0))::float as bullpen_hits_allowed,
+            sum(coalesce(p.home_runs_allowed, 0))::float as bullpen_home_runs_allowed,
+            sum(coalesce(p.earned_runs, 0))::float as bullpen_earned_runs
+        from mlb_player_game_pitching p
+        join mlb_games g on g.game_pk = p.game_pk
+        where p.is_starter = false
+        group by p.game_pk, p.team_id, g.official_date
+        """,
+        engine,
+    )
+    if relief.empty:
+        return relief
+
+    relief["game_date"] = pd.to_datetime(relief["game_date"])
+    value_cols = [
+        "bullpen_pitchers_used",
+        "bullpen_outs_recorded",
+        "bullpen_batters_faced",
+        "bullpen_pitches_thrown",
+        "bullpen_strikeouts",
+        "bullpen_walks",
+        "bullpen_hits_allowed",
+        "bullpen_home_runs_allowed",
+        "bullpen_earned_runs",
+    ]
+    relief[value_cols] = relief[value_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+    relief = _add_group_rolling(
+        relief,
+        group_cols="opponent_team_id",
+        value_cols=value_cols,
+        windows=(3, 5, 10, 20),
+        prefix="opponent_bullpen",
+    )
+    for window in (3, 5, 10, 20):
+        relief[f"opponent_bullpen_hr_per_bf_last{window}"] = _safe_div(
+            relief[f"opponent_bullpen_bullpen_home_runs_allowed_sum_last{window}"],
+            relief[f"opponent_bullpen_bullpen_batters_faced_sum_last{window}"],
+        )
+        relief[f"opponent_bullpen_k_per_bf_last{window}"] = _safe_div(
+            relief[f"opponent_bullpen_bullpen_strikeouts_sum_last{window}"],
+            relief[f"opponent_bullpen_bullpen_batters_faced_sum_last{window}"],
+        )
+        relief[f"opponent_bullpen_bb_per_bf_last{window}"] = _safe_div(
+            relief[f"opponent_bullpen_bullpen_walks_sum_last{window}"],
+            relief[f"opponent_bullpen_bullpen_batters_faced_sum_last{window}"],
+        )
+        relief[f"opponent_bullpen_pitches_per_out_last{window}"] = _safe_div(
+            relief[f"opponent_bullpen_bullpen_pitches_thrown_sum_last{window}"],
+            relief[f"opponent_bullpen_bullpen_outs_recorded_sum_last{window}"],
+        )
+
+    relief_bbe = _read_sql(
+        """
+        select
+            bb.game_pk,
+            p.team_id as opponent_team_id,
+            g.official_date as game_date,
+            count(*)::float as bullpen_bbe_allowed_count,
+            avg(bb.launch_speed) as bullpen_bbe_allowed_avg_launch_speed,
+            max(bb.launch_speed) as bullpen_bbe_allowed_max_launch_speed,
+            avg(bb.launch_angle) as bullpen_bbe_allowed_avg_launch_angle,
+            max(bb.total_distance) as bullpen_bbe_allowed_max_distance,
+            avg(bb.estimated_ba_using_speedangle) as bullpen_bbe_allowed_avg_estimated_ba,
+            avg(bb.estimated_woba_using_speedangle) as bullpen_bbe_allowed_avg_estimated_woba,
+            avg(case when bb.is_hard_hit then 1.0 else 0.0 end) as bullpen_bbe_allowed_hard_hit_rate,
+            avg(case when bb.is_sweet_spot then 1.0 else 0.0 end) as bullpen_bbe_allowed_sweet_spot_rate,
+            avg(case when bb.launch_speed_angle = 6 then 1.0 else 0.0 end) as bullpen_bbe_allowed_barrel_rate,
+            avg(case when bb.launch_speed >= 95 and bb.launch_angle between 20 and 35 then 1.0 else 0.0 end) as bullpen_bbe_allowed_hr_contact_rate,
+            avg(case when lower(coalesce(bb.trajectory, '')) like '%%fly%%' then 1.0 else 0.0 end) as bullpen_bbe_allowed_fly_ball_rate,
+            avg(case when lower(coalesce(bb.trajectory, '')) like '%%line%%' then 1.0 else 0.0 end) as bullpen_bbe_allowed_line_drive_rate
+        from mlb_batted_ball_events bb
+        join mlb_player_game_pitching p
+            on p.game_pk = bb.game_pk and p.player_id = bb.pitcher_id
+        join mlb_games g on g.game_pk = bb.game_pk
+        where p.is_starter = false
+        group by bb.game_pk, p.team_id, g.official_date
+        """,
+        engine,
+    )
+    if not relief_bbe.empty:
+        relief_bbe["game_date"] = pd.to_datetime(relief_bbe["game_date"])
+        bbe_cols = [
+            "bullpen_bbe_allowed_count",
+            "bullpen_bbe_allowed_avg_launch_speed",
+            "bullpen_bbe_allowed_max_launch_speed",
+            "bullpen_bbe_allowed_avg_launch_angle",
+            "bullpen_bbe_allowed_max_distance",
+            "bullpen_bbe_allowed_avg_estimated_ba",
+            "bullpen_bbe_allowed_avg_estimated_woba",
+            "bullpen_bbe_allowed_hard_hit_rate",
+            "bullpen_bbe_allowed_sweet_spot_rate",
+            "bullpen_bbe_allowed_barrel_rate",
+            "bullpen_bbe_allowed_hr_contact_rate",
+            "bullpen_bbe_allowed_fly_ball_rate",
+            "bullpen_bbe_allowed_line_drive_rate",
+        ]
+        relief_bbe[bbe_cols] = relief_bbe[bbe_cols].apply(pd.to_numeric, errors="coerce")
+        relief_bbe = _add_group_rolling(
+            relief_bbe,
+            group_cols="opponent_team_id",
+            value_cols=bbe_cols,
+            windows=(3, 5, 10, 20),
+            prefix="opponent_bullpen_bbe_allowed",
+            add_sums=False,
+        )
+        keep_bbe = [
+            "game_pk",
+            "opponent_team_id",
+            *[col for col in relief_bbe.columns if col.startswith("opponent_bullpen_bbe_allowed_")],
+        ]
+        relief = relief.merge(relief_bbe[keep_bbe], on=["game_pk", "opponent_team_id"], how="left")
+
+    keep_cols = [
+        "game_pk",
+        "opponent_team_id",
+        *[col for col in relief.columns if col.startswith("opponent_bullpen_")],
+    ]
+    return relief[keep_cols]
+
+
 def _load_batter_context(engine) -> pd.DataFrame:
     return _read_sql(
         """
@@ -704,6 +837,10 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
     if not starters.empty:
         starters = starters.rename(columns={"team_id": "opponent_team_id"})
         df = df.merge(starters, on=["game_pk", "opponent_team_id"], how="left")
+
+    bullpen = _load_bullpen_history(engine)
+    if not bullpen.empty:
+        df = df.merge(bullpen, on=["game_pk", "opponent_team_id"], how="left")
 
     for extra in (_load_batter_context(engine), _load_weather_features(engine), _load_park_features(engine)):
         keys = ["season", "player_id"] if "player_id" in extra.columns else ["game_pk"] if "game_pk" in extra.columns else ["season", "venue_id"]
