@@ -80,17 +80,27 @@ def all_market_statuses() -> list[dict[str, Any]]:
     return [market_status(market) for market in market_names()]
 
 
-def score_frame(market: str, frame: pd.DataFrame, *, limit: int | None = None) -> pd.DataFrame:
+def score_frame(
+    market: str,
+    frame: pd.DataFrame,
+    *,
+    limit: int | None = None,
+    strict_features: bool = False,
+) -> pd.DataFrame:
     artifact = load_latest_model(market)
     feature_columns = artifact["feature_columns"]
+    scored = frame.copy()
     missing = [column for column in feature_columns if column not in frame.columns]
     if missing:
-        raise ValueError(
-            f"Scoring frame for {market} is missing {len(missing)} model features: "
-            f"{', '.join(missing[:10])}"
-        )
+        if strict_features:
+            raise ValueError(
+                f"Scoring frame for {market} is missing {len(missing)} model features: "
+                f"{', '.join(missing[:10])}"
+            )
+        for column in missing:
+            scored[column] = np.nan
+    scored.attrs["missing_model_features"] = missing
 
-    scored = frame.copy()
     model = artifact["model"]
     predictions = (
         model.predict_proba(scored[feature_columns])[:, 1]

@@ -37,6 +37,7 @@ def _add_group_rolling(
     value_cols: Iterable[str],
     windows: Iterable[int] = (5, 10, 20),
     prefix: str,
+    add_sums: bool = True,
 ) -> pd.DataFrame:
     group_cols = [group_cols] if isinstance(group_cols, str) else group_cols
     df = df.sort_values(group_cols + ["game_date", "game_pk"]).copy()
@@ -47,9 +48,10 @@ def _add_group_rolling(
             df[f"{prefix}_{col}_avg_last{window}"] = shifted.groupby(
                 [df[group_col] for group_col in group_cols], sort=False
             ).transform(lambda series: series.rolling(window, min_periods=1).mean())
-            df[f"{prefix}_{col}_sum_last{window}"] = shifted.groupby(
-                [df[group_col] for group_col in group_cols], sort=False
-            ).transform(lambda series: series.rolling(window, min_periods=1).sum())
+            if add_sums:
+                df[f"{prefix}_{col}_sum_last{window}"] = shifted.groupby(
+                    [df[group_col] for group_col in group_cols], sort=False
+                ).transform(lambda series: series.rolling(window, min_periods=1).sum())
     return df
 
 
@@ -104,6 +106,8 @@ def _load_park_features(engine) -> pd.DataFrame:
             venue_id,
             avg(stat_value) as park_factor_avg,
             max(stat_value) filter (where stat_key = 'index_HR') as park_factor_hr,
+            max(stat_value) filter (where stat_key = 'index_HR' and upper(coalesce(bat_side, '')) = 'L') as park_factor_hr_lhb,
+            max(stat_value) filter (where stat_key = 'index_HR' and upper(coalesce(bat_side, '')) = 'R') as park_factor_hr_rhb,
             avg(environment_factor) as park_environment_factor,
             avg(temperature_factor) as park_temperature_factor,
             avg(elevation_factor) as park_elevation_factor,
@@ -114,6 +118,221 @@ def _load_park_features(engine) -> pd.DataFrame:
         """,
         engine,
     )
+
+
+def _load_batter_batted_ball_history(engine) -> pd.DataFrame:
+    history = _read_sql(
+        """
+        select
+            bb.game_pk,
+            bb.batter_id as player_id,
+            g.official_date as game_date,
+            count(*)::float as bbe_count,
+            avg(bb.launch_speed) as bbe_avg_launch_speed,
+            max(bb.launch_speed) as bbe_max_launch_speed,
+            avg(bb.launch_angle) as bbe_avg_launch_angle,
+            max(bb.total_distance) as bbe_max_distance,
+            avg(bb.estimated_ba_using_speedangle) as bbe_avg_estimated_ba,
+            avg(bb.estimated_woba_using_speedangle) as bbe_avg_estimated_woba,
+            avg(bb.coord_x) as bbe_avg_coord_x,
+            avg(bb.coord_y) as bbe_avg_coord_y,
+            avg(case when bb.is_hard_hit then 1.0 else 0.0 end) as bbe_hard_hit_rate,
+            avg(case when bb.is_sweet_spot then 1.0 else 0.0 end) as bbe_sweet_spot_rate,
+            avg(case when bb.launch_speed_angle = 6 then 1.0 else 0.0 end) as bbe_barrel_rate,
+            avg(case when bb.launch_speed >= 95 and bb.launch_angle between 20 and 35 then 1.0 else 0.0 end) as bbe_hr_contact_rate,
+            avg(case when lower(coalesce(bb.trajectory, '')) like '%%fly%%' then 1.0 else 0.0 end) as bbe_fly_ball_rate,
+            avg(case when lower(coalesce(bb.trajectory, '')) like '%%line%%' then 1.0 else 0.0 end) as bbe_line_drive_rate
+        from mlb_batted_ball_events bb
+        join mlb_games g on g.game_pk = bb.game_pk
+        where bb.batter_id is not null
+        group by bb.game_pk, bb.batter_id, g.official_date
+        """,
+        engine,
+    )
+    if history.empty:
+        return history
+
+    history["game_date"] = pd.to_datetime(history["game_date"])
+    value_cols = [
+        "bbe_count",
+        "bbe_avg_launch_speed",
+        "bbe_max_launch_speed",
+        "bbe_avg_launch_angle",
+        "bbe_max_distance",
+        "bbe_avg_estimated_ba",
+        "bbe_avg_estimated_woba",
+        "bbe_avg_coord_x",
+        "bbe_avg_coord_y",
+        "bbe_hard_hit_rate",
+        "bbe_sweet_spot_rate",
+        "bbe_barrel_rate",
+        "bbe_hr_contact_rate",
+        "bbe_fly_ball_rate",
+        "bbe_line_drive_rate",
+    ]
+    history[value_cols] = history[value_cols].apply(pd.to_numeric, errors="coerce")
+    history = _add_group_rolling(
+        history,
+        group_cols="player_id",
+        value_cols=value_cols,
+        windows=(5, 10, 20),
+        prefix="batter_bbe",
+        add_sums=False,
+    )
+    keep_cols = [
+        "game_pk",
+        "player_id",
+        *[col for col in history.columns if col.startswith("batter_bbe_")],
+    ]
+    return history[keep_cols]
+
+
+def _load_pitcher_pitch_history(engine) -> pd.DataFrame:
+    history = _read_sql(
+        """
+        select
+            pe.game_pk,
+            pe.pitcher_id as starter_pitcher_id,
+            g.official_date as game_date,
+            count(*)::float as pitch_count,
+            avg(pe.start_speed) as pitch_avg_start_speed,
+            max(pe.start_speed) as pitch_max_start_speed,
+            avg(pe.spin_rate) as pitch_avg_spin_rate,
+            avg(pe.extension) as pitch_avg_extension,
+            avg(abs(pe.pfx_x)) as pitch_avg_abs_pfx_x,
+            avg(pe.pfx_z) as pitch_avg_pfx_z,
+            avg(abs(pe.break_horizontal)) as pitch_avg_abs_break_horizontal,
+            avg(pe.break_vertical) as pitch_avg_break_vertical,
+            avg(case when pe.is_strike then 1.0 else 0.0 end) as pitch_strike_rate,
+            avg(case when pe.is_ball then 1.0 else 0.0 end) as pitch_ball_rate,
+            avg(case when pe.is_in_play then 1.0 else 0.0 end) as pitch_in_play_rate,
+            avg(case when pe.zone between 1 and 9 then 1.0 else 0.0 end) as pitch_zone_rate,
+            avg(case when pe.pitch_type_code in ('FF', 'FA') then 1.0 else 0.0 end) as pitch_four_seam_rate,
+            avg(case when pe.pitch_type_code in ('FT', 'SI', 'FC') then 1.0 else 0.0 end) as pitch_sinker_cutter_rate,
+            avg(case when pe.pitch_type_code in ('FF', 'FA', 'FT', 'SI', 'FC') then 1.0 else 0.0 end) as pitch_fastball_rate,
+            avg(case when pe.pitch_type_code in ('SL', 'ST') then 1.0 else 0.0 end) as pitch_slider_sweeper_rate,
+            avg(case when pe.pitch_type_code in ('CU', 'KC', 'SV', 'CS') then 1.0 else 0.0 end) as pitch_curve_rate,
+            avg(case when pe.pitch_type_code in ('SL', 'ST', 'CU', 'KC', 'SV', 'CS') then 1.0 else 0.0 end) as pitch_breaking_rate,
+            avg(case when pe.pitch_type_code in ('CH', 'FS', 'FO', 'SC') then 1.0 else 0.0 end) as pitch_offspeed_rate,
+            avg(case when pe.pitch_type_code = 'CH' then 1.0 else 0.0 end) as pitch_changeup_rate,
+            count(distinct pe.pitch_type_code)::float as pitch_type_count
+        from mlb_pitch_events pe
+        join mlb_games g on g.game_pk = pe.game_pk
+        where pe.pitcher_id is not null
+        group by pe.game_pk, pe.pitcher_id, g.official_date
+        """,
+        engine,
+    )
+    if history.empty:
+        return history
+
+    history["game_date"] = pd.to_datetime(history["game_date"])
+    value_cols = [
+        "pitch_count",
+        "pitch_avg_start_speed",
+        "pitch_max_start_speed",
+        "pitch_avg_spin_rate",
+        "pitch_avg_extension",
+        "pitch_avg_abs_pfx_x",
+        "pitch_avg_pfx_z",
+        "pitch_avg_abs_break_horizontal",
+        "pitch_avg_break_vertical",
+        "pitch_strike_rate",
+        "pitch_ball_rate",
+        "pitch_in_play_rate",
+        "pitch_zone_rate",
+        "pitch_four_seam_rate",
+        "pitch_sinker_cutter_rate",
+        "pitch_fastball_rate",
+        "pitch_slider_sweeper_rate",
+        "pitch_curve_rate",
+        "pitch_breaking_rate",
+        "pitch_offspeed_rate",
+        "pitch_changeup_rate",
+        "pitch_type_count",
+    ]
+    history[value_cols] = history[value_cols].apply(pd.to_numeric, errors="coerce")
+    history = _add_group_rolling(
+        history,
+        group_cols="starter_pitcher_id",
+        value_cols=value_cols,
+        windows=(5, 10, 20),
+        prefix="opp_starter_pitch",
+        add_sums=False,
+    )
+    keep_cols = [
+        "game_pk",
+        "starter_pitcher_id",
+        *[col for col in history.columns if col.startswith("opp_starter_pitch_")],
+    ]
+    return history[keep_cols]
+
+
+def _load_pitcher_batted_ball_allowed_history(engine) -> pd.DataFrame:
+    history = _read_sql(
+        """
+        select
+            bb.game_pk,
+            bb.pitcher_id as starter_pitcher_id,
+            g.official_date as game_date,
+            count(*)::float as bbe_allowed_count,
+            avg(bb.launch_speed) as bbe_allowed_avg_launch_speed,
+            max(bb.launch_speed) as bbe_allowed_max_launch_speed,
+            avg(bb.launch_angle) as bbe_allowed_avg_launch_angle,
+            max(bb.total_distance) as bbe_allowed_max_distance,
+            avg(bb.estimated_ba_using_speedangle) as bbe_allowed_avg_estimated_ba,
+            avg(bb.estimated_woba_using_speedangle) as bbe_allowed_avg_estimated_woba,
+            avg(bb.coord_x) as bbe_allowed_avg_coord_x,
+            avg(bb.coord_y) as bbe_allowed_avg_coord_y,
+            avg(case when bb.is_hard_hit then 1.0 else 0.0 end) as bbe_allowed_hard_hit_rate,
+            avg(case when bb.is_sweet_spot then 1.0 else 0.0 end) as bbe_allowed_sweet_spot_rate,
+            avg(case when bb.launch_speed_angle = 6 then 1.0 else 0.0 end) as bbe_allowed_barrel_rate,
+            avg(case when bb.launch_speed >= 95 and bb.launch_angle between 20 and 35 then 1.0 else 0.0 end) as bbe_allowed_hr_contact_rate,
+            avg(case when lower(coalesce(bb.trajectory, '')) like '%%fly%%' then 1.0 else 0.0 end) as bbe_allowed_fly_ball_rate,
+            avg(case when lower(coalesce(bb.trajectory, '')) like '%%line%%' then 1.0 else 0.0 end) as bbe_allowed_line_drive_rate
+        from mlb_batted_ball_events bb
+        join mlb_games g on g.game_pk = bb.game_pk
+        where bb.pitcher_id is not null
+        group by bb.game_pk, bb.pitcher_id, g.official_date
+        """,
+        engine,
+    )
+    if history.empty:
+        return history
+
+    history["game_date"] = pd.to_datetime(history["game_date"])
+    value_cols = [
+        "bbe_allowed_count",
+        "bbe_allowed_avg_launch_speed",
+        "bbe_allowed_max_launch_speed",
+        "bbe_allowed_avg_launch_angle",
+        "bbe_allowed_max_distance",
+        "bbe_allowed_avg_estimated_ba",
+        "bbe_allowed_avg_estimated_woba",
+        "bbe_allowed_avg_coord_x",
+        "bbe_allowed_avg_coord_y",
+        "bbe_allowed_hard_hit_rate",
+        "bbe_allowed_sweet_spot_rate",
+        "bbe_allowed_barrel_rate",
+        "bbe_allowed_hr_contact_rate",
+        "bbe_allowed_fly_ball_rate",
+        "bbe_allowed_line_drive_rate",
+    ]
+    history[value_cols] = history[value_cols].apply(pd.to_numeric, errors="coerce")
+    history = _add_group_rolling(
+        history,
+        group_cols="starter_pitcher_id",
+        value_cols=value_cols,
+        windows=(5, 10, 20),
+        prefix="opp_starter_bbe_allowed",
+        add_sums=False,
+    )
+    keep_cols = [
+        "game_pk",
+        "starter_pitcher_id",
+        *[col for col in history.columns if col.startswith("opp_starter_bbe_allowed_")],
+    ]
+    return history[keep_cols]
 
 
 def _load_batter_context(engine) -> pd.DataFrame:
@@ -174,6 +393,113 @@ def _load_pitcher_context(engine) -> pd.DataFrame:
     )
 
 
+def _add_weather_physics_features(df: pd.DataFrame) -> pd.DataFrame:
+    if "temperature_2m_c" not in df.columns:
+        return df
+
+    temp_c = pd.to_numeric(df["temperature_2m_c"], errors="coerce")
+    temp_k = temp_c + 273.15
+    humidity = pd.to_numeric(df.get("relative_humidity_2m"), errors="coerce").clip(0, 100)
+    pressure_hpa = pd.to_numeric(df.get("surface_pressure_hpa"), errors="coerce")
+    if "pressure_msl_hpa" in df.columns:
+        pressure_hpa = pressure_hpa.fillna(pd.to_numeric(df["pressure_msl_hpa"], errors="coerce"))
+    wind_kph = pd.to_numeric(df.get("wind_speed_10m_kph"), errors="coerce")
+    gust_kph = pd.to_numeric(df.get("wind_gusts_10m_kph"), errors="coerce")
+    wind_direction = pd.to_numeric(df.get("wind_direction_10m_deg"), errors="coerce")
+
+    saturation_vapor_pressure_hpa = 6.112 * np.exp((17.67 * temp_c) / (temp_c + 243.5))
+    vapor_pressure_pa = (humidity / 100.0) * saturation_vapor_pressure_hpa * 100.0
+    pressure_pa = pressure_hpa * 100.0
+    dry_air_pressure_pa = pressure_pa - vapor_pressure_pa
+    air_density = (dry_air_pressure_pa / (287.05 * temp_k)) + (vapor_pressure_pa / (461.495 * temp_k))
+    air_density = air_density.where((temp_k > 0) & (pressure_pa > 0))
+
+    df["temperature_2m_f"] = temp_c * 9.0 / 5.0 + 32.0
+    df["wind_speed_10m_mph"] = wind_kph * 0.621371
+    df["wind_gusts_10m_mph"] = gust_kph * 0.621371
+    df["air_density_kg_m3"] = air_density
+    df["air_density_ratio"] = air_density / 1.225
+    df["air_density_carry_index"] = 1.225 / air_density.replace(0, np.nan)
+    df["temperature_hr_boost_index"] = (df["temperature_2m_f"] - 70.0) * 0.01
+
+    wind_radians = np.deg2rad(wind_direction)
+    df["wind_direction_sin"] = np.sin(wind_radians)
+    df["wind_direction_cos"] = np.cos(wind_radians)
+    df["wind_speed_density_carry"] = df["wind_speed_10m_mph"] * df["air_density_carry_index"]
+    return df
+
+
+def _add_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
+    game_date = pd.to_datetime(df["game_date"])
+    df["game_month"] = game_date.dt.month
+    df["game_dayofyear"] = game_date.dt.dayofyear
+    df["game_weekofyear"] = game_date.dt.isocalendar().week.astype(float)
+    return df
+
+
+def _add_matchup_and_venue_features(df: pd.DataFrame) -> pd.DataFrame:
+    batter_side = df.get("batter_bat_side", pd.Series(index=df.index, dtype=object)).fillna("").str.upper()
+    pitcher_hand = df.get("starter_pitcher_pitch_hand", pd.Series(index=df.index, dtype=object)).fillna("").str.upper()
+
+    effective_left = (batter_side == "L") | ((batter_side == "S") & (pitcher_hand == "R"))
+    effective_right = (batter_side == "R") | ((batter_side == "S") & (pitcher_hand == "L"))
+    pitcher_left = pitcher_hand == "L"
+    pitcher_right = pitcher_hand == "R"
+
+    df["batter_bats_left"] = effective_left.astype(int)
+    df["batter_bats_right"] = effective_right.astype(int)
+    df["batter_is_switch"] = (batter_side == "S").astype(int)
+    df["starter_pitcher_throws_left"] = pitcher_left.astype(int)
+    df["starter_pitcher_throws_right"] = pitcher_right.astype(int)
+    df["same_side_matchup"] = ((effective_left & pitcher_left) | (effective_right & pitcher_right)).astype(int)
+    df["opposite_side_matchup"] = ((effective_left & pitcher_right) | (effective_right & pitcher_left)).astype(int)
+
+    for col in ["left_line", "left_center", "center", "right_center", "right_line"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if {"left_line", "left_center", "center", "right_center", "right_line"}.issubset(df.columns):
+        df["venue_min_corner_distance"] = df[["left_line", "right_line"]].min(axis=1)
+        df["venue_avg_corner_distance"] = df[["left_line", "right_line"]].mean(axis=1)
+        df["venue_avg_power_alley_distance"] = df[["left_center", "right_center"]].mean(axis=1)
+        df["venue_avg_outfield_distance"] = df[["left_line", "left_center", "center", "right_center", "right_line"]].mean(axis=1)
+
+        df["pull_line_distance"] = np.select(
+            [effective_left, effective_right],
+            [df["right_line"], df["left_line"]],
+            default=df["venue_avg_corner_distance"],
+        )
+        df["pull_gap_distance"] = np.select(
+            [effective_left, effective_right],
+            [df["right_center"], df["left_center"]],
+            default=df["venue_avg_power_alley_distance"],
+        )
+        df["oppo_line_distance"] = np.select(
+            [effective_left, effective_right],
+            [df["left_line"], df["right_line"]],
+            default=df["venue_avg_corner_distance"],
+        )
+        df["oppo_gap_distance"] = np.select(
+            [effective_left, effective_right],
+            [df["left_center"], df["right_center"]],
+            default=df["venue_avg_power_alley_distance"],
+        )
+        df["pull_side_distance_avg"] = pd.DataFrame(
+            {"line": df["pull_line_distance"], "gap": df["pull_gap_distance"]}
+        ).mean(axis=1)
+        df["oppo_side_distance_avg"] = pd.DataFrame(
+            {"line": df["oppo_line_distance"], "gap": df["oppo_gap_distance"]}
+        ).mean(axis=1)
+
+    if {"park_factor_hr_lhb", "park_factor_hr_rhb"}.issubset(df.columns):
+        df["park_factor_hr_batter_side"] = np.select(
+            [effective_left, effective_right],
+            [df["park_factor_hr_lhb"], df["park_factor_hr_rhb"]],
+            default=df.get("park_factor_hr"),
+        )
+    return df
+
+
 def _load_starting_pitchers(engine) -> pd.DataFrame:
     starters = _read_sql(
         """
@@ -181,6 +507,8 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
             p.game_pk,
             p.team_id,
             p.player_id as starter_pitcher_id,
+            sp.current_age as starter_pitcher_age,
+            sp.pitch_hand as starter_pitcher_pitch_hand,
             p.outs_recorded,
             p.batters_faced,
             p.pitches_thrown,
@@ -191,6 +519,7 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
             g.official_date as game_date
         from mlb_player_game_pitching p
         join mlb_games g on g.game_pk = p.game_pk
+        left join mlb_players sp on sp.id = p.player_id
         where p.is_starter = true
         """,
         engine,
@@ -198,7 +527,7 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
     if starters.empty:
         return starters
     starters["game_date"] = pd.to_datetime(starters["game_date"])
-    stat_cols = [
+    rolling_stat_cols = [
         "outs_recorded",
         "batters_faced",
         "pitches_thrown",
@@ -207,18 +536,25 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
         "hits_allowed",
         "home_runs_allowed",
     ]
-    starters[stat_cols] = starters[stat_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+    starters[rolling_stat_cols + ["starter_pitcher_age"]] = starters[
+        rolling_stat_cols + ["starter_pitcher_age"]
+    ].apply(pd.to_numeric, errors="coerce").fillna(0)
     starters = _add_group_rolling(
         starters,
         group_cols="starter_pitcher_id",
-        value_cols=stat_cols,
+        value_cols=rolling_stat_cols,
         windows=(5, 10, 20),
         prefix="opp_starter",
     )
+    for extra in (_load_pitcher_pitch_history(engine), _load_pitcher_batted_ball_allowed_history(engine)):
+        if not extra.empty:
+            starters = starters.merge(extra, on=["game_pk", "starter_pitcher_id"], how="left")
     keep_cols = [
         "game_pk",
         "team_id",
         "starter_pitcher_id",
+        "starter_pitcher_age",
+        "starter_pitcher_pitch_hand",
         *[col for col in starters.columns if col.startswith("opp_starter_")],
     ]
     return starters[keep_cols]
@@ -251,10 +587,18 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
             g.day_night,
             case when b.team_id = g.home_team_id then 1 else 0 end as is_home,
             case when b.team_id = g.home_team_id then g.away_team_id else g.home_team_id end as opponent_team_id,
+            bp.current_age as batter_age,
+            bp.bat_side as batter_bat_side,
             v.elevation,
-            v.capacity
+            v.capacity,
+            v.left_line,
+            v.left_center,
+            v.center,
+            v.right_center,
+            v.right_line
         from mlb_player_game_batting b
         join mlb_games g on g.game_pk = b.game_pk
+        left join mlb_players bp on bp.id = b.player_id
         left join mlb_venues v on v.id = g.venue_id
         where b.plate_appearances is not null
           and b.plate_appearances > 0
@@ -279,8 +623,14 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
         "strikeouts",
         "hit_by_pitch",
         "is_home",
+        "batter_age",
         "elevation",
         "capacity",
+        "left_line",
+        "left_center",
+        "center",
+        "right_center",
+        "right_line",
     ]
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
     df["target_home_run"] = (df["home_runs"].fillna(0) > 0).astype(int)
@@ -358,8 +708,14 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
     for extra in (_load_batter_context(engine), _load_weather_features(engine), _load_park_features(engine)):
         keys = ["season", "player_id"] if "player_id" in extra.columns else ["game_pk"] if "game_pk" in extra.columns else ["season", "venue_id"]
         df = df.merge(extra, on=keys, how="left")
+    batter_bbe = _load_batter_batted_ball_history(engine)
+    if not batter_bbe.empty:
+        df = df.merge(batter_bbe, on=["game_pk", "player_id"], how="left")
     df["weather_available"] = df["temperature_2m_c"].notna().astype(int)
     df["is_night"] = (df["day_night"].fillna("").str.lower() == "night").astype(int)
+    df = _add_weather_physics_features(df)
+    df = _add_calendar_features(df)
+    df = _add_matchup_and_venue_features(df)
     return df
 
 
