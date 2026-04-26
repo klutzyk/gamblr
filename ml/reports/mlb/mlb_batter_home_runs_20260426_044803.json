@@ -1,0 +1,395 @@
+{
+  "market": "batter_home_runs",
+  "kind": "classification",
+  "target": "target_home_run",
+  "model_name": "xgboost",
+  "feature_columns": [
+    "batter_at_bats_avg_last10",
+    "batter_at_bats_avg_last20",
+    "batter_at_bats_avg_last5",
+    "batter_at_bats_sum_last10",
+    "batter_at_bats_sum_last20",
+    "batter_at_bats_sum_last5",
+    "batter_attack_angle",
+    "batter_attack_direction",
+    "batter_barrel_batted_rate",
+    "batter_bat_speed",
+    "batter_bb_rate_last10",
+    "batter_bb_rate_last20",
+    "batter_bb_rate_last5",
+    "batter_blast_rate",
+    "batter_doubles_avg_last10",
+    "batter_doubles_avg_last20",
+    "batter_doubles_avg_last5",
+    "batter_doubles_sum_last10",
+    "batter_doubles_sum_last20",
+    "batter_doubles_sum_last5",
+    "batter_exit_velocity_avg",
+    "batter_fast_swing_rate",
+    "batter_hard_hit_percent",
+    "batter_hit_by_pitch_avg_last10",
+    "batter_hit_by_pitch_avg_last20",
+    "batter_hit_by_pitch_avg_last5",
+    "batter_hit_by_pitch_sum_last10",
+    "batter_hit_by_pitch_sum_last20",
+    "batter_hit_by_pitch_sum_last5",
+    "batter_hit_rate_last10",
+    "batter_hit_rate_last20",
+    "batter_hit_rate_last5",
+    "batter_hits_avg_last10",
+    "batter_hits_avg_last20",
+    "batter_hits_avg_last5",
+    "batter_hits_sum_last10",
+    "batter_hits_sum_last20",
+    "batter_hits_sum_last5",
+    "batter_home_runs_avg_last10",
+    "batter_home_runs_avg_last20",
+    "batter_home_runs_avg_last5",
+    "batter_home_runs_sum_last10",
+    "batter_home_runs_sum_last20",
+    "batter_home_runs_sum_last5",
+    "batter_hr_rate_last10",
+    "batter_hr_rate_last20",
+    "batter_hr_rate_last5",
+    "batter_k_rate_last10",
+    "batter_k_rate_last20",
+    "batter_k_rate_last5",
+    "batter_launch_angle_avg",
+    "batter_plate_appearances_avg_last10",
+    "batter_plate_appearances_avg_last20",
+    "batter_plate_appearances_avg_last5",
+    "batter_plate_appearances_sum_last10",
+    "batter_plate_appearances_sum_last20",
+    "batter_plate_appearances_sum_last5",
+    "batter_squared_up_rate",
+    "batter_strikeouts_avg_last10",
+    "batter_strikeouts_avg_last20",
+    "batter_strikeouts_avg_last5",
+    "batter_strikeouts_sum_last10",
+    "batter_strikeouts_sum_last20",
+    "batter_strikeouts_sum_last5",
+    "batter_sweet_spot_percent",
+    "batter_swing_length",
+    "batter_tb_per_pa_last10",
+    "batter_tb_per_pa_last20",
+    "batter_tb_per_pa_last5",
+    "batter_total_bases_avg_last10",
+    "batter_total_bases_avg_last20",
+    "batter_total_bases_avg_last5",
+    "batter_total_bases_sum_last10",
+    "batter_total_bases_sum_last20",
+    "batter_total_bases_sum_last5",
+    "batter_triples_avg_last10",
+    "batter_triples_avg_last20",
+    "batter_triples_avg_last5",
+    "batter_triples_sum_last10",
+    "batter_triples_sum_last20",
+    "batter_triples_sum_last5",
+    "batter_walks_avg_last10",
+    "batter_walks_avg_last20",
+    "batter_walks_avg_last5",
+    "batter_walks_sum_last10",
+    "batter_walks_sum_last20",
+    "batter_walks_sum_last5",
+    "batter_xba",
+    "batter_xiso",
+    "batter_xobp",
+    "batter_xslg",
+    "batter_xwoba",
+    "batting_order",
+    "cloud_cover_percent",
+    "days_since_player_game",
+    "dew_point_2m_c",
+    "elevation",
+    "is_home",
+    "is_night",
+    "is_player_back_to_back",
+    "opp_starter_batters_faced_avg_last10",
+    "opp_starter_batters_faced_avg_last20",
+    "opp_starter_batters_faced_avg_last5",
+    "opp_starter_batters_faced_sum_last10",
+    "opp_starter_batters_faced_sum_last20",
+    "opp_starter_batters_faced_sum_last5",
+    "opp_starter_hits_allowed_avg_last10",
+    "opp_starter_hits_allowed_avg_last20",
+    "opp_starter_hits_allowed_avg_last5",
+    "opp_starter_hits_allowed_sum_last10",
+    "opp_starter_hits_allowed_sum_last20",
+    "opp_starter_hits_allowed_sum_last5",
+    "opp_starter_home_runs_allowed_avg_last10",
+    "opp_starter_home_runs_allowed_avg_last20",
+    "opp_starter_home_runs_allowed_avg_last5",
+    "opp_starter_home_runs_allowed_sum_last10",
+    "opp_starter_home_runs_allowed_sum_last20",
+    "opp_starter_home_runs_allowed_sum_last5",
+    "opp_starter_outs_recorded_avg_last10",
+    "opp_starter_outs_recorded_avg_last20",
+    "opp_starter_outs_recorded_avg_last5",
+    "opp_starter_outs_recorded_sum_last10",
+    "opp_starter_outs_recorded_sum_last20",
+    "opp_starter_outs_recorded_sum_last5",
+    "opp_starter_pitches_thrown_avg_last10",
+    "opp_starter_pitches_thrown_avg_last20",
+    "opp_starter_pitches_thrown_avg_last5",
+    "opp_starter_pitches_thrown_sum_last10",
+    "opp_starter_pitches_thrown_sum_last20",
+    "opp_starter_pitches_thrown_sum_last5",
+    "opp_starter_strikeouts_avg_last10",
+    "opp_starter_strikeouts_avg_last20",
+    "opp_starter_strikeouts_avg_last5",
+    "opp_starter_strikeouts_sum_last10",
+    "opp_starter_strikeouts_sum_last20",
+    "opp_starter_strikeouts_sum_last5",
+    "opp_starter_walks_avg_last10",
+    "opp_starter_walks_avg_last20",
+    "opp_starter_walks_avg_last5",
+    "opp_starter_walks_sum_last10",
+    "opp_starter_walks_sum_last20",
+    "opp_starter_walks_sum_last5",
+    "park_factor_avg",
+    "park_factor_hr",
+    "player_games_played_season",
+    "precipitation_mm",
+    "pressure_msl_hpa",
+    "rain_mm",
+    "relative_humidity_2m",
+    "season",
+    "starter_pitcher_id",
+    "surface_pressure_hpa",
+    "team_batting_team_bb_avg_last10",
+    "team_batting_team_bb_avg_last20",
+    "team_batting_team_bb_avg_last5",
+    "team_batting_team_bb_sum_last10",
+    "team_batting_team_bb_sum_last20",
+    "team_batting_team_bb_sum_last5",
+    "team_batting_team_hits_avg_last10",
+    "team_batting_team_hits_avg_last20",
+    "team_batting_team_hits_avg_last5",
+    "team_batting_team_hits_sum_last10",
+    "team_batting_team_hits_sum_last20",
+    "team_batting_team_hits_sum_last5",
+    "team_batting_team_hr_avg_last10",
+    "team_batting_team_hr_avg_last20",
+    "team_batting_team_hr_avg_last5",
+    "team_batting_team_hr_sum_last10",
+    "team_batting_team_hr_sum_last20",
+    "team_batting_team_hr_sum_last5",
+    "team_batting_team_k_avg_last10",
+    "team_batting_team_k_avg_last20",
+    "team_batting_team_k_avg_last5",
+    "team_batting_team_k_sum_last10",
+    "team_batting_team_k_sum_last20",
+    "team_batting_team_k_sum_last5",
+    "team_batting_team_pa_avg_last10",
+    "team_batting_team_pa_avg_last20",
+    "team_batting_team_pa_avg_last5",
+    "team_batting_team_pa_sum_last10",
+    "team_batting_team_pa_sum_last20",
+    "team_batting_team_pa_sum_last5",
+    "team_batting_team_tb_avg_last10",
+    "team_batting_team_tb_avg_last20",
+    "team_batting_team_tb_avg_last5",
+    "team_batting_team_tb_sum_last10",
+    "team_batting_team_tb_sum_last20",
+    "team_batting_team_tb_sum_last5",
+    "temperature_2m_c",
+    "visibility_m",
+    "weather_available",
+    "weather_code",
+    "wind_direction_10m_deg",
+    "wind_gusts_10m_kph",
+    "wind_speed_10m_kph"
+  ],
+  "trained_at": "2026-04-26T04:48:03.209614+00:00",
+  "split_date": "2025-09-15",
+  "min_player_games": 3,
+  "rows_total": 53003,
+  "rows_train": 42438,
+  "rows_valid": 10565,
+  "date_min": "2025-03-28",
+  "date_max": "2026-04-25",
+  "model_path": "C:\\Users\\kalz9\\OneDrive\\Documents\\onedrive\\Documents\\Gamblr\\gamblr\\ml\\models\\mlb\\mlb_batter_home_runs_20260426_044803.pkl",
+  "model_results": {
+    "baseline_mean": {
+      "metrics": {
+        "brier": 0.09255667330062518,
+        "log_loss": 0.3321521882669348,
+        "positive_rate": 0.10317084713677237,
+        "predicted_positive_rate": 0.1086526226495122,
+        "roc_auc": 0.5,
+        "average_precision": 0.10317084713677237
+      }
+    },
+    "xgboost": {
+      "metrics": {
+        "brier": 0.08891224348665036,
+        "log_loss": 0.3125814859981908,
+        "positive_rate": 0.10317084713677237,
+        "predicted_positive_rate": 0.10359519720077515,
+        "roc_auc": 0.6819541526469948,
+        "average_precision": 0.19288688970489165
+      }
+    },
+    "xgboost_balanced": {
+      "metrics": {
+        "brier": 0.1744901028265319,
+        "log_loss": 0.5188864705558495,
+        "positive_rate": 0.10317084713677237,
+        "predicted_positive_rate": 0.3661401569843292,
+        "roc_auc": 0.6761810655757547,
+        "average_precision": 0.1846064274394295
+      }
+    },
+    "random_forest": {
+      "metrics": {
+        "brier": 0.09008054163737833,
+        "log_loss": 0.3200079513755939,
+        "positive_rate": 0.10317084713677237,
+        "predicted_positive_rate": 0.12365451483483351,
+        "roc_auc": 0.6600654547215028,
+        "average_precision": 0.1811721667711818
+      }
+    },
+    "random_forest_balanced": {
+      "metrics": {
+        "brier": 0.11217955873430717,
+        "log_loss": 0.3875001326689954,
+        "positive_rate": 0.10317084713677237,
+        "predicted_positive_rate": 0.24914001208384634,
+        "roc_auc": 0.6687669627944131,
+        "average_precision": 0.18148444001822084
+      }
+    }
+  },
+  "best_metrics": {
+    "brier": 0.08891224348665036,
+    "log_loss": 0.3125814859981908,
+    "positive_rate": 0.10317084713677237,
+    "predicted_positive_rate": 0.10359519720077515,
+    "roc_auc": 0.6819541526469948,
+    "average_precision": 0.19288688970489165
+  },
+  "feature_count": 195,
+  "top_features": [
+    {
+      "feature": "batter_xiso",
+      "importance": 0.03805892914533615
+    },
+    {
+      "feature": "batter_xslg",
+      "importance": 0.017059676349163055
+    },
+    {
+      "feature": "batter_barrel_batted_rate",
+      "importance": 0.01306637842208147
+    },
+    {
+      "feature": "park_factor_hr",
+      "importance": 0.007463982328772545
+    },
+    {
+      "feature": "opp_starter_strikeouts_avg_last20",
+      "importance": 0.006830711383372545
+    },
+    {
+      "feature": "batting_order",
+      "importance": 0.006801520474255085
+    },
+    {
+      "feature": "wind_direction_10m_deg",
+      "importance": 0.0066641694866120815
+    },
+    {
+      "feature": "opp_starter_batters_faced_avg_last20",
+      "importance": 0.006595623679459095
+    },
+    {
+      "feature": "batter_strikeouts_sum_last5",
+      "importance": 0.006335719954222441
+    },
+    {
+      "feature": "park_factor_avg",
+      "importance": 0.006303433794528246
+    },
+    {
+      "feature": "batter_bat_speed",
+      "importance": 0.0061221132054924965
+    },
+    {
+      "feature": "opp_starter_pitches_thrown_avg_last20",
+      "importance": 0.0060884468257427216
+    },
+    {
+      "feature": "batter_plate_appearances_sum_last5",
+      "importance": 0.006075728684663773
+    },
+    {
+      "feature": "batter_hit_by_pitch_avg_last5",
+      "importance": 0.006042214576154947
+    },
+    {
+      "feature": "batter_attack_direction",
+      "importance": 0.006014893762767315
+    },
+    {
+      "feature": "batter_at_bats_sum_last5",
+      "importance": 0.005928961094468832
+    },
+    {
+      "feature": "batter_doubles_avg_last20",
+      "importance": 0.005873584654182196
+    },
+    {
+      "feature": "opp_starter_pitches_thrown_sum_last20",
+      "importance": 0.0058674938045442104
+    },
+    {
+      "feature": "opp_starter_home_runs_allowed_avg_last20",
+      "importance": 0.005847305990755558
+    },
+    {
+      "feature": "opp_starter_pitches_thrown_sum_last5",
+      "importance": 0.0058151730336248875
+    },
+    {
+      "feature": "batter_at_bats_avg_last10",
+      "importance": 0.00581003725528717
+    },
+    {
+      "feature": "opp_starter_strikeouts_avg_last5",
+      "importance": 0.005793130025267601
+    },
+    {
+      "feature": "temperature_2m_c",
+      "importance": 0.0057874638587236404
+    },
+    {
+      "feature": "team_batting_team_hr_avg_last10",
+      "importance": 0.005740671884268522
+    },
+    {
+      "feature": "batter_at_bats_avg_last20",
+      "importance": 0.005721112713217735
+    },
+    {
+      "feature": "batter_doubles_avg_last10",
+      "importance": 0.0057036071084439754
+    },
+    {
+      "feature": "surface_pressure_hpa",
+      "importance": 0.005698554217815399
+    },
+    {
+      "feature": "batter_hit_by_pitch_sum_last10",
+      "importance": 0.005649656057357788
+    },
+    {
+      "feature": "batter_swing_length",
+      "importance": 0.005643026437610388
+    },
+    {
+      "feature": "team_batting_team_bb_avg_last10",
+      "importance": 0.00562271336093545
+    }
+  ]
+}

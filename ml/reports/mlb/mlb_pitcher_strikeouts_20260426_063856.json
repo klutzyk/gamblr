@@ -1,0 +1,313 @@
+{
+  "market": "pitcher_strikeouts",
+  "kind": "regression",
+  "target": "target_strikeouts",
+  "model_name": "xgboost",
+  "feature_columns": [
+    "cloud_cover_percent",
+    "days_since_player_game",
+    "dew_point_2m_c",
+    "elevation",
+    "is_home",
+    "is_night",
+    "is_player_back_to_back",
+    "opponent_batting_opp_bb_avg_last10",
+    "opponent_batting_opp_bb_avg_last20",
+    "opponent_batting_opp_bb_avg_last5",
+    "opponent_batting_opp_bb_sum_last10",
+    "opponent_batting_opp_bb_sum_last20",
+    "opponent_batting_opp_bb_sum_last5",
+    "opponent_batting_opp_hits_avg_last10",
+    "opponent_batting_opp_hits_avg_last20",
+    "opponent_batting_opp_hits_avg_last5",
+    "opponent_batting_opp_hits_sum_last10",
+    "opponent_batting_opp_hits_sum_last20",
+    "opponent_batting_opp_hits_sum_last5",
+    "opponent_batting_opp_hr_avg_last10",
+    "opponent_batting_opp_hr_avg_last20",
+    "opponent_batting_opp_hr_avg_last5",
+    "opponent_batting_opp_hr_sum_last10",
+    "opponent_batting_opp_hr_sum_last20",
+    "opponent_batting_opp_hr_sum_last5",
+    "opponent_batting_opp_k_avg_last10",
+    "opponent_batting_opp_k_avg_last20",
+    "opponent_batting_opp_k_avg_last5",
+    "opponent_batting_opp_k_sum_last10",
+    "opponent_batting_opp_k_sum_last20",
+    "opponent_batting_opp_k_sum_last5",
+    "opponent_batting_opp_pa_avg_last10",
+    "opponent_batting_opp_pa_avg_last20",
+    "opponent_batting_opp_pa_avg_last5",
+    "opponent_batting_opp_pa_sum_last10",
+    "opponent_batting_opp_pa_sum_last20",
+    "opponent_batting_opp_pa_sum_last5",
+    "opponent_batting_opp_tb_avg_last10",
+    "opponent_batting_opp_tb_avg_last20",
+    "opponent_batting_opp_tb_avg_last5",
+    "opponent_batting_opp_tb_sum_last10",
+    "opponent_batting_opp_tb_sum_last20",
+    "opponent_batting_opp_tb_sum_last5",
+    "opponent_k_rate_last10",
+    "opponent_k_rate_last20",
+    "opponent_k_rate_last5",
+    "park_factor_avg",
+    "park_factor_hr",
+    "pitcher_balls_avg_last10",
+    "pitcher_balls_avg_last20",
+    "pitcher_balls_avg_last5",
+    "pitcher_balls_sum_last10",
+    "pitcher_balls_sum_last20",
+    "pitcher_balls_sum_last5",
+    "pitcher_barrel_batted_rate",
+    "pitcher_batters_faced_avg_last10",
+    "pitcher_batters_faced_avg_last20",
+    "pitcher_batters_faced_avg_last5",
+    "pitcher_batters_faced_sum_last10",
+    "pitcher_batters_faced_sum_last20",
+    "pitcher_batters_faced_sum_last5",
+    "pitcher_bb_per_bf_last10",
+    "pitcher_bb_per_bf_last20",
+    "pitcher_bb_per_bf_last5",
+    "pitcher_earned_runs_avg_last10",
+    "pitcher_earned_runs_avg_last20",
+    "pitcher_earned_runs_avg_last5",
+    "pitcher_earned_runs_sum_last10",
+    "pitcher_earned_runs_sum_last20",
+    "pitcher_earned_runs_sum_last5",
+    "pitcher_exit_velocity_avg",
+    "pitcher_hard_hit_percent",
+    "pitcher_hits_allowed_avg_last10",
+    "pitcher_hits_allowed_avg_last20",
+    "pitcher_hits_allowed_avg_last5",
+    "pitcher_hits_allowed_sum_last10",
+    "pitcher_hits_allowed_sum_last20",
+    "pitcher_hits_allowed_sum_last5",
+    "pitcher_home_runs_allowed_avg_last10",
+    "pitcher_home_runs_allowed_avg_last20",
+    "pitcher_home_runs_allowed_avg_last5",
+    "pitcher_home_runs_allowed_sum_last10",
+    "pitcher_home_runs_allowed_sum_last20",
+    "pitcher_home_runs_allowed_sum_last5",
+    "pitcher_k_per_bf_last10",
+    "pitcher_k_per_bf_last20",
+    "pitcher_k_per_bf_last5",
+    "pitcher_launch_angle_avg",
+    "pitcher_outs_avg_last10",
+    "pitcher_outs_avg_last20",
+    "pitcher_outs_avg_last5",
+    "pitcher_outs_recorded_avg_last10",
+    "pitcher_outs_recorded_avg_last20",
+    "pitcher_outs_recorded_avg_last5",
+    "pitcher_outs_recorded_sum_last10",
+    "pitcher_outs_recorded_sum_last20",
+    "pitcher_outs_recorded_sum_last5",
+    "pitcher_pitches_thrown_avg_last10",
+    "pitcher_pitches_thrown_avg_last20",
+    "pitcher_pitches_thrown_avg_last5",
+    "pitcher_pitches_thrown_sum_last10",
+    "pitcher_pitches_thrown_sum_last20",
+    "pitcher_pitches_thrown_sum_last5",
+    "pitcher_savant_strikeout_percent",
+    "pitcher_savant_walk_percent",
+    "pitcher_strikeouts_avg_last10",
+    "pitcher_strikeouts_avg_last20",
+    "pitcher_strikeouts_avg_last5",
+    "pitcher_strikeouts_sum_last10",
+    "pitcher_strikeouts_sum_last20",
+    "pitcher_strikeouts_sum_last5",
+    "pitcher_strikes_avg_last10",
+    "pitcher_strikes_avg_last20",
+    "pitcher_strikes_avg_last5",
+    "pitcher_strikes_sum_last10",
+    "pitcher_strikes_sum_last20",
+    "pitcher_strikes_sum_last5",
+    "pitcher_walks_avg_last10",
+    "pitcher_walks_avg_last20",
+    "pitcher_walks_avg_last5",
+    "pitcher_walks_sum_last10",
+    "pitcher_walks_sum_last20",
+    "pitcher_walks_sum_last5",
+    "pitcher_xba",
+    "pitcher_xera",
+    "pitcher_xslg",
+    "pitcher_xwoba",
+    "player_games_played_season",
+    "precipitation_mm",
+    "pressure_msl_hpa",
+    "rain_mm",
+    "relative_humidity_2m",
+    "season",
+    "surface_pressure_hpa",
+    "temperature_2m_c",
+    "visibility_m",
+    "weather_available",
+    "weather_code",
+    "wind_direction_10m_deg",
+    "wind_gusts_10m_kph",
+    "wind_speed_10m_kph"
+  ],
+  "trained_at": "2026-04-26T06:38:56.340528+00:00",
+  "split_date": "2025-09-07",
+  "min_player_games": 3,
+  "rows_total": 4128,
+  "rows_train": 3307,
+  "rows_valid": 821,
+  "date_min": "2025-04-07",
+  "date_max": "2026-04-25",
+  "model_path": "C:\\Users\\kalz9\\OneDrive\\Documents\\onedrive\\Documents\\Gamblr\\gamblr\\ml\\models\\mlb\\mlb_pitcher_strikeouts_20260426_063856.pkl",
+  "model_results": {
+    "baseline_mean": {
+      "metrics": {
+        "mae": 1.9716133827517537,
+        "rmse": 2.491642147425756,
+        "target_mean": 4.954933008526187,
+        "prediction_mean": 4.909888116117328
+      }
+    },
+    "xgboost": {
+      "metrics": {
+        "mae": 1.7422039529147595,
+        "rmse": 2.2078044760252182,
+        "target_mean": 4.954933008526187,
+        "prediction_mean": 5.015174388885498
+      }
+    },
+    "random_forest": {
+      "metrics": {
+        "mae": 1.7537547328729493,
+        "rmse": 2.220179807314506,
+        "target_mean": 4.954933008526187,
+        "prediction_mean": 5.076588477768654
+      }
+    }
+  },
+  "best_metrics": {
+    "mae": 1.7422039529147595,
+    "rmse": 2.2078044760252182,
+    "target_mean": 4.954933008526187,
+    "prediction_mean": 5.015174388885498
+  },
+  "feature_count": 141,
+  "top_features": [
+    {
+      "feature": "pitcher_savant_strikeout_percent",
+      "importance": 0.0527241975069046
+    },
+    {
+      "feature": "pitcher_xera",
+      "importance": 0.017154140397906303
+    },
+    {
+      "feature": "is_home",
+      "importance": 0.012551679275929928
+    },
+    {
+      "feature": "pitcher_strikeouts_avg_last5",
+      "importance": 0.01251562312245369
+    },
+    {
+      "feature": "pitcher_outs_recorded_avg_last20",
+      "importance": 0.01052702497690916
+    },
+    {
+      "feature": "opponent_k_rate_last10",
+      "importance": 0.01044535357505083
+    },
+    {
+      "feature": "pitcher_k_per_bf_last20",
+      "importance": 0.010205474682152271
+    },
+    {
+      "feature": "opponent_k_rate_last20",
+      "importance": 0.00988662801682949
+    },
+    {
+      "feature": "pitcher_xslg",
+      "importance": 0.009812001138925552
+    },
+    {
+      "feature": "pitcher_outs_recorded_sum_last5",
+      "importance": 0.009386864490807056
+    },
+    {
+      "feature": "pitcher_xwoba",
+      "importance": 0.00921337679028511
+    },
+    {
+      "feature": "pitcher_hits_allowed_avg_last20",
+      "importance": 0.009176529943943024
+    },
+    {
+      "feature": "pitcher_outs_avg_last20",
+      "importance": 0.009103421121835709
+    },
+    {
+      "feature": "opponent_batting_opp_k_avg_last20",
+      "importance": 0.008886676281690598
+    },
+    {
+      "feature": "pitcher_pitches_thrown_avg_last20",
+      "importance": 0.008600153028964996
+    },
+    {
+      "feature": "days_since_player_game",
+      "importance": 0.00857558287680149
+    },
+    {
+      "feature": "pitcher_batters_faced_sum_last10",
+      "importance": 0.008490660227835178
+    },
+    {
+      "feature": "pitcher_strikeouts_avg_last20",
+      "importance": 0.008418897166848183
+    },
+    {
+      "feature": "pitcher_strikes_sum_last20",
+      "importance": 0.008362684398889542
+    },
+    {
+      "feature": "cloud_cover_percent",
+      "importance": 0.008293489925563335
+    },
+    {
+      "feature": "opponent_batting_opp_k_sum_last20",
+      "importance": 0.008269323967397213
+    },
+    {
+      "feature": "pitcher_earned_runs_sum_last5",
+      "importance": 0.008146257139742374
+    },
+    {
+      "feature": "pressure_msl_hpa",
+      "importance": 0.008144537918269634
+    },
+    {
+      "feature": "pitcher_outs_recorded_sum_last10",
+      "importance": 0.008039038628339767
+    },
+    {
+      "feature": "pitcher_strikes_sum_last5",
+      "importance": 0.008001466281712055
+    },
+    {
+      "feature": "pitcher_pitches_thrown_sum_last20",
+      "importance": 0.007975663058459759
+    },
+    {
+      "feature": "pitcher_pitches_thrown_avg_last5",
+      "importance": 0.007973664440214634
+    },
+    {
+      "feature": "pitcher_strikes_sum_last10",
+      "importance": 0.007952612824738026
+    },
+    {
+      "feature": "relative_humidity_2m",
+      "importance": 0.007837764918804169
+    },
+    {
+      "feature": "visibility_m",
+      "importance": 0.00776518601924181
+    }
+  ]
+}
