@@ -612,3 +612,40 @@ class MlbWeatherSnapshot(Base):
             name="uq_mlb_weather_snapshot_lookup",
         ),
     )
+
+
+class MlbPredictionLog(Base):
+    __tablename__ = "mlb_prediction_logs"
+
+    id = Column(Integer, primary_key=True)
+    market = Column(Text, nullable=False)
+    game_pk = Column(BigInteger, ForeignKey("mlb_games.game_pk", ondelete="CASCADE"), nullable=False)
+    game_date = Column(Date, nullable=False)
+    prediction_date = Column(Date, nullable=False)
+    player_id = Column(Integer, ForeignKey("mlb_players.id"), nullable=False)
+    player_name = Column(Text, nullable=True)
+    team_id = Column(Integer, ForeignKey("mlb_teams.id"), nullable=True)
+    team_abbreviation = Column(Text, nullable=True)
+    opponent_team_id = Column(Integer, ForeignKey("mlb_teams.id"), nullable=True)
+    opponent_team_abbreviation = Column(Text, nullable=True)
+    is_home = Column(Boolean, nullable=True)
+    batting_order = Column(Float, nullable=True)
+    has_posted_lineup = Column(Boolean, nullable=True)
+    starter_pitcher_id = Column(Integer, ForeignKey("mlb_players.id"), nullable=True)
+    probability = Column(Float, nullable=True)
+    prediction = Column(Float, nullable=True)
+    model_path = Column(Text, nullable=True)
+    actual_value = Column(Float, nullable=True)
+    abs_error = Column(Float, nullable=True)
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "market",
+            "game_pk",
+            "player_id",
+            name="uq_mlb_prediction_log_market_game_player",
+        ),
+    )

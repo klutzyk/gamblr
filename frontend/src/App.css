@@ -823,6 +823,58 @@
   color: var(--brand-dark);
 }
 
+.mlb-hero-metric {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.mlb-controls {
+  width: min(100%, 820px);
+}
+
+.mlb-controls .form-control,
+.mlb-controls .form-select {
+  height: 38px;
+  border-radius: 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.mlb-stat-tile {
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: rgba(16, 29, 26, 0.035);
+  border-radius: 0.8rem;
+  padding: 0.85rem 0.95rem;
+  min-height: 78px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.mlb-stat-tile span {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: var(--brand-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.mlb-stat-tile strong {
+  color: var(--brand-dark);
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.mlb-ev-table th {
+  font-size: 0.68rem;
+  color: var(--brand-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.mlb-ev-table td {
+  vertical-align: middle;
+}
+
 .player-name-link {
   color: inherit;
   text-decoration: underline;

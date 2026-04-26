@@ -90,6 +90,7 @@ def score_frame(
     artifact = load_latest_model(market)
     feature_columns = artifact["feature_columns"]
     scored = frame.copy()
+    scored.attrs["artifact_path"] = artifact.get("artifact_path")
     missing = [column for column in feature_columns if column not in frame.columns]
     if missing:
         if strict_features:
@@ -116,4 +117,6 @@ def score_frame(
     scored = scored.sort_values(sort_cols, ascending=False)
     if limit is not None:
         scored = scored.head(limit)
+    scored.attrs["artifact_path"] = artifact.get("artifact_path")
+    scored.attrs["missing_model_features"] = missing
     return scored

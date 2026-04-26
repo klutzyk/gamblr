@@ -186,6 +186,120 @@ export type BestBetsResponse = {
   debug?: Record<string, number>;
 };
 
+export type MlbHrEvRow = {
+  event_id?: string | number | null;
+  commence_time?: string | null;
+  home_team?: string | null;
+  away_team?: string | null;
+  bookmaker: string;
+  market: string;
+  player_id?: number | null;
+  player_name: string;
+  team_abbreviation?: string | null;
+  opponent_team_abbreviation?: string | null;
+  batting_order?: number | null;
+  has_posted_lineup?: boolean | null;
+  model_probability: number;
+  implied_probability: number;
+  edge: number;
+  ev_per_dollar: number;
+  american_odds: number;
+  decimal_odds: number;
+};
+
+export type MlbHrEvBoardResponse = {
+  sport: "mlb" | string;
+  status: string;
+  provider: string;
+  bookmaker: string;
+  market: string;
+  day: string;
+  date: string;
+  scored_players: number;
+  props_count: number;
+  matched: number;
+  unmatched_count: number;
+  positive_ev: MlbHrEvRow[];
+  all: MlbHrEvRow[];
+  missing_model_feature_count?: number;
+  missing_model_features_sample?: string[];
+};
+
+export type MlbMarketName =
+  | "batter_home_runs"
+  | "batter_hits"
+  | "batter_total_bases"
+  | "pitcher_strikeouts";
+
+export type MlbPredictionRow = {
+  game_date: string;
+  game_pk: number;
+  player_id: number;
+  player_name: string;
+  team_id?: number | null;
+  team_abbreviation?: string | null;
+  opponent_team_id?: number | null;
+  opponent_team_abbreviation?: string | null;
+  is_home?: number | boolean | null;
+  batting_order?: number | null;
+  has_posted_lineup?: boolean | null;
+  starter_pitcher_id?: number | null;
+  probability?: number | null;
+  prediction?: number | null;
+};
+
+export type MlbPredictionsResponse = {
+  sport: "mlb" | string;
+  status: string;
+  market: MlbMarketName | string;
+  day: string;
+  date: string;
+  count: number;
+  missing_model_feature_count?: number;
+  missing_model_features_sample?: string[];
+  model_status?: Record<string, unknown>;
+  data: MlbPredictionRow[];
+};
+
+export type MlbPredictionSlateResponse = {
+  sport: "mlb" | string;
+  status: string;
+  day: string;
+  date: string;
+  data_load?: Record<string, unknown>;
+  markets: Record<
+    MlbMarketName,
+    {
+      market: MlbMarketName;
+      count: number;
+      missing_model_feature_count?: number;
+      missing_model_features_sample?: string[];
+      model_status?: Record<string, unknown>;
+      data: MlbPredictionRow[];
+    }
+  >;
+};
+
+export type MlbMarketStatus = {
+  market: MlbMarketName | string;
+  kind: string;
+  target: string;
+  trained: boolean;
+  model_path?: string | null;
+  trained_at?: string | null;
+  rows_total?: number | null;
+  rows_train?: number | null;
+  rows_valid?: number | null;
+  split_date?: string | null;
+  best_metrics?: Record<string, number> | null;
+};
+
+export type MlbMarketsResponse = {
+  sport: "mlb" | string;
+  status: string;
+  markets: MlbMarketStatus[];
+};
+
 export type BestBetsProgress = {
   request_id?: string | null;
   status?: string | null;
@@ -668,6 +782,87 @@ export function getBestBets(
   } = {}
 ): Promise<BestBetsResponse> {
   return fetchWithCache<BestBetsResponse>("/bets/best", params, 2 * 60 * 1000);
+}
+
+export function getMlbHrEvBoard(
+  params: {
+    day?: PredictionDayParam;
+    date?: string;
+    bookmaker?: string;
+    max_events?: number;
+    prediction_limit?: number;
+    limit?: number;
+  } = {}
+): Promise<MlbHrEvBoardResponse> {
+  return fetchWithCache<MlbHrEvBoardResponse>(
+    "/mlb/odds/propline/hr-ev-board",
+    {
+      day: "tomorrow",
+      bookmaker: "fanduel",
+      max_events: 30,
+      prediction_limit: 300,
+      limit: 50,
+      ...params,
+    },
+    2 * 60 * 1000
+  );
+}
+
+export function getMlbPredictions(params: {
+  market: MlbMarketName;
+  day?: PredictionDayParam;
+  date?: string;
+  limit?: number;
+}): Promise<MlbPredictionsResponse> {
+  const { market, ...query } = params;
+  return fetchWithCache<MlbPredictionsResponse>(
+    `/mlb/predictions/${market}`,
+    {
+      day: "tomorrow",
+      limit: 60,
+      ...query,
+    },
+    2 * 60 * 1000
+  );
+}
+
+export function getMlbPredictionSlate(params: {
+  day?: PredictionDayParam;
+  date?: string;
+  limit_per_market?: number;
+  ensure_data?: boolean;
+  refresh?: boolean;
+  refresh_key?: number;
+} = {}): Promise<MlbPredictionSlateResponse> {
+  return fetchWithCache<MlbPredictionSlateResponse>(
+    "/mlb/predictions/slate",
+    {
+      day: "tomorrow",
+      limit_per_market: 60,
+      ...params,
+    },
+    2 * 60 * 1000
+  );
+}
+
+export function getMlbMarkets(): Promise<MlbMarketsResponse> {
+  return fetchWithCache<MlbMarketsResponse>("/mlb/predictions/markets", undefined, 60 * 1000);
+}
+
+export function loadMlbSchedule(params: {
+  season: number;
+  start_date: string;
+  end_date?: string;
+}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/mlb/db/schedule/load", params);
+}
+
+export function loadMlbActiveRosters(params: {
+  season: number;
+  date: string;
+  roster_type?: string;
+}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/mlb/db/rosters/active/load", params);
 }
 
 export type UpdateJobStatus = {

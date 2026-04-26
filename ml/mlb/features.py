@@ -21,8 +21,8 @@ def get_engine(database_url: str | None = None):
     return create_engine(url)
 
 
-def _read_sql(sql: str, engine) -> pd.DataFrame:
-    return pd.read_sql(sql, engine)
+def _read_sql(sql: str, engine, params: dict | None = None) -> pd.DataFrame:
+    return pd.read_sql(sql, engine, params=params)
 
 
 def _safe_div(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
@@ -700,7 +700,9 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
         select
             b.game_pk,
             b.player_id,
+            bp.full_name as player_name,
             b.team_id,
+            bt.abbreviation as team_abbreviation,
             b.batting_order,
             b.plate_appearances,
             b.at_bats,
@@ -720,6 +722,7 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
             g.day_night,
             case when b.team_id = g.home_team_id then 1 else 0 end as is_home,
             case when b.team_id = g.home_team_id then g.away_team_id else g.home_team_id end as opponent_team_id,
+            ot.abbreviation as opponent_team_abbreviation,
             bp.current_age as batter_age,
             bp.bat_side as batter_bat_side,
             v.elevation,
@@ -732,6 +735,8 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
         from mlb_player_game_batting b
         join mlb_games g on g.game_pk = b.game_pk
         left join mlb_players bp on bp.id = b.player_id
+        left join mlb_teams bt on bt.id = b.team_id
+        left join mlb_teams ot on ot.id = case when b.team_id = g.home_team_id then g.away_team_id else g.home_team_id end
         left join mlb_venues v on v.id = g.venue_id
         where b.plate_appearances is not null
           and b.plate_appearances > 0

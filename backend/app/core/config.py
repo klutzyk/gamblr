@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     THEODDS_BASE_URL: str
     THEODDS_API_KEY: str
 
+    # prop-line.com
+    PROPLINE_API_KEY: str | None = None
+    PROPLINE_BASE_URL: str = "https://api.prop-line.com/v1"
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

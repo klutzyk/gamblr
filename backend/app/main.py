@@ -24,6 +24,7 @@ from app.api.nba import (
 )
 from app.api.mlb import (
     health as mlb_health,
+    odds as mlb_odds,
     predictions as mlb_predictions,
     db_routes as mlb_db_routes,
 )
@@ -66,6 +67,7 @@ app.include_router(lineups.router, prefix="/lineups", tags=["Lineups"])
 app.include_router(review.router, prefix="/review", tags=["Review"])
 app.include_router(mlb_health.router, prefix="/mlb", tags=["MLB"])
 app.include_router(mlb_predictions.router, prefix="/mlb/predictions", tags=["MLB"])
+app.include_router(mlb_odds.router, prefix="/mlb/odds", tags=["MLB"])
 app.include_router(mlb_db_routes.router, prefix="/mlb/db", tags=["MLB"])
 # @app.on_event("startup")
 # async def startup():
