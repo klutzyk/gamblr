@@ -22,6 +22,12 @@ from app.api.nba import (
     lineups,
     review,
 )
+from app.api.mlb import (
+    health as mlb_health,
+    odds as mlb_odds,
+    predictions as mlb_predictions,
+    db_routes as mlb_db_routes,
+)
 from app.db.base import Base
 from app.db.session import engine
 
@@ -59,6 +65,10 @@ app.include_router(ml_routes.router, prefix="/ml", tags=["ML"])
 app.include_router(best_bets.router, prefix="/bets", tags=["Best Bets"])
 app.include_router(lineups.router, prefix="/lineups", tags=["Lineups"])
 app.include_router(review.router, prefix="/review", tags=["Review"])
+app.include_router(mlb_health.router, prefix="/mlb", tags=["MLB"])
+app.include_router(mlb_predictions.router, prefix="/mlb/predictions", tags=["MLB"])
+app.include_router(mlb_odds.router, prefix="/mlb/odds", tags=["MLB"])
+app.include_router(mlb_db_routes.router, prefix="/mlb/db", tags=["MLB"])
 # @app.on_event("startup")
 # async def startup():
 #     async with engine.begin() as conn:

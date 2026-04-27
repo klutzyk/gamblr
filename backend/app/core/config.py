@@ -7,6 +7,8 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 class Settings(BaseSettings):
     DATABASE_URL: str
     ML_DATABASE_URL: str
+    OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1"
+    OPEN_METEO_HISTORICAL_BASE_URL: str = "https://historical-forecast-api.open-meteo.com/v1"
 
     # sportsdata.io
     SPORTSDATA_API_KEY: str
@@ -15,6 +17,10 @@ class Settings(BaseSettings):
     # the-odds-api.com
     THEODDS_BASE_URL: str
     THEODDS_API_KEY: str
+
+    # prop-line.com
+    PROPLINE_API_KEY: str | None = None
+    PROPLINE_BASE_URL: str = "https://api.prop-line.com/v1"
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
