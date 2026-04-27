@@ -145,6 +145,129 @@ def upsert_mlb_prop_odds(
     return rows
 
 
+def record_mlb_prop_odds_fetch(
+    engine,
+    *,
+    provider: str,
+    sport: str,
+    market: str,
+    bookmaker: str,
+    game_date,
+    props_count: int,
+    events_count: int,
+    status: str = "completed",
+    notes: str | None = None,
+) -> None:
+    stmt = text(
+        """
+        INSERT INTO mlb_prop_odds_fetch_logs (
+            provider,
+            sport,
+            market,
+            bookmaker,
+            game_date,
+            status,
+            props_count,
+            events_count,
+            notes,
+            fetched_at,
+            updated_at
+        )
+        VALUES (
+            :provider,
+            :sport,
+            :market,
+            :bookmaker,
+            :game_date,
+            :status,
+            :props_count,
+            :events_count,
+            :notes,
+            now(),
+            now()
+        )
+        ON CONFLICT (provider, bookmaker, market, game_date)
+        DO UPDATE SET
+            sport = EXCLUDED.sport,
+            status = EXCLUDED.status,
+            props_count = EXCLUDED.props_count,
+            events_count = EXCLUDED.events_count,
+            notes = EXCLUDED.notes,
+            fetched_at = now(),
+            updated_at = now()
+        """
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            stmt,
+            {
+                "provider": provider,
+                "sport": sport,
+                "market": market,
+                "bookmaker": bookmaker,
+                "game_date": pd.to_datetime(game_date).date(),
+                "status": status,
+                "props_count": int(props_count),
+                "events_count": int(events_count),
+                "notes": notes,
+            },
+        )
+
+
+def load_fresh_mlb_prop_odds_fetch_log(
+    engine,
+    *,
+    provider: str,
+    market: str,
+    bookmaker: str,
+    game_date,
+    max_age_minutes: int,
+) -> dict[str, Any] | None:
+    stmt = text(
+        """
+        SELECT
+            provider,
+            sport,
+            market,
+            bookmaker,
+            game_date,
+            status,
+            props_count,
+            events_count,
+            notes,
+            fetched_at
+        FROM mlb_prop_odds_fetch_logs
+        WHERE provider = :provider
+          AND market = :market
+          AND bookmaker = :bookmaker
+          AND game_date = :game_date
+          AND fetched_at >= :fresh_after
+        ORDER BY fetched_at DESC
+        LIMIT 1
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(
+            stmt,
+            {
+                "provider": provider,
+                "market": market,
+                "bookmaker": bookmaker,
+                "game_date": pd.to_datetime(game_date).date(),
+                "fresh_after": datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes),
+            },
+        ).mappings().first()
+    if not row:
+        return None
+    result = dict(row)
+    fetched_at = result.get("fetched_at")
+    if fetched_at is not None:
+        result["fetched_at"] = pd.to_datetime(fetched_at, utc=True).isoformat()
+    if result.get("game_date") is not None:
+        result["game_date"] = str(result["game_date"])
+    return result
+
+
 def load_mlb_prop_odds(
     engine,
     *,

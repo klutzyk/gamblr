@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
 
 from app.core.config import settings
-from app.db.mlb.store_prop_odds import load_mlb_prop_odds, upsert_mlb_prop_odds
+from app.db.mlb.store_prop_odds import (
+    load_fresh_mlb_prop_odds_fetch_log,
+    load_mlb_prop_odds,
+    record_mlb_prop_odds_fetch,
+    upsert_mlb_prop_odds,
+)
 from app.db.url_utils import to_sync_db_url
 from app.services.propline_client import PropLineClient
 
@@ -186,6 +191,24 @@ async def _load_or_fetch_hr_props(
         )
         if props:
             return props, {"source": "stored", **meta}
+        fetch_log = await run_in_threadpool(
+            load_fresh_mlb_prop_odds_fetch_log,
+            engine,
+            provider=PROVIDER,
+            market=HR_MARKET,
+            bookmaker=bookmaker,
+            game_date=target_date,
+            max_age_minutes=max_age_minutes,
+        )
+        if fetch_log:
+            return [], {
+                "source": "stored_empty",
+                "rows": 0,
+                "latest_fetched_at": fetch_log.get("fetched_at"),
+                "props_count": fetch_log.get("props_count"),
+                "events_count": fetch_log.get("events_count"),
+                "max_age_minutes": max_age_minutes,
+            }
 
     payloads = await PropLineClient().get_market_odds_for_events(
         sport=MLB_SPORT,
@@ -206,10 +229,22 @@ async def _load_or_fetch_hr_props(
         bookmaker=bookmaker,
         game_date=target_date,
     )
+    await run_in_threadpool(
+        record_mlb_prop_odds_fetch,
+        engine,
+        provider=PROVIDER,
+        sport=MLB_SPORT,
+        market=HR_MARKET,
+        bookmaker=bookmaker,
+        game_date=target_date,
+        props_count=len(props),
+        events_count=len(payloads),
+    )
     return props, {
         "source": "fetched",
         "rows": len(props),
         "stored_count": stored_count,
+        "events_count": len(payloads),
         "max_age_minutes": max_age_minutes,
     }
 

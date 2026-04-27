@@ -685,3 +685,30 @@ class MlbPropOddsSnapshot(Base):
             name="uq_mlb_prop_odds_snapshot_lookup",
         ),
     )
+
+
+class MlbPropOddsFetchLog(Base):
+    __tablename__ = "mlb_prop_odds_fetch_logs"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(Text, nullable=False)
+    sport = Column(Text, nullable=False)
+    market = Column(Text, nullable=False)
+    bookmaker = Column(Text, nullable=False)
+    game_date = Column(Date, nullable=False)
+    status = Column(Text, nullable=False, default="completed")
+    props_count = Column(Integer, nullable=False, default=0)
+    events_count = Column(Integer, nullable=False, default=0)
+    notes = Column(Text, nullable=True)
+    fetched_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "bookmaker",
+            "market",
+            "game_date",
+            name="uq_mlb_prop_odds_fetch_log_lookup",
+        ),
+    )
