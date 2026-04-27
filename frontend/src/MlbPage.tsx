@@ -260,11 +260,11 @@ function formatWeatherContext(row: MlbPredictionRow) {
   const windMph =
     typeof row.wind_speed_10m_kph === "number" ? row.wind_speed_10m_kph * 0.621371 : null;
   const parts = [
-    typeof tempF === "number" ? `${Math.round(tempF)}°F` : null,
+    typeof tempF === "number" ? `${Math.round(tempF)}F` : null,
     row.wind_text || (typeof windMph === "number" ? `Wind ${Math.round(windMph)} mph` : null),
     row.roof_type ? row.roof_type : null,
   ].filter(Boolean);
-  return parts.length ? parts.join(" • ") : null;
+  return parts.length ? parts.join(" / ") : null;
 }
 
 function normalizeRecentGames(value: MlbPredictionRow["recent_games"]) {

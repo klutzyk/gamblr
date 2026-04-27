@@ -552,6 +552,12 @@
   inset: 0;
 }
 
+.mlb-player-avatar img {
+  object-fit: contain;
+  object-position: center top;
+  background: rgba(16, 29, 26, 0.08);
+}
+
 .avatar-fallback {
   font-size: 0.85rem;
   font-weight: 700;

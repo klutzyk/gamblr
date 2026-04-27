@@ -78,8 +78,8 @@ async def _ensure_mlb_slate_data(
             "min_roster_date": target_date - timedelta(days=7),
         },
     )
-
     loaded = {"schedule": False, "rosters": False}
+
     if refresh or games_count == 0 or rosters_count == 0:
         async with MlbAsyncSessionLocal() as db:
             if refresh or games_count == 0:

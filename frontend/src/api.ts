@@ -446,6 +446,7 @@ const API_BASE =
 // Very small in-memory cache to avoid hammering the backend
 type CacheEntry<T> = { data: T; timestamp: number };
 const cache: Record<string, CacheEntry<unknown>> = {};
+const pendingRequests: Record<string, Promise<unknown>> = {};
 
 function getCacheKey(path: string, params?: Record<string, unknown>): string {
   const p = params ? JSON.stringify(params) : "";
@@ -464,6 +465,10 @@ async function fetchWithCache<T>(
   if (existing && now - existing.timestamp < ttlMs) {
     return existing.data;
   }
+  const pending = pendingRequests[key] as Promise<T> | undefined;
+  if (pending) {
+    return pending;
+  }
 
   const url = new URL(path, API_BASE);
   if (params) {
@@ -474,13 +479,20 @@ async function fetchWithCache<T>(
     });
   }
 
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    throw new Error(`Request failed with status ${res.status}`);
-  }
-  const data = (await res.json()) as T;
-  cache[key] = { data, timestamp: now };
-  return data;
+  const request = fetch(url.toString())
+    .then(async (res) => {
+      if (!res.ok) {
+        throw new Error(`Request failed with status ${res.status}`);
+      }
+      const data = (await res.json()) as T;
+      cache[key] = { data, timestamp: Date.now() };
+      return data;
+    })
+    .finally(() => {
+      delete pendingRequests[key];
+    });
+  pendingRequests[key] = request;
+  return request;
 }
 
 async function postJson<T>(
