@@ -1238,6 +1238,14 @@ def _bases_text(bases: list[Runner | None]) -> str:
     return "".join(str(index + 1) if runner else "-" for index, runner in enumerate(bases))
 
 
+def _bases_payload(bases: list[Runner | None]) -> dict[str, dict[str, Any] | None]:
+    labels = ("first", "second", "third")
+    return {
+        label: {"player_id": runner.player_id, "name": runner.name} if runner else None
+        for label, runner in zip(labels, bases)
+    }
+
+
 def _score_runner(state: SimulationState, batting_side: str, runner: Runner | None) -> int:
     if runner is None:
         return 0
@@ -1400,6 +1408,8 @@ def _simulate_plate_appearance(
         strikes_before = strikes
         outs_before = state.outs
         bases_before = _bases_text(state.bases)
+        bases_before_payload = _bases_payload(state.bases)
+        score_before = f"{state.away_score}-{state.home_score}"
         weather = _weather_at(ctx, state.clock)
         pitch = _weighted_pitch(pitcher.pitch_mix, balls, strikes, rng)
         speed = _clamp(rng.gauss(pitch.speed_mph, 1.8), 66.0, 103.5)
@@ -1510,14 +1520,37 @@ def _simulate_plate_appearance(
         else:
             state.away_pitch_count += 1
 
+        if balls >= 4:
+            pa_result = "walk"
+            batter_bucket["bb"] += 1
+            pitcher_bucket["bb"] += 1
+            runs = _advance_walk(state, batting_side, batter)
+            pitcher_bucket["runs"] += runs
+            pa_done = True
+        elif strikes >= 3:
+            pa_result = "strikeout"
+            batter_bucket["ab"] += 1
+            batter_bucket["k"] += 1
+            pitcher_bucket["k"] += 1
+            state.outs += 1
+            pa_done = True
+        elif pitches >= 13 and not pa_done:
+            strikes = 2
+
         log_row = {
             "pitch_number": state.pitch_number,
             "inning": state.inning,
             "half": state.half,
             "outs_before": outs_before,
+            "outs_after": state.outs,
             "balls_before": balls_before,
             "strikes_before": strikes_before,
+            "balls_after": balls,
+            "strikes_after": strikes,
             "bases_before": bases_before,
+            "bases_after": _bases_text(state.bases),
+            "base_runners_before": bases_before_payload,
+            "base_runners_after": _bases_payload(state.bases),
             "batter_id": batter.player_id,
             "batter": batter.name,
             "pitcher_id": pitcher.player_id,
@@ -1525,10 +1558,21 @@ def _simulate_plate_appearance(
             "pitch_type": pitch.code,
             "pitch_description": pitch.description,
             "pitch_mph": round(speed, 1),
+            "pitch_break_horizontal": round(pitch.break_horizontal, 2),
+            "pitch_break_vertical": round(pitch.break_vertical, 2),
+            "pitch_spin_rate": round(pitch.spin_rate, 0),
             "call": call,
+            "plate_appearance_result": pa_result or None,
+            "runs_scored": runs,
             "weather_time_utc": _iso(weather.target_time_utc),
             "temperature_f": round(weather.temperature_f, 1),
             "wind_speed_mph": round(weather.wind_speed_mph, 1),
+            "wind_gust_mph": round(weather.wind_gust_mph, 1),
+            "wind_direction_deg": round(weather.wind_direction_deg, 1)
+            if weather.wind_direction_deg is not None
+            else None,
+            "precipitation_probability": weather.precipitation_probability,
+            "score_before": score_before,
             "score": f"{state.away_score}-{state.home_score}",
         }
         if batted_ball:
@@ -1539,8 +1583,10 @@ def _simulate_plate_appearance(
                     "launch_angle": batted_ball["launch_angle"],
                     "spray_degrees": batted_ball["spray_degrees"],
                     "distance_ft": batted_ball["distance_ft"],
+                    "fence_ft": batted_ball["fence_ft"],
                     "field_x": batted_ball["field_x"],
                     "field_y": batted_ball["field_y"],
+                    "wind_out_mph": batted_ball["wind_out_mph"],
                 }
             )
         if pitch_log is not None and len(pitch_log) < pitch_log_limit:
@@ -1566,23 +1612,6 @@ def _simulate_plate_appearance(
 
         if state.clock:
             state.clock += timedelta(seconds=rng.randint(18, 31))
-
-        if balls >= 4:
-            pa_result = "walk"
-            batter_bucket["bb"] += 1
-            pitcher_bucket["bb"] += 1
-            runs = _advance_walk(state, batting_side, batter)
-            pitcher_bucket["runs"] += runs
-            pa_done = True
-        elif strikes >= 3:
-            pa_result = "strikeout"
-            batter_bucket["ab"] += 1
-            batter_bucket["k"] += 1
-            pitcher_bucket["k"] += 1
-            state.outs += 1
-            pa_done = True
-        elif pitches >= 13 and not pa_done:
-            strikes = 2
 
         if pa_done:
             if state.clock:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import {
   getMlbHrEvBoard,
@@ -10,9 +10,9 @@ import {
   type MlbMarketName,
   type MlbPredictionSlateResponse,
   type MlbPredictionRow,
-  type MlbSimulationFieldEvent,
   type MlbSimulationGame,
   type MlbSimulationGamesResponse,
+  type MlbSimulationPitchLogRow,
   type MlbSimulationRunResponse,
 } from "./api";
 import logo from "./assets/logo2.png";
@@ -21,10 +21,39 @@ type UserRegion = "au" | "us" | "uk";
 type MainTab = "predictions" | "home_run_ev" | "simulation";
 type MlbDay = "auto" | "today" | "tomorrow" | "yesterday";
 type MlbSort = "value_desc" | "value_asc" | "lineup_asc" | "player_az";
+type SimulationPlaybackMode = "full" | "highlights";
+type SimulationPlaybackSpeed = 1 | 2 | 4 | 8;
 type ApiState<T> = {
   data: T | null;
   loading: boolean;
   error: string | null;
+};
+
+type SimulationBatterLine = {
+  key: string;
+  name: string;
+  team: string;
+  pa: number;
+  ab: number;
+  h: number;
+  hr: number;
+  tb: number;
+  rbi: number;
+  bb: number;
+  k: number;
+};
+
+type SimulationPitcherLine = {
+  key: string;
+  name: string;
+  team: string;
+  outs: number;
+  pitches: number;
+  h: number;
+  hr: number;
+  bb: number;
+  k: number;
+  r: number;
 };
 
 const REGION_TIMEZONE: Record<UserRegion, string> = {
@@ -562,66 +591,507 @@ function recordText(row: Record<string, number | string | null>, key: string) {
   return typeof value === "string" && value.length > 0 ? value : "-";
 }
 
+function parseScore(value: string | null | undefined) {
+  const [away, home] = String(value ?? "0-0")
+    .split("-")
+    .map((part) => Number(part));
+  return {
+    away: Number.isFinite(away) ? away : 0,
+    home: Number.isFinite(home) ? home : 0,
+  };
+}
+
+function baseRunnerName(row: MlbSimulationPitchLogRow | null, base: "first" | "second" | "third") {
+  return row?.base_runners_after?.[base]?.name ?? row?.base_runners_before?.[base]?.name ?? null;
+}
+
+function baseOccupied(row: MlbSimulationPitchLogRow | null, base: "first" | "second" | "third") {
+  return Boolean(baseRunnerName(row, base));
+}
+
+function formatBaseRunners(row: MlbSimulationPitchLogRow | null) {
+  if (!row) return "Bases empty";
+  const runners = [
+    ["1B", baseRunnerName(row, "first")],
+    ["2B", baseRunnerName(row, "second")],
+    ["3B", baseRunnerName(row, "third")],
+  ].filter(([, name]) => Boolean(name));
+  if (!runners.length) return "Bases empty";
+  return runners.map(([base, name]) => `${base}: ${name}`).join(" / ");
+}
+
+function formatPitchCount(row: MlbSimulationPitchLogRow | null) {
+  if (!row) return "-";
+  const balls = typeof row.balls_before === "number" ? Math.min(row.balls_before, 3) : 0;
+  const strikes = typeof row.strikes_before === "number" ? Math.min(row.strikes_before, 2) : 0;
+  return `${balls}-${strikes}`;
+}
+
+function formatWindDirection(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "-";
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const index = Math.round((((value % 360) + 360) % 360) / 45) % directions.length;
+  return `${Math.round(value)} deg ${directions[index]}`;
+}
+
+function formatWindLine(row: MlbSimulationPitchLogRow | null) {
+  if (!row || typeof row.wind_speed_mph !== "number") return "wind n/a";
+  if (row.wind_speed_mph < 0.5) return "calm wind";
+  const direction = formatWindDirection(row.wind_direction_deg);
+  return direction === "-"
+    ? `wind ${formatNumber(row.wind_speed_mph, 1)} mph`
+    : `wind ${formatNumber(row.wind_speed_mph, 1)} mph ${direction}`;
+}
+
+function formatInningState(row: MlbSimulationPitchLogRow | null) {
+  if (!row) return "Pre-game";
+  const half = row.half.toLowerCase().startsWith("bot") ? "Bot" : "Top";
+  return `${half} ${row.inning}`;
+}
+
+function formatOutState(value: number | null | undefined) {
+  if (typeof value !== "number") return "0 out";
+  return `${value} ${value === 1 ? "out" : "outs"}`;
+}
+
+function weatherSourceLabel(mode: string | null | undefined, count: number | null | undefined) {
+  if (mode === "snapshots" && count && count > 0) return `${count} pitch-weather points`;
+  if (mode === "snapshots") return "Pitch-weather loaded";
+  return "Game forecast";
+}
+
+function isSimulationHighlight(row: MlbSimulationPitchLogRow) {
+  return Boolean(row.result || (row.runs_scored ?? 0) > 0 || row.plate_appearance_result === "walk");
+}
+
+function normalizedPitchResult(row: MlbSimulationPitchLogRow) {
+  return String(row.result ?? row.plate_appearance_result ?? row.call ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
+function totalBasesForResult(result: string) {
+  if (result === "single") return 1;
+  if (result === "double") return 2;
+  if (result === "triple") return 3;
+  if (result === "home_run") return 4;
+  return 0;
+}
+
+function isPlateAppearanceResult(row: MlbSimulationPitchLogRow) {
+  return Boolean(row.result || row.plate_appearance_result === "walk" || row.plate_appearance_result === "strikeout");
+}
+
+function formatInningsPitched(outs: number) {
+  return `${Math.floor(outs / 3)}.${outs % 3}`;
+}
+
+function buildSimulationBoxScore(
+  result: MlbSimulationRunResponse,
+  activePitchNumber: number | null
+) {
+  const batters = new Map<string, SimulationBatterLine>();
+  const pitchers = new Map<string, SimulationPitcherLine>();
+  const rows = activePitchNumber
+    ? result.sample.pitch_log.filter((row) => row.pitch_number <= activePitchNumber)
+    : [];
+
+  const getBatter = (row: MlbSimulationPitchLogRow) => {
+    const team = row.half.toLowerCase().startsWith("top")
+      ? result.game.away_abbreviation
+      : result.game.home_abbreviation;
+    const key = `${row.batter_id ?? row.batter}-${team}`;
+    const existing = batters.get(key);
+    if (existing) return existing;
+    const next: SimulationBatterLine = {
+      key,
+      name: row.batter,
+      team,
+      pa: 0,
+      ab: 0,
+      h: 0,
+      hr: 0,
+      tb: 0,
+      rbi: 0,
+      bb: 0,
+      k: 0,
+    };
+    batters.set(key, next);
+    return next;
+  };
+
+  const getPitcher = (row: MlbSimulationPitchLogRow) => {
+    const team = row.half.toLowerCase().startsWith("top")
+      ? result.game.home_abbreviation
+      : result.game.away_abbreviation;
+    const key = `${row.pitcher_id ?? row.pitcher}-${team}`;
+    const existing = pitchers.get(key);
+    if (existing) return existing;
+    const next: SimulationPitcherLine = {
+      key,
+      name: row.pitcher,
+      team,
+      outs: 0,
+      pitches: 0,
+      h: 0,
+      hr: 0,
+      bb: 0,
+      k: 0,
+      r: 0,
+    };
+    pitchers.set(key, next);
+    return next;
+  };
+
+  rows.forEach((row) => {
+    const batter = getBatter(row);
+    const pitcher = getPitcher(row);
+    const resultKey = normalizedPitchResult(row);
+    const totalBases = totalBasesForResult(resultKey);
+    const runs = row.runs_scored ?? 0;
+    pitcher.pitches += 1;
+    pitcher.outs += Math.max(0, (row.outs_after ?? row.outs_before) - row.outs_before);
+    pitcher.r += runs;
+
+    if (!isPlateAppearanceResult(row)) return;
+    batter.pa += 1;
+    batter.rbi += runs;
+    if (resultKey === "walk") {
+      batter.bb += 1;
+      pitcher.bb += 1;
+      return;
+    }
+    batter.ab += 1;
+    if (resultKey === "strikeout") {
+      batter.k += 1;
+      pitcher.k += 1;
+      return;
+    }
+    if (totalBases > 0) {
+      batter.h += 1;
+      batter.tb += totalBases;
+      pitcher.h += 1;
+      if (resultKey === "home_run") {
+        batter.hr += 1;
+        pitcher.hr += 1;
+      }
+    }
+  });
+
+  return {
+    batters: Array.from(batters.values()),
+    pitchers: Array.from(pitchers.values()),
+  };
+}
+
 function SimulationField({
-  events,
+  result,
+  activePitch,
   activeIndex,
+  maxEventIndex,
+  isPlaying,
+  playbackSpeed,
+  onEventIndexChange,
+  onPlayingChange,
+  onPlaybackSpeedChange,
 }: {
-  events: MlbSimulationFieldEvent[];
+  result: MlbSimulationRunResponse;
+  activePitch: MlbSimulationPitchLogRow | null;
   activeIndex: number;
+  maxEventIndex: number;
+  isPlaying: boolean;
+  playbackSpeed: SimulationPlaybackSpeed;
+  onEventIndexChange: (index: number) => void;
+  onPlayingChange: (playing: boolean) => void;
+  onPlaybackSpeedChange: (speed: SimulationPlaybackSpeed) => void;
 }) {
-  const activeEvent = events[activeIndex] ?? null;
-  const recentEvents = events.slice(Math.max(0, activeIndex - 24), activeIndex + 1);
+  const hasContact = typeof activePitch?.field_x === "number" && typeof activePitch.field_y === "number";
+  const score = parseScore(activePitch?.score);
+  const balls = activePitch ? Math.min(activePitch.balls_before, 3) : 0;
+  const strikes = activePitch ? Math.min(activePitch.strikes_before, 2) : 0;
+  const outs = activePitch?.outs_after ?? activePitch?.outs_before ?? 0;
+  const contactX = activePitch?.field_x ?? 50;
+  const contactY = activePitch?.field_y ?? 48;
+  const hitEndX = Math.max(14, Math.min(146, 20 + contactX * 1.2));
+  const hitEndY = Math.max(8, Math.min(62, 8 + contactY * 0.52));
+  const pitchClass = hasContact ? "is-contact" : activePitch?.call === "ball" ? "is-ball" : "is-strike";
+  const venueName =
+    typeof result.game.venue?.name === "string"
+      ? result.game.venue.name
+      : typeof result.game.venue?.venue_name === "string"
+        ? result.game.venue.venue_name
+        : "Ballpark";
+  const umpireName =
+    typeof result.game.home_plate_umpire?.full_name === "string"
+      ? result.game.home_plate_umpire.full_name
+      : "Umpire TBD";
+  const pitchOutcome = activePitch
+    ? formatSimulationResult(activePitch.result ?? activePitch.plate_appearance_result ?? activePitch.call)
+    : "Ready";
   return (
-    <div className="simulation-field-wrap">
-      <svg className="simulation-field" viewBox="0 0 100 100" role="img" aria-label="Simulated batted ball field">
+    <div key={activePitch?.pitch_number ?? "empty"} className={`simulation-field-wrap simulation-broadcast-field ${pitchClass}`}>
+      <svg className="simulation-field" viewBox="0 0 160 90" role="img" aria-label="Simulated broadcast pitch view">
         <defs>
-          <linearGradient id="fieldGrass" x1="0" x2="1" y1="0" y2="1">
-            <stop offset="0%" stopColor="#163f2b" />
-            <stop offset="100%" stopColor="#0c241b" />
+          <linearGradient id="broadcastSky" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#0b1717" />
+            <stop offset="100%" stopColor="#12221c" />
           </linearGradient>
-          <linearGradient id="infieldClay" x1="0" x2="1" y1="0" y2="1">
-            <stop offset="0%" stopColor="#c79052" />
-            <stop offset="100%" stopColor="#8e5a32" />
+          <linearGradient id="broadcastGrass" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stopColor="#6fa33d" />
+            <stop offset="48%" stopColor="#4b842f" />
+            <stop offset="100%" stopColor="#2e641f" />
           </linearGradient>
+          <linearGradient id="broadcastDirt" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stopColor="#a46b49" />
+            <stop offset="100%" stopColor="#6f4330" />
+          </linearGradient>
+          <filter id="simGlow">
+            <feGaussianBlur stdDeviation="1.4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
-        <path d="M6 86 Q50 7 94 86 Z" fill="url(#fieldGrass)" />
-        <path d="M15 84 Q50 24 85 84" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="0.8" />
-        <path d="M50 92 L31 75 L50 59 L69 75 Z" fill="url(#infieldClay)" stroke="rgba(255,255,255,0.55)" strokeWidth="0.7" />
-        <path d="M50 92 L31 75 M50 92 L69 75 M31 75 L50 59 M69 75 L50 59" stroke="rgba(255,255,255,0.42)" strokeWidth="0.7" />
-        <circle cx="50" cy="92" r="1.2" fill="#f8f1dd" />
-        <circle cx="31" cy="75" r="1.1" fill="#f8f1dd" />
-        <circle cx="50" cy="59" r="1.1" fill="#f8f1dd" />
-        <circle cx="69" cy="75" r="1.1" fill="#f8f1dd" />
-        {recentEvents.map((event, index) => (
-          <circle
-            key={`${event.pitch_number}-${index}`}
-            cx={event.field_x}
-            cy={event.field_y}
-            r={index === recentEvents.length - 1 ? 1.4 : 0.7}
-            fill={index === recentEvents.length - 1 ? "#f6e55b" : "rgba(246,229,91,0.42)"}
-          />
-        ))}
-        {activeEvent && (
+        <rect width="160" height="90" fill="url(#broadcastSky)" />
+        <g opacity="0.72">
+          <rect x="0" y="2" width="160" height="28" fill="#12211e" />
+          {Array.from({ length: 9 }).map((_, row) => (
+            <path
+              key={`seat-row-${row}`}
+              d={`M0 ${7 + row * 2.8} H160`}
+              stroke={row % 2 === 0 ? "rgba(248,241,221,0.08)" : "rgba(0,0,0,0.22)"}
+              strokeWidth="1"
+            />
+          ))}
+          {Array.from({ length: 18 }).map((_, index) => (
+            <circle
+              key={`seat-dot-${index}`}
+              cx={8 + index * 8.7}
+              cy={8 + (index % 5) * 4.4}
+              r="0.7"
+              fill="rgba(248,241,221,0.22)"
+            />
+          ))}
+        </g>
+        <rect x="0" y="27" width="160" height="11" fill="#1c2d2d" />
+        <rect x="9" y="29" width="34" height="5" rx="1" fill="#215eb4" opacity="0.85" />
+        <rect x="48" y="29" width="32" height="5" rx="1" fill="#b41f55" opacity="0.78" />
+        <rect x="85" y="29" width="31" height="5" rx="1" fill="#1e7f68" opacity="0.82" />
+        <rect x="121" y="29" width="29" height="5" rx="1" fill="#d1a529" opacity="0.75" />
+        <path d="M0 90 L0 38 Q80 48 160 38 L160 90 Z" fill="url(#broadcastGrass)" />
+        <path d="M38 90 L76 43 L84 43 L122 90 Z" fill="rgba(247,241,221,0.2)" />
+        <path d="M42 90 L77 44 M118 90 L83 44" stroke="rgba(255,255,255,0.58)" strokeWidth="0.8" />
+        <ellipse cx="80" cy="63.5" rx="25" ry="8.2" fill="url(#broadcastDirt)" />
+        <ellipse cx="80" cy="61.5" rx="6.8" ry="2.4" fill="#d9b684" opacity="0.8" />
+        <path d="M66 41 Q80 35 94 41 L89 48 Q80 45 71 48 Z" fill="url(#broadcastDirt)" />
+        <path d="M77.5 43 L82.5 43 L84 46 L80 48 L76 46 Z" fill="#f8f1dd" opacity="0.86" />
+        <path className="simulation-pitch-tunnel" d="M80 60 Q82 50 80 44" fill="none" stroke="rgba(255,255,255,0.28)" strokeWidth="0.65" strokeDasharray="2 2" />
+
+        <g className="simulation-player simulation-catcher-model">
+          <circle cx="80" cy="39.5" r="2.1" fill="#1e2630" />
+          <path d="M76.8 42 Q80 46 83.2 42 L85 49 L75 49 Z" fill="#354251" />
+          <path d="M76 49 L72 54 M84 49 L88 54" stroke="#354251" strokeWidth="2.1" strokeLinecap="round" />
+        </g>
+        <g className="simulation-player simulation-umpire-model">
+          <circle cx="80" cy="35.7" r="1.8" fill="#111820" />
+          <path d="M78.2 37.5 L77 44 L83 44 L81.8 37.5 Z" fill="#1b252c" />
+        </g>
+        <g className={`simulation-player simulation-batter-model ${hasContact ? "swing" : "track"}`}>
+          <circle cx="103" cy="38" r="2.2" fill="#f3efe0" />
+          <path d="M102 40 L99.8 48 L107 49 L105 40 Z" fill="#e8efe9" />
+          <path d="M101 48 L98 56 M106 49 L110 56" stroke="#e8efe9" strokeWidth="2.1" strokeLinecap="round" />
+          <path d="M102 42 L110 36" stroke="#e8efe9" strokeWidth="1.8" strokeLinecap="round" />
+          <path className="simulation-bat" d="M109 35 L119 27" stroke="#d7a057" strokeWidth="1.5" strokeLinecap="round" />
+        </g>
+        <g className="simulation-player simulation-pitcher-model">
+          <circle cx="80" cy="53.8" r="2.5" fill="#ecefee" />
+          <path d="M79 56 L75.5 66 L84.5 66 L81 56 Z" fill="#dfe4e7" />
+          <path className="simulation-pitch-arm" d="M80 57 L90 56" stroke="#dfe4e7" strokeWidth="2.1" strokeLinecap="round" />
+          <path d="M79 65 L73 75 M83 65 L89 74" stroke="#dfe4e7" strokeWidth="2.3" strokeLinecap="round" />
+          <path d="M76 58 L70 62" stroke="#dfe4e7" strokeWidth="2.1" strokeLinecap="round" />
+        </g>
+
+        {activePitch && (
           <>
             <path
-              d={`M50 92 Q${(50 + activeEvent.field_x) / 2} ${Math.min(52, activeEvent.field_y + 12)} ${activeEvent.field_x} ${activeEvent.field_y}`}
+              className="simulation-ball-path simulation-pitch-path"
+              d="M87 56 Q83 49 80 43"
               fill="none"
-              stroke="#f6e55b"
-              strokeWidth="1.15"
+              stroke={activePitch.call === "ball" ? "#78c8ff" : "#f8de55"}
+              strokeWidth="1.35"
               strokeLinecap="round"
+              filter="url(#simGlow)"
             />
-            <circle cx={activeEvent.field_x} cy={activeEvent.field_y} r="2.1" fill="#ffffff" stroke="#f6e55b" strokeWidth="1" />
+            {hasContact ? (
+              <path
+                className="simulation-ball-path simulation-hit-path"
+                d={`M86 42 Q${(86 + hitEndX) / 2} ${Math.min(18, hitEndY)} ${hitEndX} ${hitEndY}`}
+                fill="none"
+                stroke="#f6e55b"
+                strokeWidth="1.55"
+                strokeLinecap="round"
+                filter="url(#simGlow)"
+              />
+            ) : null}
+            {hasContact ? (
+              <g className="simulation-hit-landing" transform={`translate(${hitEndX} ${hitEndY})`}>
+                <circle r="3" fill="rgba(246,229,91,0.24)" stroke="#f6e55b" strokeWidth="0.75" />
+                <text x="4.5" y="-3.2">
+                  {normalizedPitchResult(activePitch).includes("out") ? "CAUGHT" : "LAND"}
+                </text>
+              </g>
+            ) : null}
+            <circle
+              className="simulation-active-ball"
+              cx={hasContact ? hitEndX : 80}
+              cy={hasContact ? hitEndY : 43}
+              r={hasContact ? 1.85 : 1.2}
+              fill="#ffffff"
+              stroke={hasContact ? "#f6e55b" : "#83c7ff"}
+              strokeWidth="1"
+              filter="url(#simGlow)"
+            />
           </>
         )}
       </svg>
-      <div className="simulation-field-readout">
-        <span>{activeEvent ? `Pitch ${activeEvent.pitch_number}` : "No contact"}</span>
-        <strong>{activeEvent ? formatSimulationResult(activeEvent.result) : "Run a simulation"}</strong>
-        <small>
-          {activeEvent
-            ? `${formatNumber(activeEvent.distance_ft, 0)} ft / ${formatNumber(activeEvent.launch_speed, 1)} mph / ${formatNumber(activeEvent.launch_angle, 0)} deg`
-            : "Batted balls will render here"}
-        </small>
+
+      <div className="simulation-venue-ribbon">
+        <span>{venueName}</span>
+        <strong>{formatNumber(activePitch?.temperature_f, 0)}F / {formatWindLine(activePitch)}</strong>
+        <small>{weatherSourceLabel(result.inputs.weather_mode, result.game.weather_snapshot_count)} / {umpireName}</small>
+      </div>
+
+      <div className="simulation-player-tag simulation-player-tag-pitcher">
+        <span>Pitcher</span>
+        <strong>{activePitch?.pitcher ?? "-"}</strong>
+      </div>
+      <div className="simulation-player-tag simulation-player-tag-batter">
+        <span>Batter</span>
+        <strong>{activePitch?.batter ?? "-"}</strong>
+      </div>
+
+      <div className="simulation-metrics-rail" aria-label="Pitch and contact metrics">
+        <div>
+          <span>Pitch</span>
+          <strong>{activePitch ? `${activePitch.pitch_type} ${formatNumber(activePitch.pitch_mph, 1)}` : "-"}</strong>
+          <small>{activePitch?.pitch_description ?? "mph"}</small>
+        </div>
+        <div>
+          <span>Movement</span>
+          <strong>
+            H {formatNumber(activePitch?.pitch_break_horizontal, 1)} / V {formatNumber(activePitch?.pitch_break_vertical, 1)}
+          </strong>
+          <small>{formatNumber(activePitch?.pitch_spin_rate, 0)} rpm</small>
+        </div>
+        <div>
+          <span>Contact</span>
+          <strong>{typeof activePitch?.launch_speed === "number" ? `${formatNumber(activePitch.launch_speed, 1)} mph` : "No BIP"}</strong>
+          <small>
+            {typeof activePitch?.launch_angle === "number" || typeof activePitch?.distance_ft === "number"
+              ? `${formatNumber(activePitch?.launch_angle, 1)} deg / ${formatNumber(activePitch?.distance_ft, 0)} ft`
+              : "awaiting ball in play"}
+          </small>
+        </div>
+        <div>
+          <span>Carry</span>
+          <strong>{typeof activePitch?.wind_out_mph === "number" ? `${formatNumber(activePitch.wind_out_mph, 1)} mph` : "n/a"}</strong>
+          <small>{typeof activePitch?.fence_ft === "number" ? `Fence ${formatNumber(activePitch.fence_ft, 0)} ft` : "contact only"}</small>
+        </div>
+      </div>
+
+      <div className="simulation-broadcast-scorebug" aria-label="Live boxscore">
+        <div className="simulation-score-lines">
+          <div>
+            <span>{result.game.away_abbreviation}</span>
+            <strong>{score.away}</strong>
+          </div>
+          <div>
+            <span>{result.game.home_abbreviation}</span>
+            <strong>{score.home}</strong>
+          </div>
+        </div>
+        <div className="simulation-game-state">
+          <strong>{formatInningState(activePitch)}</strong>
+          <span>{formatOutState(outs)}</span>
+          <div className="simulation-count-dots" aria-label={`Count ${formatPitchCount(activePitch)}`}>
+            <span className={balls >= 1 ? "on" : ""} />
+            <span className={balls >= 2 ? "on" : ""} />
+            <span className={balls >= 3 ? "on" : ""} />
+            <i className={strikes >= 1 ? "on" : ""} />
+            <i className={strikes >= 2 ? "on" : ""} />
+          </div>
+        </div>
+        <div className="simulation-basebug" aria-label={formatBaseRunners(activePitch)}>
+          <span
+            className={`base second ${baseOccupied(activePitch, "second") ? "occupied" : ""}`}
+            title={baseRunnerName(activePitch, "second") ?? "Second base empty"}
+          />
+          <span
+            className={`base third ${baseOccupied(activePitch, "third") ? "occupied" : ""}`}
+            title={baseRunnerName(activePitch, "third") ?? "Third base empty"}
+          />
+          <span
+            className={`base first ${baseOccupied(activePitch, "first") ? "occupied" : ""}`}
+            title={baseRunnerName(activePitch, "first") ?? "First base empty"}
+          />
+        </div>
+      </div>
+
+      <div className="simulation-field-playback" aria-label="Simulation playback controls">
+        <button
+          type="button"
+          onClick={() => onEventIndexChange(Math.max(0, activeIndex - 1))}
+          aria-label="Previous pitch"
+        >
+          <i className="material-symbols-rounded">chevron_left</i>
+        </button>
+        <button
+          type="button"
+          className="simulation-play-toggle"
+          onClick={() => onPlayingChange(!isPlaying)}
+          aria-label={isPlaying ? "Pause simulation" : "Play simulation"}
+        >
+          <i className="material-symbols-rounded">{isPlaying ? "pause" : "play_arrow"}</i>
+        </button>
+        <button
+          type="button"
+          onClick={() => onEventIndexChange(Math.min(maxEventIndex, activeIndex + 1))}
+          aria-label="Next pitch"
+        >
+          <i className="material-symbols-rounded">chevron_right</i>
+        </button>
+        <div className="simulation-speed-set" aria-label="Playback speed">
+          {([1, 2, 4, 8] as SimulationPlaybackSpeed[]).map((speed) => (
+            <button
+              key={speed}
+              type="button"
+              className={playbackSpeed === speed ? "active" : ""}
+              onClick={() => onPlaybackSpeedChange(speed)}
+            >
+              {speed}x
+            </button>
+          ))}
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={maxEventIndex}
+          value={activeIndex}
+          onChange={(event) => onEventIndexChange(Number(event.target.value))}
+          aria-label="Pitch timeline"
+        />
+      </div>
+
+      <div className="simulation-lower-third">
+        <div>
+          <span>{activePitch ? `Pitch ${activePitch.pitch_number} / ${formatPitchCount(activePitch)}` : "Pitch simulation"}</span>
+          <strong>{pitchOutcome}</strong>
+        </div>
+        <div>
+          <span>Runners</span>
+          <strong>{formatBaseRunners(activePitch)}</strong>
+        </div>
       </div>
     </div>
   );
@@ -631,49 +1101,194 @@ function SimulationResults({
   result,
   activeEventIndex,
   onEventIndexChange,
+  playbackMode,
+  onPlaybackModeChange,
+  isPlaying,
+  onPlayingChange,
+  playbackSpeed,
+  onPlaybackSpeedChange,
 }: {
   result: MlbSimulationRunResponse;
   activeEventIndex: number;
   onEventIndexChange: (index: number) => void;
+  playbackMode: SimulationPlaybackMode;
+  onPlaybackModeChange: (mode: SimulationPlaybackMode) => void;
+  isPlaying: boolean;
+  onPlayingChange: (playing: boolean) => void;
+  playbackSpeed: SimulationPlaybackSpeed;
+  onPlaybackSpeedChange: (speed: SimulationPlaybackSpeed) => void;
 }) {
-  const events = result.sample.field_events;
-  const maxEventIndex = Math.max(events.length - 1, 0);
+  const timeline =
+    playbackMode === "full"
+      ? result.sample.pitch_log
+      : result.sample.pitch_log.filter(isSimulationHighlight);
+  const maxEventIndex = Math.max(timeline.length - 1, 0);
   const activeIndex = Math.min(activeEventIndex, maxEventIndex);
-  const pitchRows = result.sample.pitch_log.slice(0, 90);
+  const activePitch = timeline[activeIndex] ?? null;
+  const pitchRows = result.sample.pitch_log;
+  const liveBoxScore = buildSimulationBoxScore(result, activePitch?.pitch_number ?? null);
+
+  useEffect(() => {
+    if (!isPlaying || timeline.length <= 1) return;
+    const delay = Math.max(120, Math.round(900 / playbackSpeed));
+    const timer = window.setInterval(() => {
+      onEventIndexChange(Math.min(maxEventIndex, activeIndex + 1));
+      if (activeIndex >= maxEventIndex) {
+        onPlayingChange(false);
+      }
+    }, delay);
+    return () => window.clearInterval(timer);
+  }, [activeIndex, isPlaying, maxEventIndex, onEventIndexChange, onPlayingChange, playbackSpeed, timeline.length]);
+
   return (
-    <div className="simulation-results mt-4">
-      <div className="simulation-scoreboard">
-        <div>
-          <span>{result.game.away_abbreviation}</span>
-          <strong>{formatPct(result.summary.away_win_probability, 1)}</strong>
-          <small>{formatNumber(result.summary.away_avg_score, 2)} runs</small>
+    <div className="simulation-results mt-3">
+      <div className="simulation-playback-bar">
+        <div className="stat-toggle simulation-mode-toggle" role="group" aria-label="Simulation playback mode">
+          <button
+            className={`stat-chip ${playbackMode === "full" ? "active" : ""}`}
+            type="button"
+            onClick={() => {
+              onPlaybackModeChange("full");
+              onEventIndexChange(0);
+              onPlayingChange(false);
+            }}
+          >
+            Full
+          </button>
+          <button
+            className={`stat-chip ${playbackMode === "highlights" ? "active" : ""}`}
+            type="button"
+            onClick={() => {
+              onPlaybackModeChange("highlights");
+              onEventIndexChange(0);
+              onPlayingChange(false);
+            }}
+          >
+            Highlights
+          </button>
         </div>
-        <div className="simulation-score-divider">
-          <span>{result.iterations} sims</span>
-          <strong>
-            {result.summary.sample_score?.away ?? "-"}-{result.summary.sample_score?.home ?? "-"}
-          </strong>
-          <small>{formatNumber(result.summary.avg_pitch_count, 0)} pitches</small>
-        </div>
-        <div>
-          <span>{result.game.home_abbreviation}</span>
-          <strong>{formatPct(result.summary.home_win_probability, 1)}</strong>
-          <small>{formatNumber(result.summary.home_avg_score, 2)} runs</small>
+        <div className="simulation-playback-copy">
+          <strong>{playbackMode === "full" ? "Every pitch" : "Contact, walks, scoring"}</strong>
+          <span>{timeline.length} timeline events</span>
         </div>
       </div>
 
-      <div className="simulation-meta-grid mt-3">
+      <div className="simulation-stage-full mt-3">
+        <SimulationField
+          result={result}
+          activePitch={activePitch}
+          activeIndex={activeIndex}
+          maxEventIndex={maxEventIndex}
+          isPlaying={isPlaying}
+          playbackSpeed={playbackSpeed}
+          onEventIndexChange={(index) => {
+            onEventIndexChange(index);
+            if (index >= maxEventIndex) onPlayingChange(false);
+          }}
+          onPlayingChange={onPlayingChange}
+          onPlaybackSpeedChange={onPlaybackSpeedChange}
+        />
+      </div>
+
+      <div className="simulation-live-boxscores mt-3">
+        <div className="simulation-boxscore-panel">
+          <div className="simulation-boxscore-title">
+            <span>Live batting boxscore</span>
+            <strong>{activePitch ? `Through pitch ${activePitch.pitch_number}` : "Pre-game"}</strong>
+          </div>
+          <div className="table-responsive simulation-table-wrap simulation-boxscore-table">
+            <table className="table align-items-center mb-0 mlb-ev-table">
+              <thead>
+                <tr>
+                  <th>Team</th>
+                  <th>Batter</th>
+                  <th className="text-center">AB</th>
+                  <th className="text-center">H</th>
+                  <th className="text-center">HR</th>
+                  <th className="text-center">TB</th>
+                  <th className="text-center">RBI</th>
+                  <th className="text-center">BB</th>
+                  <th className="text-center">K</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveBoxScore.batters.map((row) => (
+                  <tr key={row.key} className={row.name === activePitch?.batter ? "simulation-active-row" : ""}>
+                    <td className="fw-bold">{row.team}</td>
+                    <td className="fw-bold">{row.name}</td>
+                    <td className="text-center">{row.ab}</td>
+                    <td className="text-center">{row.h}</td>
+                    <td className="text-center">{row.hr}</td>
+                    <td className="text-center">{row.tb}</td>
+                    <td className="text-center">{row.rbi}</td>
+                    <td className="text-center">{row.bb}</td>
+                    <td className="text-center">{row.k}</td>
+                  </tr>
+                ))}
+                {liveBoxScore.batters.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="text-center text-secondary py-3">
+                      Advance the simulation to populate the live boxscore.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="simulation-boxscore-panel">
+          <div className="simulation-boxscore-title">
+            <span>Live pitching line</span>
+            <strong>{result.game.away_abbreviation} @ {result.game.home_abbreviation}</strong>
+          </div>
+          <div className="table-responsive simulation-table-wrap simulation-boxscore-table">
+            <table className="table align-items-center mb-0 mlb-ev-table">
+              <thead>
+                <tr>
+                  <th>Team</th>
+                  <th>Pitcher</th>
+                  <th className="text-center">IP</th>
+                  <th className="text-center">P</th>
+                  <th className="text-center">K</th>
+                  <th className="text-center">H</th>
+                  <th className="text-center">HR</th>
+                  <th className="text-center">BB</th>
+                  <th className="text-center">R</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveBoxScore.pitchers.map((row) => (
+                  <tr key={row.key} className={row.name === activePitch?.pitcher ? "simulation-active-row" : ""}>
+                    <td className="fw-bold">{row.team}</td>
+                    <td className="fw-bold">{row.name}</td>
+                    <td className="text-center">{formatInningsPitched(row.outs)}</td>
+                    <td className="text-center">{row.pitches}</td>
+                    <td className="text-center">{row.k}</td>
+                    <td className="text-center">{row.h}</td>
+                    <td className="text-center">{row.hr}</td>
+                    <td className="text-center">{row.bb}</td>
+                    <td className="text-center">{row.r}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div className="simulation-meta-grid simulation-meta-grid-compact mt-3">
         <div>
-          <span>Away starter</span>
+          <span>{result.game.away_abbreviation} starter</span>
           <strong>{result.inputs.away_starter ?? "-"}</strong>
         </div>
         <div>
-          <span>Home starter</span>
+          <span>{result.game.home_abbreviation} starter</span>
           <strong>{result.inputs.home_starter ?? "-"}</strong>
         </div>
         <div>
-          <span>Weather</span>
-          <strong>{result.inputs.weather_mode ?? "-"}</strong>
+          <span>Weather source</span>
+          <strong>{weatherSourceLabel(result.inputs.weather_mode, result.game.weather_snapshot_count)}</strong>
         </div>
         <div>
           <span>Umpire</span>
@@ -682,35 +1297,31 @@ function SimulationResults({
       </div>
 
       <div className="row g-4 mt-1">
-        <div className="col-lg-5">
-          <SimulationField events={events} activeIndex={activeIndex} />
-          {events.length > 0 && (
-            <div className="simulation-scrub mt-3">
-              <button
-                type="button"
-                className="btn btn-sm btn-outline-dark mb-0"
-                onClick={() => onEventIndexChange(Math.max(0, activeIndex - 1))}
-              >
-                <i className="material-symbols-rounded">chevron_left</i>
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={maxEventIndex}
-                value={activeIndex}
-                onChange={(event) => onEventIndexChange(Number(event.target.value))}
-              />
-              <button
-                type="button"
-                className="btn btn-sm btn-outline-dark mb-0"
-                onClick={() => onEventIndexChange(Math.min(maxEventIndex, activeIndex + 1))}
-              >
-                <i className="material-symbols-rounded">chevron_right</i>
-              </button>
-            </div>
-          )}
+        <div className="col-xl-5">
+          <div className="table-responsive simulation-table-wrap">
+            <table className="table align-items-center mb-0 mlb-ev-table">
+              <thead>
+                <tr>
+                  <th>Pitcher</th>
+                  <th className="text-center">K</th>
+                  <th className="text-center">Pitches</th>
+                  <th className="text-center">Runs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.pitchers.slice(0, 6).map((row) => (
+                  <tr key={String(row.player_id)}>
+                    <td className="fw-bold">{recordText(row, "name")}</td>
+                    <td className="text-center">{recordNumber(row, "avg_strikeouts", 2)}</td>
+                    <td className="text-center">{recordNumber(row, "avg_pitches", 1)}</td>
+                    <td className="text-center">{recordNumber(row, "avg_runs_allowed", 2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div className="col-lg-7">
+        <div className="col-xl-7">
           <div className="table-responsive simulation-table-wrap">
             <table className="table align-items-center mb-0 mlb-ev-table">
               <thead>
@@ -741,55 +1352,48 @@ function SimulationResults({
       </div>
 
       <div className="row g-4 mt-1">
-        <div className="col-lg-5">
-          <div className="table-responsive simulation-table-wrap">
-            <table className="table align-items-center mb-0 mlb-ev-table">
-              <thead>
-                <tr>
-                  <th>Pitcher</th>
-                  <th className="text-center">K</th>
-                  <th className="text-center">Pitches</th>
-                  <th className="text-center">Runs</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.pitchers.slice(0, 6).map((row) => (
-                  <tr key={String(row.player_id)}>
-                    <td className="fw-bold">{recordText(row, "name")}</td>
-                    <td className="text-center">{recordNumber(row, "avg_strikeouts", 2)}</td>
-                    <td className="text-center">{recordNumber(row, "avg_pitches", 1)}</td>
-                    <td className="text-center">{recordNumber(row, "avg_runs_allowed", 2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div className="col-lg-7">
+        <div className="col-12">
           <div className="table-responsive simulation-table-wrap simulation-pitch-log">
             <table className="table align-items-center mb-0 mlb-ev-table">
               <thead>
                 <tr>
                   <th>#</th>
+                  <th>Inning</th>
                   <th>Count</th>
                   <th>Batter</th>
+                  <th>Pitcher</th>
                   <th>Pitch</th>
                   <th>Call</th>
+                  <th>Runners</th>
+                  <th>Weather</th>
                   <th>Score</th>
                 </tr>
               </thead>
               <tbody>
                 {pitchRows.map((row) => (
-                  <tr key={row.pitch_number}>
+                  <tr
+                    key={row.pitch_number}
+                    className={row.pitch_number === activePitch?.pitch_number ? "simulation-active-row" : ""}
+                    onClick={() => {
+                      const nextIndex = timeline.findIndex((item) => item.pitch_number === row.pitch_number);
+                      if (nextIndex >= 0) onEventIndexChange(nextIndex);
+                    }}
+                  >
                     <td>{row.pitch_number}</td>
                     <td>
-                      {row.balls_before}-{row.strikes_before}
+                      {row.half} {row.inning}
                     </td>
+                    <td>{formatPitchCount(row)}</td>
                     <td className="fw-bold">{row.batter}</td>
+                    <td>{row.pitcher}</td>
                     <td>
                       {row.pitch_type} {formatNumber(row.pitch_mph, 1)}
                     </td>
                     <td>{formatSimulationResult(row.result ?? row.call)}</td>
+                    <td>{formatBaseRunners(row)}</td>
+                    <td>
+                      {formatNumber(row.temperature_f, 0)}F / {formatNumber(row.wind_speed_mph, 1)} mph
+                    </td>
                     <td>{row.score}</td>
                   </tr>
                 ))}
@@ -824,6 +1428,10 @@ export default function MlbPage() {
   const [simulationIterations, setSimulationIterations] = useState(250);
   const [simulationSeed, setSimulationSeed] = useState("");
   const [simulationEventIndex, setSimulationEventIndex] = useState(0);
+  const [simulationPlaybackMode, setSimulationPlaybackMode] = useState<SimulationPlaybackMode>("full");
+  const [simulationPlaying, setSimulationPlaying] = useState(false);
+  const [simulationPlaybackSpeed, setSimulationPlaybackSpeed] = useState<SimulationPlaybackSpeed>(1);
+  const simulationResultsRef = useRef<HTMLDivElement | null>(null);
   const resolvedMlbDate = resolveMlbSlateDate(predictionDay, userRegion);
 
   const loadPredictions = async (force = false) => {
@@ -881,6 +1489,7 @@ export default function MlbPage() {
     setSimulationRunState(initialSimulationRunState);
     setSelectedSimulationGamePk(null);
     setSimulationEventIndex(0);
+    setSimulationPlaying(false);
   };
 
   const loadSimulationGames = async () => {
@@ -906,13 +1515,14 @@ export default function MlbPage() {
     if (!selectedSimulationGamePk) return;
     setSimulationRunState((current) => ({ ...current, loading: true, error: null }));
     setSimulationEventIndex(0);
+    setSimulationPlaying(false);
     try {
       const parsedSeed = simulationSeed.trim() ? Number(simulationSeed.trim()) : undefined;
       const data = await runMlbGameSimulation({
         game_pk: selectedSimulationGamePk,
         iterations: simulationIterations,
         seed: Number.isFinite(parsedSeed) ? parsedSeed : undefined,
-        pitch_log_limit: 900,
+        pitch_log_limit: 1400,
       });
       setSimulationRunState({ data, loading: false, error: null });
     } catch (error) {
@@ -939,6 +1549,14 @@ export default function MlbPage() {
       void loadSimulationGames();
     }
   }, [mainTab, resolvedMlbDate]);
+
+  useEffect(() => {
+    if (mainTab !== "simulation" || !simulationRunState.data || simulationRunState.loading) return;
+    window.requestAnimationFrame(() => {
+      const stage = simulationResultsRef.current?.querySelector<HTMLElement>(".simulation-stage-full");
+      (stage ?? simulationResultsRef.current)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [mainTab, simulationRunState.data, simulationRunState.loading]);
 
   const handleDayChange = (day: MlbDay) => {
     setPredictionDay(day);
@@ -1051,7 +1669,7 @@ export default function MlbPage() {
       <section className="dashboard-section py-5">
         <div className="container">
           <div className="row g-4">
-            <div className="col-lg-8">
+            <div className={mainTab === "simulation" ? "col-lg-12" : "col-lg-8"}>
               <div className="section-card mb-4">
                 <div className="section-header d-flex flex-wrap align-items-center justify-content-between gap-3">
                   <div>
@@ -1331,6 +1949,7 @@ export default function MlbPage() {
                               setSelectedSimulationGamePk(Number(event.target.value));
                               setSimulationRunState(initialSimulationRunState);
                               setSimulationEventIndex(0);
+                              setSimulationPlaying(false);
                             }}
                           >
                             {simulationGames.length === 0 && <option value="">No games</option>}
@@ -1383,15 +2002,19 @@ export default function MlbPage() {
                     </div>
                     {simulationGamesState.loading && <p className="text-secondary mt-3">Loading simulation slate...</p>}
                     {simulationGamesState.error && <div className="alert alert-danger text-sm mt-3">{simulationGamesState.error}</div>}
-                    {selectedSimulationGame && (
+                    {selectedSimulationGame && !simulationRunState.data && (
                       <div className="simulation-game-strip mt-4">
                         <div>
                           <span>Venue</span>
                           <strong>{selectedSimulationGame.venue_name ?? "-"}</strong>
                         </div>
                         <div>
-                          <span>Weather rows</span>
-                          <strong>{selectedSimulationGame.weather_rows ?? 0}</strong>
+                          <span>Weather source</span>
+                          <strong>
+                            {selectedSimulationGame.weather_available
+                              ? `${selectedSimulationGame.weather_rows ?? 0} pitch-weather points`
+                              : "Game forecast"}
+                          </strong>
                         </div>
                         <div>
                           <span>Lineups</span>
@@ -1409,17 +2032,26 @@ export default function MlbPage() {
                     )}
                     {simulationRunState.error && <div className="alert alert-danger text-sm mt-3">{simulationRunState.error}</div>}
                     {simulationRunState.data && (
+                      <div ref={simulationResultsRef}>
                       <SimulationResults
                         result={simulationRunState.data}
                         activeEventIndex={simulationEventIndex}
                         onEventIndexChange={setSimulationEventIndex}
+                        playbackMode={simulationPlaybackMode}
+                        onPlaybackModeChange={setSimulationPlaybackMode}
+                        isPlaying={simulationPlaying}
+                        onPlayingChange={setSimulationPlaying}
+                        playbackSpeed={simulationPlaybackSpeed}
+                        onPlaybackSpeedChange={setSimulationPlaybackSpeed}
                       />
+                      </div>
                     )}
                   </>
                 )}
               </div>
             </div>
 
+            {mainTab !== "simulation" && (
             <div className="col-lg-4">
               <div className="section-card mb-4 prediction-focus">
                 <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Slate</p>
@@ -1469,6 +2101,7 @@ export default function MlbPage() {
                 </div>
               </div>
             </div>
+            )}
           </div>
         </div>
       </section>

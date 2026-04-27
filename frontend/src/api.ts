@@ -372,28 +372,61 @@ export type MlbSimulationFieldEvent = {
   field_y: number;
 };
 
+export type MlbSimulationBaseRunner = {
+  player_id: number;
+  name: string;
+} | null;
+
 export type MlbSimulationPitchLogRow = {
   pitch_number: number;
   inning: number;
   half: string;
   outs_before: number;
+  outs_after?: number;
   balls_before: number;
   strikes_before: number;
+  balls_after?: number;
+  strikes_after?: number;
   bases_before: string;
+  bases_after?: string;
+  base_runners_before?: {
+    first?: MlbSimulationBaseRunner;
+    second?: MlbSimulationBaseRunner;
+    third?: MlbSimulationBaseRunner;
+  };
+  base_runners_after?: {
+    first?: MlbSimulationBaseRunner;
+    second?: MlbSimulationBaseRunner;
+    third?: MlbSimulationBaseRunner;
+  };
   batter: string;
+  batter_id?: number;
   pitcher: string;
+  pitcher_id?: number;
   pitch_type: string;
   pitch_description?: string;
   pitch_mph?: number;
+  pitch_break_horizontal?: number;
+  pitch_break_vertical?: number;
+  pitch_spin_rate?: number;
   call: string;
+  plate_appearance_result?: string | null;
+  runs_scored?: number;
   result?: string;
   launch_speed?: number;
   launch_angle?: number;
+  spray_degrees?: number;
   distance_ft?: number;
+  fence_ft?: number;
   field_x?: number;
   field_y?: number;
+  wind_out_mph?: number;
   temperature_f?: number;
   wind_speed_mph?: number;
+  wind_gust_mph?: number;
+  wind_direction_deg?: number | null;
+  precipitation_probability?: number | null;
+  score_before?: string;
   score: string;
 };
 
