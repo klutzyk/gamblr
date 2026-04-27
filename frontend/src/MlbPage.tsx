@@ -2,19 +2,17 @@ import { useEffect, useState } from "react";
 import "./App.css";
 import {
   getMlbHrEvBoard,
-  getMlbMarkets,
   getMlbPredictionSlate,
   type MlbHrEvBoardResponse,
   type MlbHrEvRow,
   type MlbMarketName,
-  type MlbMarketStatus,
   type MlbPredictionSlateResponse,
   type MlbPredictionRow,
 } from "./api";
 import logo from "./assets/logo2.png";
 
 type UserRegion = "au" | "us" | "uk";
-type MainTab = "predictions" | "home_run_ev" | "model_status";
+type MainTab = "predictions" | "home_run_ev";
 type MlbDay = "auto" | "today" | "tomorrow" | "yesterday";
 type MlbSort = "value_desc" | "value_asc" | "lineup_asc" | "player_az";
 type ApiState<T> = {
@@ -231,6 +229,79 @@ function getMatchup(row: MlbPredictionRow) {
   return row.is_home ? `${opponent} @ ${team}` : `${team} @ ${opponent}`;
 }
 
+function getPlayerStatsSearchUrl(playerName: string | null | undefined): string {
+  const safeName =
+    typeof playerName === "string" && playerName.trim().length > 0
+      ? playerName.trim()
+      : "MLB player";
+  const url = new URL("https://www.google.com/search");
+  url.searchParams.set("q", `${safeName} MLB stats`);
+  return url.toString();
+}
+
+function getMlbHeadshotUrl(playerId: number | null | undefined) {
+  if (!playerId) return "";
+  return `https://img.mlbstatic.com/mlb-photos/image/upload/w_213,q_100/v1/people/${playerId}/headshot/67/current`;
+}
+
+function getVenueText(row: MlbPredictionRow) {
+  if (!row.venue_name) return null;
+  const location = [row.venue_city, row.venue_state].filter(Boolean).join(", ");
+  return location ? `${row.venue_name}, ${location}` : row.venue_name;
+}
+
+function formatWeatherContext(row: MlbPredictionRow) {
+  const tempF =
+    typeof row.temperature_f === "number"
+      ? row.temperature_f
+      : typeof row.temperature_2m_c === "number"
+        ? row.temperature_2m_c * 1.8 + 32
+        : null;
+  const windMph =
+    typeof row.wind_speed_10m_kph === "number" ? row.wind_speed_10m_kph * 0.621371 : null;
+  const parts = [
+    typeof tempF === "number" ? `${Math.round(tempF)}°F` : null,
+    row.wind_text || (typeof windMph === "number" ? `Wind ${Math.round(windMph)} mph` : null),
+    row.roof_type ? row.roof_type : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" • ") : null;
+}
+
+function normalizeRecentGames(value: MlbPredictionRow["recent_games"]) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function recentStatKeyForMarket(market: MlbMarketName) {
+  if (market === "batter_home_runs") return "home_runs";
+  if (market === "batter_hits") return "hits";
+  if (market === "batter_total_bases") return "total_bases";
+  return "strikeouts";
+}
+
+function recentStatLabelForMarket(market: MlbMarketName) {
+  if (market === "batter_home_runs") return "HR";
+  if (market === "batter_hits") return "H";
+  if (market === "batter_total_bases") return "TB";
+  return "K";
+}
+
+function recentValuesForMarket(row: MlbPredictionRow, market: MlbMarketName) {
+  const key = recentStatKeyForMarket(market);
+  return normalizeRecentGames(row.recent_games)
+    .slice(0, 5)
+    .map((game) => Number(game[key] ?? 0));
+}
+
 function sortPredictionRows(rows: MlbPredictionRow[], market: MlbMarketName, sort: MlbSort) {
   const config = MARKET_CONFIG[market];
   return [...rows].sort((a, b) => {
@@ -270,16 +341,40 @@ function MlbPredictionsGrid({
 
   return (
     <div className="predictions-grid mt-4">
-      {rows.map((row) => (
+      {rows.map((row) => {
+        const headshotUrl = getMlbHeadshotUrl(row.player_id);
+        const venue = getVenueText(row);
+        const weather = formatWeatherContext(row);
+        const recentValues = recentValuesForMarket(row, market);
+        const recentLabel = recentStatLabelForMarket(market);
+        return (
         <div key={`${market}-${row.game_pk}-${row.player_id}`} className="card card-body border-radius-xl shadow-lg">
           <div className="d-flex justify-content-between align-items-start mb-3">
             <div className="flex-grow-1">
               <div className="d-flex align-items-center gap-2 mb-1">
                 <div className="player-avatar mlb-player-avatar">
+                  {headshotUrl && (
+                    <img
+                      src={headshotUrl}
+                      alt={row.player_name}
+                      onError={(event) => {
+                        event.currentTarget.style.display = "none";
+                      }}
+                    />
+                  )}
                   <span className="avatar-fallback">{getInitials(row.player_name)}</span>
                 </div>
                 <div>
-                  <h5 className="mb-1">{row.player_name}</h5>
+                  <h5 className="mb-1">
+                    <a
+                      href={getPlayerStatsSearchUrl(row.player_name)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="player-name-link"
+                    >
+                      {row.player_name}
+                    </a>
+                  </h5>
                   <span className="badge badge-sm bg-gradient-primary mb-2">
                     {row.team_abbreviation ?? "-"}
                   </span>
@@ -303,10 +398,31 @@ function MlbPredictionsGrid({
                 {formatGameDateTime(row.start_time_utc, userRegion)} ({REGION_SHORT[userRegion]})
               </span>
             </div>
-            <p className="text-xs text-secondary mb-2">MLB/US slate date: {row.game_date}</p>
+            {venue && (
+              <div className="d-flex align-items-center mb-2">
+                <i className="material-symbols-rounded text-secondary me-2">location_on</i>
+                <span className="text-sm text-secondary">{venue}</span>
+              </div>
+            )}
+            {weather && (
+              <div className="d-flex align-items-center mb-2">
+                <i className="material-symbols-rounded text-secondary me-2">partly_cloudy_day</i>
+                <span className="text-sm text-secondary">{weather}</span>
+              </div>
+            )}
             <div className="prediction-stat-tag mt-3">
               <span className="badge badge-sm bg-gradient-info">{config.label}</span>
             </div>
+            {recentValues.length > 0 && (
+              <div className="mlb-recent-form mt-3">
+                <span>Last 5 {recentLabel}</span>
+                <div>
+                  {recentValues.map((value, index) => (
+                    <strong key={`${row.player_id}-${market}-recent-${index}`}>{value}</strong>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="prediction-band confidence-mid mt-3">
               <div className="prediction-band-row">
@@ -338,14 +454,15 @@ function MlbPredictionsGrid({
             </div>
           </div>
         </div>
-      ))}
+      );
+      })}
     </div>
   );
 }
 
 function EvRowTable({ rows, userRegion }: { rows: MlbHrEvRow[]; userRegion: UserRegion }) {
   if (!rows.length) {
-    return <p className="text-secondary mt-3 mb-0">No matched HR prices for this view.</p>;
+    return <p className="text-secondary mt-3 mb-0">No home run prices are available for this slate.</p>;
   }
 
   return (
@@ -357,11 +474,11 @@ function EvRowTable({ rows, userRegion }: { rows: MlbHrEvRow[]; userRegion: User
             <th>Matchup</th>
             <th className="text-center">Order</th>
             <th className="text-center">Time</th>
-            <th className="text-center">Model</th>
-            <th className="text-center">FanDuel</th>
-            <th className="text-center">Implied</th>
+            <th className="text-center">Projected</th>
+            <th className="text-center">Odds</th>
+            <th className="text-center">Book Chance</th>
             <th className="text-center">Edge</th>
-            <th className="text-center">EV / $1</th>
+            <th className="text-center">Value / $1</th>
           </tr>
         </thead>
         <tbody>
@@ -400,28 +517,6 @@ function EvRowTable({ rows, userRegion }: { rows: MlbHrEvRow[]; userRegion: User
   );
 }
 
-function ModelStatusGrid({ markets }: { markets: MlbMarketStatus[] }) {
-  if (!markets.length) {
-    return <p className="text-secondary mt-3">No model status loaded.</p>;
-  }
-
-  return (
-    <div className="row g-3 mt-1">
-      {markets.map((market) => (
-        <div className="col-md-6" key={market.market}>
-          <div className="mlb-stat-tile h-100">
-            <span>{String(market.market).replaceAll("_", " ")}</span>
-            <strong>{market.trained ? "Trained" : "Missing"}</strong>
-            <p className="text-xs text-secondary mb-0 mt-2">
-              Rows {market.rows_total ?? "-"} | Split {market.split_date ?? "-"}
-            </p>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export default function MlbPage() {
   const [userRegion, setUserRegion] = useState<UserRegion>("au");
   const [predictionDay, setPredictionDay] = useState<MlbDay>("auto");
@@ -436,13 +531,6 @@ export default function MlbPage() {
     useState<ApiState<MlbPredictionSlateResponse>>(initialPredictionsState);
   const [evState, setEvState] = useState<ApiState<MlbHrEvBoardResponse>>(initialEvState);
   const [evRequestKey, setEvRequestKey] = useState<string | null>(null);
-  const [marketStatus, setMarketStatus] = useState<ApiState<{ markets: MlbMarketStatus[] }>>({
-    data: null,
-    loading: false,
-    error: null,
-  });
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const resolvedMlbDate = resolveMlbSlateDate(predictionDay, userRegion);
 
   const loadPredictions = async (force = false) => {
@@ -490,21 +578,7 @@ export default function MlbPage() {
       setEvState({
         data: null,
         loading: false,
-        error: error instanceof Error ? error.message : "Failed to load MLB EV board.",
-      });
-    }
-  };
-
-  const loadStatus = async () => {
-    setMarketStatus((current) => ({ ...current, loading: true, error: null }));
-    try {
-      const data = await getMlbMarkets();
-      setMarketStatus({ data: { markets: data.markets }, loading: false, error: null });
-    } catch (error) {
-      setMarketStatus({
-        data: null,
-        loading: false,
-        error: error instanceof Error ? error.message : "Failed to load model status.",
+        error: error instanceof Error ? error.message : "Failed to load home run prices.",
       });
     }
   };
@@ -518,12 +592,6 @@ export default function MlbPage() {
       void loadEvBoard();
     }
   }, [mainTab, resolvedMlbDate, bookmaker]);
-
-  useEffect(() => {
-    if (mainTab === "model_status") {
-      void loadStatus();
-    }
-  }, [mainTab]);
 
   const handleDayChange = (day: MlbDay) => {
     setPredictionDay(day);
@@ -539,28 +607,10 @@ export default function MlbPage() {
     setEvRequestKey(null);
   };
 
-  const forceRefreshSlate = async () => {
-    setRefreshing(true);
-    setRefreshMessage(null);
-    try {
-      await loadPredictions(true);
-      if (mainTab === "home_run_ev") {
-        await loadEvBoard(true);
-      }
-      setRefreshMessage("Slate data and predictions refreshed.");
-    } catch (error) {
-      setRefreshMessage(error instanceof Error ? error.message : "Refresh failed.");
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
   const evRows = evState.data ? (evView === "positive" ? evState.data.positive_ev : evState.data.all) : [];
   const bestEv = evState.data?.positive_ev[0] ?? null;
   const activeMarketRows = predictionsState.data?.markets?.[market]?.data ?? [];
   const activeMarketCount = predictionsState.data?.markets?.[market]?.count ?? 0;
-  const activeMissingFeatures =
-    predictionsState.data?.markets?.[market]?.missing_model_feature_count ?? 0;
   const normalizedSearch = predictionSearch.trim().toLowerCase();
   const teamOptions = Array.from(
     new Set(
@@ -585,8 +635,8 @@ export default function MlbPage() {
     predictionSort
   );
   const topPrediction = filteredPredictionRows[0] ?? activeMarketRows[0] ?? null;
-  const slateDate = predictionsState.data?.date ?? evState.data?.date ?? resolvedMlbDate;
   const dayLabelSuffix = REGION_SHORT[userRegion];
+  const selectedDayLabel = DAY_OPTIONS.find((option) => option.value === predictionDay)?.label ?? "Slate";
   const evLoadedForCurrentView = Boolean(evState.data && evRequestKey === `${resolvedMlbDate}:${bookmaker}`);
 
   return (
@@ -637,12 +687,9 @@ export default function MlbPage() {
             <div className="col-lg-8 col-xl-7">
               <div className="hero-copy">
                 <p className="hero-slogan mb-3">MLB</p>
-                <h1 className="display-4 text-white mb-3">Baseball prediction hub.</h1>
+                <h1 className="display-4 text-white mb-3">MLB betting dashboard</h1>
                 <p className="lead text-white opacity-8 mb-4">
-                  Home runs, hits, total bases, pitcher strikeouts, and FanDuel HR value on one MLB slate.
-                </p>
-                <p className="text-sm text-white opacity-8 mb-0">
-                  Dates use the official MLB slate date. Times display in the selected region.
+                  Player projections, matchup context, and home run value in one place.
                 </p>
               </div>
             </div>
@@ -660,15 +707,10 @@ export default function MlbPage() {
                     <h3 className="mb-1">MLB Hub</h3>
                     <p className="text-secondary mb-0">
                       {mainTab === "predictions"
-                        ? `${MARKET_CONFIG[market].label} for ${slateDate}`
-                        : mainTab === "home_run_ev"
-                          ? `FanDuel HR value for ${slateDate}`
-                          : "Model and data status"}
+                        ? MARKET_CONFIG[market].label
+                        : "Home Run Value"}
                     </p>
                   </div>
-                  <span className="badge badge-sm bg-gradient-light text-dark">
-                    Official MLB date
-                  </span>
                 </div>
 
                 <div className="nav-wrapper position-relative mt-4">
@@ -692,33 +734,17 @@ export default function MlbPage() {
                         style={{ cursor: "pointer" }}
                       >
                         <i className="material-symbols-rounded me-2">paid</i>
-                        HR EV
-                      </a>
-                    </li>
-                    <li className="nav-item">
-                      <a
-                        className={`nav-link mb-0 px-0 py-1 ${mainTab === "model_status" ? "active" : ""}`}
-                        onClick={() => setMainTab("model_status")}
-                        role="tab"
-                        style={{ cursor: "pointer" }}
-                      >
-                        <i className="material-symbols-rounded me-2">query_stats</i>
-                        Model Status
+                        Home Run Value
                       </a>
                     </li>
                   </ul>
                 </div>
-
-                {refreshMessage && <div className="alert alert-light border text-sm py-2 mt-3">{refreshMessage}</div>}
 
                 {mainTab === "predictions" && (
                   <>
                     <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mt-4 mb-4">
                       <div>
                         <h4 className="mb-1">Predictions</h4>
-                        <p className="text-xs text-secondary mb-0">
-                          {DAY_OPTIONS.find((option) => option.value === predictionDay)?.label} ({dayLabelSuffix}) maps to MLB/US slate {resolvedMlbDate}.
-                        </p>
                       </div>
                       <div className="d-flex flex-wrap gap-2 align-items-center">
                         <div className="stat-toggle">
@@ -819,11 +845,7 @@ export default function MlbPage() {
                       </div>
                     </div>
                     <div className="d-flex justify-content-between align-items-center gap-3">
-                      <span className="text-xs text-secondary">
-                        {filteredPredictionRows.length} shown from {activeMarketCount} rows
-                        {predictionsState.data?.source ? ` | ${predictionsState.data.source}` : ""}
-                      </span>
-                      <span className="text-xs text-secondary">US slate {resolvedMlbDate} | Missing features {activeMissingFeatures}</span>
+                      <span className="text-xs text-secondary">{filteredPredictionRows.length} players</span>
                     </div>
                     {predictionsState.error && <div className="alert alert-danger text-sm mt-3">{predictionsState.error}</div>}
                     {predictionsState.loading && <p className="text-secondary mt-3">Loading MLB predictions...</p>}
@@ -881,8 +903,8 @@ export default function MlbPage() {
                             value={evView}
                             onChange={(event) => setEvView(event.target.value as "positive" | "all")}
                           >
-                            <option value="positive">Positive EV</option>
-                            <option value="all">All matched</option>
+                            <option value="positive">Best Value</option>
+                            <option value="all">All Prices</option>
                           </select>
                         </div>
                         <button
@@ -891,28 +913,16 @@ export default function MlbPage() {
                           onClick={() => void loadEvBoard()}
                           disabled={evState.loading || evLoadedForCurrentView}
                         >
-                          {evState.loading ? "Loading..." : evLoadedForCurrentView ? "Loaded" : "Load HR EV"}
+                          {evState.loading ? "Loading..." : evLoadedForCurrentView ? "Prices Loaded" : "Load Prices"}
                         </button>
                       </div>
                       <span className="text-xs text-secondary">
-                        {evState.data?.matched ?? 0} matched | {evState.data?.props_count ?? 0} props
+                        {evState.data?.matched ?? 0} players priced
                       </span>
                     </div>
-                    <p className="text-xs text-secondary mt-2 mb-0">
-                      PropLine is only called from this tab. Stored odds are reused for 30 minutes unless forced.
-                      {evState.data?.odds_cache?.source ? ` Odds source: ${evState.data.odds_cache.source}.` : ""}
-                    </p>
                     {evState.error && <div className="alert alert-danger text-sm mt-3">{evState.error}</div>}
-                    {evState.loading && <p className="text-secondary mt-3">Loading MLB EV board...</p>}
+                    {evState.loading && <p className="text-secondary mt-3">Loading home run prices...</p>}
                     {!evState.loading && <EvRowTable rows={evRows.slice(0, 40)} userRegion={userRegion} />}
-                  </>
-                )}
-
-                {mainTab === "model_status" && (
-                  <>
-                    {marketStatus.error && <div className="alert alert-danger text-sm mt-3">{marketStatus.error}</div>}
-                    {marketStatus.loading && <p className="text-secondary mt-3">Loading model status...</p>}
-                    {!marketStatus.loading && <ModelStatusGrid markets={marketStatus.data?.markets ?? []} />}
                   </>
                 )}
               </div>
@@ -920,8 +930,8 @@ export default function MlbPage() {
 
             <div className="col-lg-4">
               <div className="section-card mb-4 prediction-focus">
-                <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Slate Snapshot</p>
-                <h4 className="mb-3">{slateDate}</h4>
+                <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Slate</p>
+                <h4 className="mb-3">{selectedDayLabel} ({dayLabelSuffix})</h4>
                 <div className="row g-3">
                   <div className="col-6">
                     <div className="mlb-stat-tile">
@@ -931,7 +941,7 @@ export default function MlbPage() {
                   </div>
                   <div className="col-6">
                     <div className="mlb-stat-tile">
-                      <span>Positive EV</span>
+                      <span>Best Value</span>
                       <strong>{evState.data?.positive_ev.length ?? 0}</strong>
                     </div>
                   </div>
@@ -944,28 +954,12 @@ export default function MlbPage() {
                   </p>
                 </div>
                 <div className="border-top pt-3 mt-3">
-                  <p className="text-xs text-secondary fw-bold text-uppercase mb-2">Best HR EV</p>
+                  <p className="text-xs text-secondary fw-bold text-uppercase mb-2">Best Value</p>
                   <h5 className="mb-1">{bestEv?.player_name ?? "-"}</h5>
                   <p className="text-sm text-secondary mb-0">
-                    {bestEv ? `${formatAmerican(bestEv.american_odds)} | ${formatMoney(bestEv.ev_per_dollar)} per $1` : "Open HR EV tab to load"}
+                    {bestEv ? `${formatAmerican(bestEv.american_odds)} | ${formatMoney(bestEv.ev_per_dollar)} per $1` : "Open Home Run Value"}
                   </p>
                 </div>
-              </div>
-
-              <div className="section-card">
-                <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Data</p>
-                <h4 className="mb-2">Quick refresh</h4>
-                <p className="text-sm text-secondary">
-                  The page auto-loads missing schedule and roster data. Use this only to force a fresh slate pull.
-                </p>
-                <button
-                  className="btn btn-outline-dark btn-sm mb-0"
-                  type="button"
-                  onClick={() => void forceRefreshSlate()}
-                  disabled={refreshing}
-                >
-                  {refreshing ? "Refreshing..." : "Force refresh"}
-                </button>
               </div>
             </div>
           </div>

@@ -91,8 +91,16 @@ def _load_candidate_batters(engine, target_date: date) -> pd.DataFrame:
                 g.day_night,
                 g.probable_home_pitcher_id,
                 g.probable_away_pitcher_id,
+                g.weather_condition,
+                g.temperature_f,
+                g.wind_text,
                 ht.abbreviation as home_team_abbreviation,
                 at.abbreviation as away_team_abbreviation,
+                v.name as venue_name,
+                v.city as venue_city,
+                v.state as venue_state,
+                v.roof_type,
+                v.turf_type,
                 v.elevation,
                 v.capacity,
                 v.left_line,
@@ -166,6 +174,46 @@ def _load_candidate_batters(engine, target_date: date) -> pd.DataFrame:
               and b.batting_order is not null
               and b.plate_appearances > 0
             group by b.player_id
+        ),
+        recent_batter_games as (
+            select
+                player_id,
+                jsonb_agg(
+                    jsonb_build_object(
+                        'game_date', game_date,
+                        'matchup', matchup,
+                        'hits', hits,
+                        'home_runs', home_runs,
+                        'total_bases', total_bases,
+                        'strikeouts', strikeouts,
+                        'plate_appearances', plate_appearances
+                    )
+                    order by game_date desc, game_pk desc
+                ) as recent_games
+            from (
+                select
+                    b.player_id,
+                    b.game_pk,
+                    g.official_date as game_date,
+                    at.abbreviation || ' @ ' || ht.abbreviation as matchup,
+                    b.hits,
+                    b.home_runs,
+                    b.total_bases,
+                    b.strikeouts,
+                    b.plate_appearances,
+                    row_number() over (
+                        partition by b.player_id
+                        order by g.official_date desc, b.game_pk desc
+                    ) as rn
+                from mlb_player_game_batting b
+                join mlb_games g on g.game_pk = b.game_pk
+                left join mlb_teams ht on ht.id = g.home_team_id
+                left join mlb_teams at on at.id = g.away_team_id
+                where g.official_date < %(target_date)s
+                  and b.plate_appearances > 0
+            ) ranked
+            where rn <= 5
+            group by player_id
         )
         select
             g.game_pk,
@@ -184,10 +232,19 @@ def _load_candidate_batters(engine, target_date: date) -> pd.DataFrame:
             g.home_team_id,
             g.away_team_id,
             g.venue_id,
+            g.venue_name,
+            g.venue_city,
+            g.venue_state,
+            g.roof_type,
+            g.turf_type,
+            g.weather_condition,
+            g.temperature_f,
+            g.wind_text,
             g.day_night,
             case when c.team_id = g.home_team_id then 1 else 0 end as is_home,
             coalesce(c.batting_order, recent_orders.recent_batting_order)::float as batting_order,
             c.has_posted_lineup,
+            recent_batter_games.recent_games,
             p.current_age as batter_age,
             p.bat_side as batter_bat_side,
             case
@@ -211,6 +268,7 @@ def _load_candidate_batters(engine, target_date: date) -> pd.DataFrame:
             else g.probable_home_pitcher_id
         end
         left join recent_orders on recent_orders.player_id = c.player_id
+        left join recent_batter_games on recent_batter_games.player_id = c.player_id
         where c.player_id is not null
         """,
         engine,
@@ -350,8 +408,16 @@ def _load_candidate_pitchers(engine, target_date: date) -> pd.DataFrame:
                 g.day_night,
                 g.probable_home_pitcher_id,
                 g.probable_away_pitcher_id,
+                g.weather_condition,
+                g.temperature_f,
+                g.wind_text,
                 ht.abbreviation as home_team_abbreviation,
                 at.abbreviation as away_team_abbreviation,
+                v.name as venue_name,
+                v.city as venue_city,
+                v.state as venue_state,
+                v.roof_type,
+                v.turf_type,
                 v.elevation,
                 v.capacity
             from mlb_games g
@@ -375,6 +441,14 @@ def _load_candidate_pitchers(engine, target_date: date) -> pd.DataFrame:
                 home_team_id,
                 away_team_id,
                 venue_id,
+                venue_name,
+                venue_city,
+                venue_state,
+                roof_type,
+                turf_type,
+                weather_condition,
+                temperature_f,
+                wind_text,
                 day_night,
                 1 as is_home,
                 elevation,
@@ -395,20 +469,68 @@ def _load_candidate_pitchers(engine, target_date: date) -> pd.DataFrame:
                 home_team_id,
                 away_team_id,
                 venue_id,
+                venue_name,
+                venue_city,
+                venue_state,
+                roof_type,
+                turf_type,
+                weather_condition,
+                temperature_f,
+                wind_text,
                 day_night,
                 0 as is_home,
                 elevation,
                 capacity
             from games
             where probable_away_pitcher_id is not null
+        ),
+        recent_pitcher_games as (
+            select
+                player_id,
+                jsonb_agg(
+                    jsonb_build_object(
+                        'game_date', game_date,
+                        'matchup', matchup,
+                        'strikeouts', strikeouts,
+                        'innings_pitched', innings_pitched,
+                        'pitches_thrown', pitches_thrown,
+                        'earned_runs', earned_runs
+                    )
+                    order by game_date desc, game_pk desc
+                ) as recent_games
+            from (
+                select
+                    p.player_id,
+                    p.game_pk,
+                    g.official_date as game_date,
+                    at.abbreviation || ' @ ' || ht.abbreviation as matchup,
+                    p.strikeouts,
+                    p.innings_pitched,
+                    p.pitches_thrown,
+                    p.earned_runs,
+                    row_number() over (
+                        partition by p.player_id
+                        order by g.official_date desc, p.game_pk desc
+                    ) as rn
+                from mlb_player_game_pitching p
+                join mlb_games g on g.game_pk = p.game_pk
+                left join mlb_teams ht on ht.id = g.home_team_id
+                left join mlb_teams at on at.id = g.away_team_id
+                where g.official_date < %(target_date)s
+                  and p.is_starter = true
+            ) ranked
+            where rn <= 5
+            group by player_id
         )
         select
             c.*,
+            recent_pitcher_games.recent_games,
             p.full_name as player_name,
             p.current_age as pitcher_age,
             p.pitch_hand as pitcher_pitch_hand
         from candidates c
         left join mlb_players p on p.id = c.player_id
+        left join recent_pitcher_games on recent_pitcher_games.player_id = c.player_id
         """,
         engine,
         params={"target_date": target_date},
@@ -620,6 +742,19 @@ def scored_rows_for_api(scored: pd.DataFrame, *, limit: int | None = None) -> li
         "team_abbreviation",
         "opponent_team_id",
         "opponent_team_abbreviation",
+        "venue_name",
+        "venue_city",
+        "venue_state",
+        "roof_type",
+        "turf_type",
+        "weather_condition",
+        "temperature_f",
+        "wind_text",
+        "temperature_2m_c",
+        "wind_speed_10m_kph",
+        "wind_gusts_10m_kph",
+        "park_factor_hr",
+        "recent_games",
         "is_home",
         "batting_order",
         "has_posted_lineup",
