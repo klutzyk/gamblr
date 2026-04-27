@@ -27,6 +27,7 @@ from app.api.mlb import (
     odds as mlb_odds,
     predictions as mlb_predictions,
     db_routes as mlb_db_routes,
+    simulation as mlb_simulation,
 )
 from app.db.base import Base
 from app.db.session import engine
@@ -69,6 +70,7 @@ app.include_router(mlb_health.router, prefix="/mlb", tags=["MLB"])
 app.include_router(mlb_predictions.router, prefix="/mlb/predictions", tags=["MLB"])
 app.include_router(mlb_odds.router, prefix="/mlb/odds", tags=["MLB"])
 app.include_router(mlb_db_routes.router, prefix="/mlb/db", tags=["MLB"])
+app.include_router(mlb_simulation.router, prefix="/mlb/simulation", tags=["MLB"])
 # @app.on_event("startup")
 # async def startup():
 #     async with engine.begin() as conn:

@@ -324,6 +324,127 @@ export type MlbMarketsResponse = {
   markets: MlbMarketStatus[];
 };
 
+export type MlbSimulationGame = {
+  game_pk: number;
+  official_date: string;
+  start_time_utc?: string | null;
+  status_code?: string | null;
+  detailed_state?: string | null;
+  home_team_id: number;
+  home_team: string;
+  home_abbreviation: string;
+  away_team_id: number;
+  away_team: string;
+  away_abbreviation: string;
+  home_pitcher_id?: number | null;
+  home_pitcher?: string | null;
+  away_pitcher_id?: number | null;
+  away_pitcher?: string | null;
+  venue_name?: string | null;
+  roof_type?: string | null;
+  weather_rows?: number;
+  weather_available?: boolean;
+  home_lineup_count?: number;
+  away_lineup_count?: number;
+  lineups_available?: boolean;
+};
+
+export type MlbSimulationGamesResponse = {
+  sport: "mlb" | string;
+  status: string;
+  date: string;
+  count: number;
+  games: MlbSimulationGame[];
+};
+
+export type MlbSimulationFieldEvent = {
+  pitch_number: number;
+  inning: number;
+  half: string;
+  batter: string;
+  pitcher: string;
+  result: string;
+  launch_speed?: number;
+  launch_angle?: number;
+  spray_degrees?: number;
+  distance_ft?: number;
+  field_x: number;
+  field_y: number;
+};
+
+export type MlbSimulationPitchLogRow = {
+  pitch_number: number;
+  inning: number;
+  half: string;
+  outs_before: number;
+  balls_before: number;
+  strikes_before: number;
+  bases_before: string;
+  batter: string;
+  pitcher: string;
+  pitch_type: string;
+  pitch_description?: string;
+  pitch_mph?: number;
+  call: string;
+  result?: string;
+  launch_speed?: number;
+  launch_angle?: number;
+  distance_ft?: number;
+  field_x?: number;
+  field_y?: number;
+  temperature_f?: number;
+  wind_speed_mph?: number;
+  score: string;
+};
+
+export type MlbSimulationRunResponse = {
+  sport: "mlb" | string;
+  status: string;
+  engine_version: string;
+  seed: number;
+  iterations: number;
+  game: {
+    game_pk: number;
+    official_date: string;
+    start_time_utc: string;
+    away_team: string;
+    home_team: string;
+    away_abbreviation: string;
+    home_abbreviation: string;
+    venue?: Record<string, unknown>;
+    home_plate_umpire?: Record<string, unknown> | null;
+    weather_snapshot_count: number;
+    weather_at_start?: Record<string, unknown>;
+  };
+  inputs: {
+    away_lineup_source?: string;
+    home_lineup_source?: string;
+    away_starter?: string;
+    home_starter?: string;
+    weather_mode?: string;
+  };
+  summary: {
+    away_win_probability: number;
+    home_win_probability: number;
+    away_avg_score: number;
+    home_avg_score: number;
+    avg_total_runs: number;
+    avg_innings: number;
+    avg_pitch_count: number;
+    sample_score?: { away?: number; home?: number };
+  };
+  lineups: {
+    away: Array<Record<string, unknown>>;
+    home: Array<Record<string, unknown>>;
+  };
+  top_batters: Array<Record<string, number | string | null>>;
+  pitchers: Array<Record<string, number | string | null>>;
+  sample: {
+    pitch_log: MlbSimulationPitchLogRow[];
+    field_events: MlbSimulationFieldEvent[];
+  };
+};
+
 export type BestBetsProgress = {
   request_id?: string | null;
   status?: string | null;
@@ -887,6 +1008,22 @@ export function getMlbPredictionSlate(params: {
 
 export function getMlbMarkets(): Promise<MlbMarketsResponse> {
   return fetchWithCache<MlbMarketsResponse>("/mlb/predictions/markets", undefined, 60 * 1000);
+}
+
+export function getMlbSimulationGames(params: {
+  date: string;
+}): Promise<MlbSimulationGamesResponse> {
+  return fetchWithCache<MlbSimulationGamesResponse>("/mlb/simulation/games", params, 60 * 1000);
+}
+
+export function runMlbGameSimulation(params: {
+  game_pk: number;
+  iterations?: number;
+  seed?: number;
+  pitch_log_limit?: number;
+}): Promise<MlbSimulationRunResponse> {
+  const { game_pk, ...query } = params;
+  return postJson<MlbSimulationRunResponse>(`/mlb/simulation/game/${game_pk}/run`, query);
 }
 
 export function loadMlbSchedule(params: {
