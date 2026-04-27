@@ -181,26 +181,28 @@ def load_mlb_prediction_logs(
 ) -> pd.DataFrame:
     sql = """
         SELECT
-            game_date,
-            game_pk,
-            player_id,
-            player_name,
-            team_id,
-            team_abbreviation,
-            opponent_team_id,
-            opponent_team_abbreviation,
-            is_home,
-            batting_order,
-            has_posted_lineup,
-            starter_pitcher_id,
-            probability,
-            prediction,
-            model_path,
-            prediction_date,
-            updated_at
-        FROM mlb_prediction_logs
-        WHERE market = :market
-          AND game_date = :game_date
+            p.game_date,
+            g.start_time_utc,
+            p.game_pk,
+            p.player_id,
+            p.player_name,
+            p.team_id,
+            p.team_abbreviation,
+            p.opponent_team_id,
+            p.opponent_team_abbreviation,
+            p.is_home,
+            p.batting_order,
+            p.has_posted_lineup,
+            p.starter_pitcher_id,
+            p.probability,
+            p.prediction,
+            p.model_path,
+            p.prediction_date,
+            p.updated_at
+        FROM mlb_prediction_logs p
+        LEFT JOIN mlb_games g ON g.game_pk = p.game_pk
+        WHERE p.market = :market
+          AND p.game_date = :game_date
         ORDER BY COALESCE(probability, prediction) DESC NULLS LAST
     """
     params = {"market": market, "game_date": pd.to_datetime(game_date).date()}

@@ -49,6 +49,8 @@ const SORT_OPTIONS: Array<{ value: MlbSort; label: string }> = [
   { value: "player_az", label: "Player A-Z" },
 ];
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 const MARKET_CONFIG: Record<
   MlbMarketName,
   { label: string; tabLabel: string; shortLabel: string; unit: string; icon: string; valueKey: "probability" | "prediction" }
@@ -99,12 +101,88 @@ const initialEvState: ApiState<MlbHrEvBoardResponse> = {
   error: null,
 };
 
+function getDatePartsInTimeZone(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(date);
+  return {
+    year: Number(parts.find((part) => part.type === "year")?.value),
+    month: Number(parts.find((part) => part.type === "month")?.value),
+    day: Number(parts.find((part) => part.type === "day")?.value),
+  };
+}
+
+function toUtcMidnightMs(parts: { year: number; month: number; day: number }) {
+  return Date.UTC(parts.year, parts.month - 1, parts.day);
+}
+
+function dateValueFromParts(parts: { year: number; month: number; day: number }) {
+  const month = String(parts.month).padStart(2, "0");
+  const day = String(parts.day).padStart(2, "0");
+  return `${parts.year}-${month}-${day}`;
+}
+
+function addDaysToDateValue(dateValue: string, days: number) {
+  const date = new Date(`${dateValue}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function resolveMlbSlateDate(day: MlbDay, region: UserRegion) {
+  const selectedOffset: Record<Exclude<MlbDay, "auto">, number> = {
+    yesterday: -1,
+    today: 0,
+    tomorrow: 1,
+  };
+  const now = new Date();
+  const mlbToday = getDatePartsInTimeZone(now, "America/New_York");
+  const userToday = getDatePartsInTimeZone(now, REGION_TIMEZONE[region]);
+  const mlbTodayValue = dateValueFromParts(mlbToday);
+  const userMlbDeltaDays = Math.round((toUtcMidnightMs(userToday) - toUtcMidnightMs(mlbToday)) / DAY_MS);
+
+  if (region === "au") {
+    const auStillAheadOfMlbDate = userMlbDeltaDays >= 1;
+    if (day === "auto") {
+      return addDaysToDateValue(mlbTodayValue, auStillAheadOfMlbDate ? 0 : -1);
+    }
+    if (auStillAheadOfMlbDate) {
+      return addDaysToDateValue(mlbTodayValue, selectedOffset[day]);
+    }
+    if (day === "yesterday") return addDaysToDateValue(mlbTodayValue, -2);
+    if (day === "today") return addDaysToDateValue(mlbTodayValue, -1);
+    return mlbTodayValue;
+  }
+
+  if (day === "auto") {
+    return mlbTodayValue;
+  }
+  return addDaysToDateValue(mlbTodayValue, selectedOffset[day]);
+}
+
 function formatGameTime(value: string | null | undefined, region: UserRegion) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
   return new Intl.DateTimeFormat("en-AU", {
     timeZone: REGION_TIMEZONE[region],
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatGameDateTime(value: string | null | undefined, region: UserRegion) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("en-AU", {
+    timeZone: REGION_TIMEZONE[region],
+    weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -175,9 +253,11 @@ function sortPredictionRows(rows: MlbPredictionRow[], market: MlbMarketName, sor
 function MlbPredictionsGrid({
   rows,
   market,
+  userRegion,
 }: {
   rows: MlbPredictionRow[];
   market: MlbMarketName;
+  userRegion: UserRegion;
 }) {
   const config = MARKET_CONFIG[market];
   if (!rows.length) {
@@ -219,8 +299,11 @@ function MlbPredictionsGrid({
             </div>
             <div className="d-flex align-items-center mb-2">
               <i className="material-symbols-rounded text-secondary me-2">calendar_today</i>
-              <span className="text-sm text-secondary">{row.game_date}</span>
+              <span className="text-sm text-secondary">
+                {formatGameDateTime(row.start_time_utc, userRegion)} ({REGION_SHORT[userRegion]})
+              </span>
             </div>
+            <p className="text-xs text-secondary mb-2">MLB/US slate date: {row.game_date}</p>
             <div className="prediction-stat-tag mt-3">
               <span className="badge badge-sm bg-gradient-info">{config.label}</span>
             </div>
@@ -360,12 +443,14 @@ export default function MlbPage() {
   });
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+  const resolvedMlbDate = resolveMlbSlateDate(predictionDay, userRegion);
 
   const loadPredictions = async (force = false) => {
     setPredictionsState((current) => ({ ...current, loading: true, error: null }));
     try {
       const data = await getMlbPredictionSlate({
         day: predictionDay,
+        date: resolvedMlbDate,
         limit_per_market: 60,
         ensure_data: true,
         refresh: force,
@@ -382,7 +467,7 @@ export default function MlbPage() {
   };
 
   const loadEvBoard = async (force = false) => {
-    const requestKey = `${predictionDay}:${bookmaker}`;
+    const requestKey = `${resolvedMlbDate}:${bookmaker}`;
     if (!force && evState.data && evRequestKey === requestKey) {
       return;
     }
@@ -390,6 +475,7 @@ export default function MlbPage() {
     try {
       const data = await getMlbHrEvBoard({
         day: predictionDay,
+        date: resolvedMlbDate,
         bookmaker,
         max_events: 30,
         prediction_limit: 300,
@@ -422,13 +508,13 @@ export default function MlbPage() {
 
   useEffect(() => {
     void loadPredictions();
-  }, [predictionDay]);
+  }, [resolvedMlbDate]);
 
   useEffect(() => {
     if (mainTab === "home_run_ev") {
       void loadEvBoard();
     }
-  }, [mainTab, predictionDay, bookmaker]);
+  }, [mainTab, resolvedMlbDate, bookmaker]);
 
   useEffect(() => {
     if (mainTab === "model_status") {
@@ -440,6 +526,12 @@ export default function MlbPage() {
     setPredictionDay(day);
     setPredictionTeams([]);
     setPredictionSearch("");
+    setEvState(initialEvState);
+    setEvRequestKey(null);
+  };
+
+  const handleRegionChange = (region: UserRegion) => {
+    setUserRegion(region);
     setEvState(initialEvState);
     setEvRequestKey(null);
   };
@@ -490,9 +582,9 @@ export default function MlbPage() {
     predictionSort
   );
   const topPrediction = filteredPredictionRows[0] ?? activeMarketRows[0] ?? null;
-  const slateDate = predictionsState.data?.date ?? evState.data?.date ?? "-";
+  const slateDate = predictionsState.data?.date ?? evState.data?.date ?? resolvedMlbDate;
   const dayLabelSuffix = REGION_SHORT[userRegion];
-  const evLoadedForCurrentView = Boolean(evState.data && evRequestKey === `${predictionDay}:${bookmaker}`);
+  const evLoadedForCurrentView = Boolean(evState.data && evRequestKey === `${resolvedMlbDate}:${bookmaker}`);
 
   return (
     <div className="app-shell min-vh-100">
@@ -528,7 +620,7 @@ export default function MlbPage() {
                   id="mlb-region-select"
                   className="form-select form-select-sm region-select"
                   value={userRegion}
-                  onChange={(event) => setUserRegion(event.target.value as UserRegion)}
+                  onChange={(event) => handleRegionChange(event.target.value as UserRegion)}
                 >
                   <option value="au">Australia</option>
                   <option value="us">USA</option>
@@ -622,7 +714,7 @@ export default function MlbPage() {
                       <div>
                         <h4 className="mb-1">Predictions</h4>
                         <p className="text-xs text-secondary mb-0">
-                          Day follows the official MLB slate. Times and labels respect your selected region.
+                          {DAY_OPTIONS.find((option) => option.value === predictionDay)?.label} ({dayLabelSuffix}) maps to MLB/US slate {resolvedMlbDate}.
                         </p>
                       </div>
                       <div className="d-flex flex-wrap gap-2 align-items-center">
@@ -728,12 +820,12 @@ export default function MlbPage() {
                         {filteredPredictionRows.length} shown from {activeMarketCount} rows
                         {predictionsState.data?.source ? ` | ${predictionsState.data.source}` : ""}
                       </span>
-                      <span className="text-xs text-secondary">Missing features {activeMissingFeatures}</span>
+                      <span className="text-xs text-secondary">US slate {resolvedMlbDate} | Missing features {activeMissingFeatures}</span>
                     </div>
                     {predictionsState.error && <div className="alert alert-danger text-sm mt-3">{predictionsState.error}</div>}
                     {predictionsState.loading && <p className="text-secondary mt-3">Loading MLB predictions...</p>}
                     {!predictionsState.loading && (
-                      <MlbPredictionsGrid rows={filteredPredictionRows} market={market} />
+                      <MlbPredictionsGrid rows={filteredPredictionRows} market={market} userRegion={userRegion} />
                     )}
                   </>
                 )}

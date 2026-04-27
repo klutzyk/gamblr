@@ -83,6 +83,7 @@ def _load_candidate_batters(engine, target_date: date) -> pd.DataFrame:
             select
                 g.game_pk,
                 g.official_date as game_date,
+                g.start_time_utc,
                 g.season,
                 g.home_team_id,
                 g.away_team_id,
@@ -169,6 +170,7 @@ def _load_candidate_batters(engine, target_date: date) -> pd.DataFrame:
         select
             g.game_pk,
             g.game_date,
+            g.start_time_utc,
             g.season,
             c.player_id,
             p.full_name as player_name,
@@ -340,6 +342,7 @@ def _load_candidate_pitchers(engine, target_date: date) -> pd.DataFrame:
             select
                 g.game_pk,
                 g.official_date as game_date,
+                g.start_time_utc,
                 g.season,
                 g.home_team_id,
                 g.away_team_id,
@@ -362,6 +365,7 @@ def _load_candidate_pitchers(engine, target_date: date) -> pd.DataFrame:
             select
                 game_pk,
                 game_date,
+                start_time_utc,
                 season,
                 probable_home_pitcher_id as player_id,
                 home_team_id as team_id,
@@ -381,6 +385,7 @@ def _load_candidate_pitchers(engine, target_date: date) -> pd.DataFrame:
             select
                 game_pk,
                 game_date,
+                start_time_utc,
                 season,
                 probable_away_pitcher_id as player_id,
                 away_team_id as team_id,
@@ -607,6 +612,7 @@ def scored_rows_for_api(scored: pd.DataFrame, *, limit: int | None = None) -> li
         return []
     cols = [
         "game_date",
+        "start_time_utc",
         "game_pk",
         "player_id",
         "player_name",
@@ -625,6 +631,8 @@ def scored_rows_for_api(scored: pd.DataFrame, *, limit: int | None = None) -> li
     if limit is not None:
         rows = rows.head(limit)
     rows["game_date"] = pd.to_datetime(rows["game_date"]).dt.date.astype(str)
+    if "start_time_utc" in rows.columns:
+        rows["start_time_utc"] = pd.to_datetime(rows["start_time_utc"], utc=True, errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = rows.replace([np.inf, -np.inf], np.nan).astype(object)
     rows = rows.where(pd.notna(rows), None)
     return rows.to_dict("records")

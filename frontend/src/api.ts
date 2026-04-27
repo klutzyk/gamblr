@@ -233,6 +233,7 @@ export type MlbMarketName =
 
 export type MlbPredictionRow = {
   game_date: string;
+  start_time_utc?: string | null;
   game_pk: number;
   player_id: number;
   player_name: string;
