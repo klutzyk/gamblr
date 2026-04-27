@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
 
 from app.core.config import settings
+from app.db.mlb.store_prop_odds import load_mlb_prop_odds, upsert_mlb_prop_odds
 from app.db.url_utils import to_sync_db_url
 from app.services.propline_client import PropLineClient
 
@@ -26,6 +27,7 @@ router = APIRouter()
 
 MLB_SPORT = "baseball_mlb"
 HR_MARKET = "batter_home_runs"
+PROVIDER = "propline"
 
 
 class PlayerProbability(BaseModel):
@@ -150,17 +152,66 @@ def _normalize_hr_props(event_odds_payloads: list[dict[str, Any]], *, bookmaker:
                             "commence_time": event.get("commence_time") or event.get("commenceTime"),
                             "home_team": event.get("home_team") or event.get("homeTeam"),
                             "away_team": event.get("away_team") or event.get("awayTeam"),
-                            "bookmaker": book_key,
+                            "bookmaker": bookmaker,
                             "market": HR_MARKET,
                             "player_name": player_name,
                             "normalized_player_name": _normalize_name(player_name),
-                            "line": outcome.get("point"),
+                            "line": outcome.get("point") or 0.5,
                             "american_odds": american_price,
                             "decimal_odds": _american_to_decimal(american_price),
                             "implied_probability": implied_probability,
                         }
                     )
     return props
+
+
+async def _load_or_fetch_hr_props(
+    *,
+    engine,
+    target_date,
+    bookmaker: str,
+    max_events: int | None,
+    max_age_minutes: int,
+    refresh: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not refresh:
+        props, meta = await run_in_threadpool(
+            load_mlb_prop_odds,
+            engine,
+            provider=PROVIDER,
+            market=HR_MARKET,
+            bookmaker=bookmaker,
+            game_date=target_date,
+            max_age_minutes=max_age_minutes,
+        )
+        if props:
+            return props, {"source": "stored", **meta}
+
+    payloads = await PropLineClient().get_market_odds_for_events(
+        sport=MLB_SPORT,
+        markets=HR_MARKET,
+        bookmakers=bookmaker,
+        odds_format="american",
+        event_date=target_date,
+        max_events=max_events,
+    )
+    props = _normalize_hr_props(payloads, bookmaker=bookmaker)
+    stored_count = await run_in_threadpool(
+        upsert_mlb_prop_odds,
+        engine,
+        props,
+        provider=PROVIDER,
+        sport=MLB_SPORT,
+        market=HR_MARKET,
+        bookmaker=bookmaker,
+        game_date=target_date,
+    )
+    return props, {
+        "source": "fetched",
+        "rows": len(props),
+        "stored_count": stored_count,
+        "max_age_minutes": max_age_minutes,
+    }
 
 
 @router.get("/propline/events")
@@ -176,22 +227,26 @@ async def get_propline_hr_props(
     bookmaker: str = Query("fanduel"),
     date: str | None = Query(None, description="Optional YYYY-MM-DD event date filter."),
     max_events: int | None = Query(None, ge=1, le=30),
+    max_age_minutes: int = Query(30, ge=1, le=240),
+    refresh: bool = Query(False, description="Bypass stored odds and fetch fresh PropLine data."),
 ):
     try:
-        payloads = await PropLineClient().get_market_odds_for_events(
-            sport=MLB_SPORT,
-            markets=HR_MARKET,
-            bookmakers=bookmaker,
-            odds_format="american",
-            event_date=date,
+        target_date = resolve_prediction_date(day="today", target_date=date)
+        props, odds_cache = await _load_or_fetch_hr_props(
+            engine=_sync_engine(),
+            target_date=target_date,
+            bookmaker=bookmaker,
             max_events=max_events,
+            max_age_minutes=max_age_minutes,
+            refresh=refresh,
         )
-        props = _normalize_hr_props(payloads, bookmaker=bookmaker)
         return {
             "sport": "mlb",
-            "provider": "propline",
+            "provider": PROVIDER,
             "bookmaker": bookmaker,
             "market": HR_MARKET,
+            "date": target_date.isoformat(),
+            "odds_cache": odds_cache,
             "count": len(props),
             "props": props,
         }
@@ -313,36 +368,39 @@ async def get_propline_hr_ev_board(
     date: str | None = Query(None, description="Optional YYYY-MM-DD override."),
     bookmaker: str = Query("fanduel"),
     max_events: int | None = Query(30, ge=1, le=30),
+    max_age_minutes: int = Query(30, ge=1, le=240),
+    refresh: bool = Query(False, description="Bypass stored odds and fetch fresh PropLine data."),
     prediction_limit: int = Query(300, ge=10, le=600),
     limit: int = Query(50, ge=1, le=200),
 ):
     target_date = resolve_prediction_date(day=day, target_date=date)
     try:
+        engine = _sync_engine()
         scored = await run_in_threadpool(
             score_batter_home_run_pregame,
-            engine=_sync_engine(),
+            engine=engine,
             day=day,
             target_date=target_date,
             limit=prediction_limit,
         )
-        payloads = await PropLineClient().get_market_odds_for_events(
-            sport=MLB_SPORT,
-            markets=HR_MARKET,
-            bookmakers=bookmaker,
-            odds_format="american",
-            event_date=target_date,
+        props, odds_cache = await _load_or_fetch_hr_props(
+            engine=engine,
+            target_date=target_date,
+            bookmaker=bookmaker,
             max_events=max_events,
+            max_age_minutes=max_age_minutes,
+            refresh=refresh,
         )
-        props = _normalize_hr_props(payloads, bookmaker=bookmaker)
         joined = _join_predictions_to_props(scored, props, limit=limit)
         return {
             "sport": "mlb",
             "status": "scored",
-            "provider": "propline",
+            "provider": PROVIDER,
             "bookmaker": bookmaker,
             "market": HR_MARKET,
             "day": day,
             "date": target_date.isoformat(),
+            "odds_cache": odds_cache,
             "model_path": scored.attrs.get("artifact_path") if hasattr(scored, "attrs") else None,
             "scored_players": len(scored),
             "props_count": len(props),

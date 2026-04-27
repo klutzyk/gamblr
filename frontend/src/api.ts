@@ -215,6 +215,14 @@ export type MlbHrEvBoardResponse = {
   market: string;
   day: string;
   date: string;
+  odds_cache?: {
+    source?: "stored" | "fetched" | string;
+    rows?: number;
+    stored_count?: number;
+    latest_fetched_at?: string | null;
+    oldest_fetched_at?: string | null;
+    max_age_minutes?: number;
+  };
   scored_players: number;
   props_count: number;
   matched: number;
@@ -793,6 +801,9 @@ export function getMlbHrEvBoard(
     date?: string;
     bookmaker?: string;
     max_events?: number;
+    max_age_minutes?: number;
+    refresh?: boolean;
+    refresh_key?: number;
     prediction_limit?: number;
     limit?: number;
   } = {}
@@ -803,6 +814,7 @@ export function getMlbHrEvBoard(
       day: "tomorrow",
       bookmaker: "fanduel",
       max_events: 30,
+      max_age_minutes: 30,
       prediction_limit: 300,
       limit: 50,
       ...params,

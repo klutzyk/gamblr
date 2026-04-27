@@ -649,3 +649,39 @@ class MlbPredictionLog(Base):
             name="uq_mlb_prediction_log_market_game_player",
         ),
     )
+
+
+class MlbPropOddsSnapshot(Base):
+    __tablename__ = "mlb_prop_odds_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(Text, nullable=False)
+    sport = Column(Text, nullable=False)
+    market = Column(Text, nullable=False)
+    bookmaker = Column(Text, nullable=False)
+    event_id = Column(Text, nullable=False)
+    game_date = Column(Date, nullable=False)
+    commence_time = Column(DateTime(timezone=True), nullable=True)
+    home_team = Column(Text, nullable=True)
+    away_team = Column(Text, nullable=True)
+    player_name = Column(Text, nullable=False)
+    normalized_player_name = Column(Text, nullable=False)
+    line = Column(Float, nullable=True)
+    american_odds = Column(Integer, nullable=False)
+    decimal_odds = Column(Float, nullable=False)
+    implied_probability = Column(Float, nullable=False)
+    payload = Column(JSON, nullable=True)
+    fetched_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "bookmaker",
+            "market",
+            "event_id",
+            "normalized_player_name",
+            "line",
+            name="uq_mlb_prop_odds_snapshot_lookup",
+        ),
+    )

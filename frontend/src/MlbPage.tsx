@@ -478,6 +478,9 @@ export default function MlbPage() {
         date: resolvedMlbDate,
         bookmaker,
         max_events: 30,
+        max_age_minutes: 30,
+        refresh: force,
+        refresh_key: force ? Date.now() : undefined,
         prediction_limit: 300,
         limit: 75,
       });
@@ -896,7 +899,8 @@ export default function MlbPage() {
                       </span>
                     </div>
                     <p className="text-xs text-secondary mt-2 mb-0">
-                      PropLine is only called from this tab to protect the free request limit.
+                      PropLine is only called from this tab. Stored odds are reused for 30 minutes unless forced.
+                      {evState.data?.odds_cache?.source ? ` Odds source: ${evState.data.odds_cache.source}.` : ""}
                     </p>
                     {evState.error && <div className="alert alert-danger text-sm mt-3">{evState.error}</div>}
                     {evState.loading && <p className="text-secondary mt-3">Loading MLB EV board...</p>}
