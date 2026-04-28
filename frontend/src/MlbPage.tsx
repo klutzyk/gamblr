@@ -628,6 +628,14 @@ function formatPitchCount(row: MlbSimulationPitchLogRow | null) {
   return `${balls}-${strikes}`;
 }
 
+function compactPlayerName(value: string | null | undefined) {
+  if (!value) return "-";
+  const parts = value.trim().split(/\s+/);
+  if (parts.length <= 1) return parts[0] ?? "-";
+  const last = parts.at(-1) ?? "";
+  return `${parts[0]?.slice(0, 1) ?? ""}. ${last}`;
+}
+
 function formatWindDirection(value: number | null | undefined) {
   if (typeof value !== "number" || Number.isNaN(value)) return "-";
   const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -817,8 +825,8 @@ function SimulationField({
   const outs = activePitch?.outs_after ?? activePitch?.outs_before ?? 0;
   const contactX = activePitch?.field_x ?? 50;
   const contactY = activePitch?.field_y ?? 48;
-  const hitEndX = Math.max(48, Math.min(752, 40 + contactX * 7.2));
-  const hitEndY = Math.max(150, Math.min(338, 152 + contactY * 1.9));
+  const hitEndX = Math.max(42, Math.min(758, 40 + contactX * 7.2));
+  const hitEndY = Math.max(150, Math.min(372, 142 + contactY * 2.35));
   const pitchClass = hasContact ? "is-contact" : activePitch?.call === "ball" ? "is-ball" : "is-strike";
   const venueName =
     typeof result.game.venue?.name === "string"
@@ -834,10 +842,17 @@ function SimulationField({
     ? formatSimulationResult(activePitch.result ?? activePitch.plate_appearance_result ?? activePitch.call)
     : "Ready";
   const basePositions = {
-    first: { x: 490, y: 326, label: "1B" },
-    second: { x: 400, y: 278, label: "2B" },
-    third: { x: 310, y: 326, label: "3B" },
+    first: { x: 515, y: 332, label: "1B" },
+    second: { x: 400, y: 256, label: "2B" },
+    third: { x: 285, y: 332, label: "3B" },
   } as const;
+  const fielders = [
+    { key: "lf", x: 205, y: 270, label: "LF" },
+    { key: "cf", x: 400, y: 224, label: "CF" },
+    { key: "rf", x: 595, y: 270, label: "RF" },
+    { key: "ss", x: 325, y: 315, label: "SS" },
+    { key: "2b", x: 475, y: 315, label: "2B" },
+  ];
   const runnerMarkers = (["first", "second", "third"] as const)
     .map((base) => {
       const name = baseRunnerName(activePitch, base);
@@ -938,31 +953,42 @@ function SimulationField({
           <path d="M50 260 Q180 245 400 242 Q620 245 750 260 L750 280 Q620 265 400 262 Q180 265 50 280 Z" fill="#fff" />
         </g>
 
-        <path d="M108 378 Q200 286 400 268 Q600 286 692 378 Q580 420 400 430 Q220 420 108 378 Z" fill="url(#broadcastDirt)" />
-        <path d="M400 278 L480 328 L400 388 L320 328 Z" fill="#2e8c32" />
-        <path d="M400 388 L320 328 M400 388 L480 328 M320 328 L400 278 M480 328 L400 278" stroke="#c49055" strokeWidth="12" strokeLinecap="round" opacity="0.42" />
-        <line x1="108" y1="378" x2="40" y2="195" stroke="#fff" strokeWidth="1.5" opacity="0.62" />
-        <line x1="692" y1="378" x2="760" y2="195" stroke="#fff" strokeWidth="1.5" opacity="0.62" />
-        <path d="M0 430 L108 378 Q220 420 400 430 Q580 420 692 378 L800 430 L800 520 L0 520 Z" fill="url(#broadcastGrassNear)" />
+        <g className="simulation-action-plane" transform="translate(0 -34)">
+        <path d="M76 392 Q178 282 400 246 Q622 282 724 392 Q595 440 400 452 Q205 440 76 392 Z" fill="url(#broadcastDirt)" />
+        <path d="M400 256 L515 332 L400 418 L285 332 Z" fill="#2e8c32" />
+        <path d="M400 418 L285 332 M400 418 L515 332 M285 332 L400 256 M515 332 L400 256" stroke="#c49055" strokeWidth="15" strokeLinecap="round" opacity="0.42" />
+        <line x1="76" y1="392" x2="40" y2="195" stroke="#fff" strokeWidth="1.5" opacity="0.62" />
+        <line x1="724" y1="392" x2="760" y2="195" stroke="#fff" strokeWidth="1.5" opacity="0.62" />
+        <path d="M0 438 L76 392 Q205 440 400 452 Q595 440 724 392 L800 438 L800 520 L0 520 Z" fill="url(#broadcastGrassNear)" />
         <path d="M0 456 H800" stroke="rgba(0,0,0,0.08)" strokeWidth="14" />
         <path d="M0 482 H800" stroke="rgba(255,255,255,0.05)" strokeWidth="14" />
         {Array.from({ length: 13 }).map((_, index) => (
           <path
             key={`near-stripe-${index}`}
-            d={`M400 285 L${-90 + index * 80} 520 H${-50 + index * 80} L410 285 Z`}
+            d={`M400 260 L${-90 + index * 80} 520 H${-50 + index * 80} L410 260 Z`}
             fill={index % 2 === 0 ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)"}
           />
         ))}
 
-        <ellipse cx="400" cy="340" rx="28" ry="15" fill="#b8844a" opacity="0.9" />
-        <ellipse cx="400" cy="337" rx="22" ry="10" fill="#c9945a" />
+        <ellipse cx="400" cy="340" rx="31" ry="16" fill="#b8844a" opacity="0.9" />
+        <ellipse cx="400" cy="337" rx="24" ry="11" fill="#c9945a" />
         <rect x="394" y="336" width="12" height="4" rx="1" fill="#e8e0c8" />
-        <rect x="394" y="272" width="12" height="12" rx="2" fill="#fff" transform="rotate(45 400 278)" />
-        <rect x="474" y="322" width="12" height="12" rx="2" fill="#fff" transform="rotate(45 480 328)" />
-        <rect x="314" y="322" width="12" height="12" rx="2" fill="#fff" transform="rotate(45 320 328)" />
-        <path d="M393 394 L407 394 L410 402 L400 407 L390 402 Z" fill="#fff" />
-        <rect x="360" y="388" width="32" height="22" rx="1" fill="none" stroke="#fff" strokeWidth="1.2" opacity="0.5" />
-        <rect x="408" y="388" width="32" height="22" rx="1" fill="none" stroke="#fff" strokeWidth="1.2" opacity="0.5" />
+        <rect x="394" y="250" width="12" height="12" rx="2" fill="#fff" transform="rotate(45 400 256)" />
+        <rect x="509" y="326" width="12" height="12" rx="2" fill="#fff" transform="rotate(45 515 332)" />
+        <rect x="279" y="326" width="12" height="12" rx="2" fill="#fff" transform="rotate(45 285 332)" />
+        <path d="M393 424 L407 424 L410 432 L400 437 L390 432 Z" fill="#fff" />
+        <rect x="357" y="417" width="32" height="22" rx="1" fill="none" stroke="#fff" strokeWidth="1.2" opacity="0.5" />
+        <rect x="411" y="417" width="32" height="22" rx="1" fill="none" stroke="#fff" strokeWidth="1.2" opacity="0.5" />
+
+        <g className="simulation-fielders">
+          {fielders.map((fielder) => (
+            <g key={fielder.key} className="simulation-fielder" transform={`translate(${fielder.x} ${fielder.y})`}>
+              <circle cx="0" cy="-8" r="6" />
+              <rect x="-7" y="-3" width="14" height="17" rx="5" />
+              <text x="0" y="27">{fielder.label}</text>
+            </g>
+          ))}
+        </g>
 
         <g className="simulation-base-runners">
           {runnerMarkers.map((runner) => (
@@ -987,7 +1013,7 @@ function SimulationField({
           ))}
         </g>
 
-        <g className="simulation-player simulation-catcher-model" transform="translate(400 398)">
+        <g className="simulation-player simulation-catcher-model" transform="translate(400 425) scale(0.74)">
           <ellipse cx="0" cy="4" rx="14" ry="9" fill="#1e2e48" />
           <rect x="-10" y="-6" width="20" height="16" rx="5" fill="#2a3c58" />
           <circle cx="0" cy="-14" r="9" fill="#c8a878" />
@@ -996,12 +1022,12 @@ function SimulationField({
           <rect x="-12" y="8" width="8" height="18" rx="3" fill="#2a3a52" />
           <rect x="4" y="8" width="8" height="18" rx="3" fill="#2a3a52" />
         </g>
-        <g className="simulation-player simulation-umpire-model" transform="translate(400 418)">
+        <g className="simulation-player simulation-umpire-model" transform="translate(400 443) scale(0.74)">
           <circle cx="0" cy="-10" r="7" fill="#1a1a1a" />
           <rect x="-9" y="-5" width="18" height="14" rx="3" fill="#111" />
           <rect x="-9" y="-5" width="18" height="5" rx="3" fill="#222" />
         </g>
-        <g className={`simulation-player simulation-batter-model ${hasContact ? "swing" : "track"}`} transform="translate(430 376)">
+        <g className={`simulation-player simulation-batter-model ${hasContact ? "swing" : "track"}`} transform="translate(436 405) scale(0.72)">
           <rect x="-7" y="8" width="7" height="24" rx="3" fill="#1c3060" />
           <rect x="2" y="8" width="7" height="24" rx="3" fill="#1c3060" />
           <rect x="-12" y="-8" width="24" height="22" rx="5" fill="#2a4aaa" />
@@ -1015,7 +1041,7 @@ function SimulationField({
           <circle cx="0" cy="-16" r="9" fill="#c8a878" />
           <path d="M-9 -20 Q0 -30 10 -20 Q8 -10 -2 -12 Z" fill="#1a1a2a" />
         </g>
-        <g className="simulation-player simulation-pitcher-model" transform="translate(400 318)">
+        <g className="simulation-player simulation-pitcher-model" transform="translate(400 318) scale(0.78)">
           <rect x="-5" y="8" width="7" height="22" rx="3" fill="#cc1010" />
           <rect x="0" y="12" width="7" height="18" rx="3" fill="#cc1010" />
           <rect x="-10" y="-10" width="20" height="22" rx="5" fill="#ee2020" />
@@ -1025,12 +1051,20 @@ function SimulationField({
           <circle cx="0" cy="-18" r="8" fill="#c8a878" />
           <path d="M-8 -22 Q0 -30 8 -22 Q6 -14 0 -16 Q-6 -14 -8 -22 Z" fill="#cc1010" />
         </g>
+        <g className="simulation-player-name-label simulation-pitcher-name-label" transform="translate(430 298)">
+          <rect x="-4" y="-14" width="104" height="24" rx="5" />
+          <text x="4" y="2">{compactPlayerName(activePitch?.pitcher)}</text>
+        </g>
+        <g className="simulation-player-name-label simulation-batter-name-label" transform="translate(468 386)">
+          <rect x="-4" y="-14" width="104" height="24" rx="5" />
+          <text x="4" y="2">{compactPlayerName(activePitch?.batter)}</text>
+        </g>
 
         {activePitch && (
           <>
             <path
               className="simulation-ball-path simulation-pitch-path"
-              d="M400 295 Q400 338 400 360"
+              d="M400 295 Q400 350 400 423"
               fill="none"
               stroke={activePitch.call === "ball" ? "#78c8ff" : "#f8de55"}
               strokeWidth="4"
@@ -1040,7 +1074,7 @@ function SimulationField({
             {hasContact ? (
               <path
                 className="simulation-ball-path simulation-hit-path"
-                d={`M400 360 Q${(400 + hitEndX) / 2} ${Math.min(115, hitEndY - 80)} ${hitEndX} ${hitEndY}`}
+                d={`M400 423 Q${(400 + hitEndX) / 2} ${Math.min(110, hitEndY - 90)} ${hitEndX} ${hitEndY}`}
                 fill="none"
                 stroke="#f6e55b"
                 strokeWidth="4"
@@ -1051,7 +1085,7 @@ function SimulationField({
             {hasContact ? (
               <g className="simulation-hit-landing" transform={`translate(${hitEndX} ${hitEndY})`}>
                 <circle r="16" fill="rgba(246,229,91,0.24)" stroke="#f6e55b" strokeWidth="2" />
-                <text x="21" y="-8">
+                <text x="24" y="-10">
                   {normalizedPitchResult(activePitch).includes("out") ? "CAUGHT" : "LAND"}
                 </text>
               </g>
@@ -1059,7 +1093,7 @@ function SimulationField({
             <circle
               className="simulation-active-ball"
               cx={hasContact ? hitEndX : 400}
-              cy={hasContact ? hitEndY : 360}
+              cy={hasContact ? hitEndY : 423}
               r={hasContact ? 7 : 6}
               fill="#ffffff"
               stroke={hasContact ? "#f6e55b" : "#83c7ff"}
@@ -1068,6 +1102,7 @@ function SimulationField({
             />
           </>
         )}
+        </g>
       </svg>
 
       <div className="simulation-venue-ribbon">
@@ -1279,6 +1314,19 @@ function SimulationResults({
         />
       </div>
 
+      <div className="simulation-detail-tabs mt-3">
+        <button type="button" className={detailTab === "boxscore" ? "active" : ""} onClick={() => setDetailTab("boxscore")}>
+          Boxscore
+        </button>
+        <button type="button" className={detailTab === "projections" ? "active" : ""} onClick={() => setDetailTab("projections")}>
+          Sim projections
+        </button>
+        <button type="button" className={detailTab === "play_by_play" ? "active" : ""} onClick={() => setDetailTab("play_by_play")}>
+          Play by play
+        </button>
+      </div>
+
+      {detailTab === "boxscore" && (
       <div className="simulation-live-boxscores mt-3">
         <div className="simulation-boxscore-panel">
           <div className="simulation-boxscore-title">
@@ -1371,9 +1419,6 @@ function SimulationResults({
             </table>
           </div>
         </div>
-      </div>
-
-      <div className="simulation-live-boxscores simulation-pitching-boxscore mt-3">
         <div className="simulation-boxscore-panel">
           <div className="simulation-boxscore-title">
             <span>Live pitching line</span>
@@ -1413,37 +1458,7 @@ function SimulationResults({
           </div>
         </div>
       </div>
-
-      <div className="simulation-meta-grid simulation-meta-grid-compact mt-3">
-        <div>
-          <span>{result.game.away_abbreviation} starter</span>
-          <strong>{result.inputs.away_starter ?? "-"}</strong>
-        </div>
-        <div>
-          <span>{result.game.home_abbreviation} starter</span>
-          <strong>{result.inputs.home_starter ?? "-"}</strong>
-        </div>
-        <div>
-          <span>Weather source</span>
-          <strong>{weatherSourceLabel(result.inputs.weather_mode, result.game.weather_snapshot_count)}</strong>
-        </div>
-        <div>
-          <span>Umpire</span>
-          <strong>{String(result.game.home_plate_umpire?.full_name ?? "-")}</strong>
-        </div>
-      </div>
-
-      <div className="simulation-detail-tabs mt-3">
-        <button type="button" className={detailTab === "boxscore" ? "active" : ""} onClick={() => setDetailTab("boxscore")}>
-          Boxscore
-        </button>
-        <button type="button" className={detailTab === "projections" ? "active" : ""} onClick={() => setDetailTab("projections")}>
-          Sim projections
-        </button>
-        <button type="button" className={detailTab === "play_by_play" ? "active" : ""} onClick={() => setDetailTab("play_by_play")}>
-          Play by play
-        </button>
-      </div>
+      )}
 
       {detailTab === "projections" && (
         <div className="row g-4 mt-1">
@@ -2063,7 +2078,8 @@ export default function MlbPage() {
 
                 {mainTab === "simulation" && (
                   <>
-                    <div className="d-flex flex-wrap align-items-end justify-content-between mt-4 gap-3">
+                    <div className="simulation-shell">
+                    <div className="simulation-header-row d-flex flex-wrap align-items-end justify-content-between mt-4 gap-3">
                       <div>
                         <h4 className="mb-1">Pitch Simulation</h4>
                         <p className="text-secondary mb-0">
@@ -2152,6 +2168,7 @@ export default function MlbPage() {
                           {simulationRunState.loading ? "Running..." : "Run Simulation"}
                         </button>
                       </div>
+                    </div>
                     </div>
                     {simulationGamesState.loading && <p className="text-secondary mt-3">Loading simulation slate...</p>}
                     {simulationGamesState.error && <div className="alert alert-danger text-sm mt-3">{simulationGamesState.error}</div>}
