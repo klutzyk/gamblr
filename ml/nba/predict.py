@@ -33,7 +33,7 @@ except ImportError:  # Python < 3.9
     ZoneInfo = None
 
 # ml folder
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
 # Keep windows broad by default to preserve model behavior accuracy.

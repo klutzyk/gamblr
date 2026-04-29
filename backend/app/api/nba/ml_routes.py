@@ -11,7 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from ml.training import (
+from ml.nba.training import (
     train_points_model,
     train_assists_model,
     train_rebounds_model,
@@ -19,14 +19,14 @@ from ml.training import (
     train_threept_model,
     train_threepa_model,
 )
-from app.db.store_prediction_logs import update_prediction_actuals, delete_walkforward_logs
-from app.db.store_first_basket import update_first_basket_actuals
-from ml.backtest import walk_forward_backtest
-from app.db.store_prediction_logs import log_predictions
-from ml.first_basket_labels import build_first_basket_labels
-from ml.first_basket_model import train_first_basket_models
-from ml.under_side_model import train_under_side_model
-from ml.update_rolling import update_rolling_stats
+from app.db.nba.store_prediction_logs import update_prediction_actuals, delete_walkforward_logs
+from app.db.nba.store_first_basket import update_first_basket_actuals
+from ml.nba.backtest import walk_forward_backtest
+from app.db.nba.store_prediction_logs import log_predictions
+from ml.nba.first_basket_labels import build_first_basket_labels
+from ml.nba.first_basket_model import train_first_basket_models
+from ml.nba.under_side_model import train_under_side_model
+from ml.nba.update_rolling import update_rolling_stats
 
 router = APIRouter()
 

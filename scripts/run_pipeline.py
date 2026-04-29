@@ -18,7 +18,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app.core.config import settings  # noqa: E402
 from app.db.url_utils import to_sync_db_url  # noqa: E402
-from ml.update_rolling import update_rolling_stats  # noqa: E402
+from ml.nba.update_rolling import update_rolling_stats  # noqa: E402
 
 
 def prompt(text: str, default: str | None = None) -> str:

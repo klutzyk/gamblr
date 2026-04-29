@@ -12,7 +12,7 @@ from nba_api.stats.endpoints import playbyplayv3
 from sqlalchemy import text
 from requests import exceptions as req_exc
 
-from app.db.store_first_basket import upsert_first_basket_labels
+from app.db.nba.store_first_basket import upsert_first_basket_labels
 from app.services.nba_headers import CUSTOM_HEADERS
 
 logger = logging.getLogger(__name__)
