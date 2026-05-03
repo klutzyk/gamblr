@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime
 from typing import Any
@@ -34,11 +35,11 @@ class PropLineClient:
             logger.info("PropLine GET %s params=%s", path, {**query, "apiKey": "***"})
             return response.json()
 
-    @cached(ttl_seconds=60)
+    @cached(ttl_seconds=300)
     async def get_events(self, sport: str = "baseball_mlb") -> list[dict[str, Any]]:
         return await self._get(f"sports/{sport}/events")
 
-    @cached(ttl_seconds=60)
+    @cached(ttl_seconds=300)
     async def get_event_odds(
         self,
         *,
@@ -86,21 +87,25 @@ class PropLineClient:
         if max_events is not None:
             events = events[:max_events]
 
-        results = []
-        for event in events:
+        semaphore = asyncio.Semaphore(8)
+
+        async def fetch_event(event: dict[str, Any]) -> dict[str, Any] | None:
             event_id = str(event.get("id") or event.get("event_id") or "")
             if not event_id:
-                continue
+                return None
             try:
-                odds = await self.get_event_odds(
-                    sport=sport,
-                    event_id=event_id,
-                    markets=markets,
-                    bookmakers=bookmakers,
-                    odds_format=odds_format,
-                )
+                async with semaphore:
+                    odds = await self.get_event_odds(
+                        sport=sport,
+                        event_id=event_id,
+                        markets=markets,
+                        bookmakers=bookmakers,
+                        odds_format=odds_format,
+                    )
             except httpx.HTTPStatusError as exc:
                 logger.warning("PropLine odds failed for event_id=%s: %s", event_id, exc)
-                continue
-            results.append({"event": event, "odds": odds})
-        return results
+                return None
+            return {"event": event, "odds": odds}
+
+        results = await asyncio.gather(*(fetch_event(event) for event in events))
+        return [result for result in results if result is not None]
