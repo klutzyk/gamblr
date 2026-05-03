@@ -45,6 +45,7 @@ router = APIRouter()
 
 PLANNED_MARKETS = market_names()
 prediction_precompute_jobs: dict[str, dict] = {}
+training_jobs: dict[str, dict] = {}
 
 
 def _sync_engine():
@@ -315,6 +316,104 @@ async def train_all_mlb(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"sport": "mlb", "status": "trained", "reports": reports}
+
+
+def _run_mlb_training_job(
+    job_id: str,
+    *,
+    markets: list[str],
+    min_player_games: int,
+) -> None:
+    job = training_jobs[job_id]
+    job["status"] = "running"
+    job["started_at"] = datetime.utcnow().isoformat()
+    job["steps_total"] = len(markets)
+    reports: dict[str, dict] = {}
+
+    try:
+        engine = _sync_engine()
+        for step, market in enumerate(markets, start=1):
+            job["current_market"] = market
+            job["steps_done"] = step - 1
+            report = train_market(
+                market,
+                engine=engine,
+                min_player_games=min_player_games,
+            )
+            reports[market] = report
+            job["reports"] = reports
+            job["steps_done"] = step
+
+        job["status"] = "completed"
+        job["finished_at"] = datetime.utcnow().isoformat()
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error"] = str(exc)
+        job["finished_at"] = datetime.utcnow().isoformat()
+
+
+def _create_mlb_training_job(*, markets: list[str], min_player_games: int) -> str:
+    job_id = f"mlb-train-{uuid.uuid4()}"
+    training_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "mlb_training",
+        "status": "queued",
+        "markets": markets,
+        "min_player_games": min_player_games,
+        "steps_done": 0,
+        "steps_total": len(markets),
+        "current_market": None,
+        "reports": {},
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "started_at": None,
+        "finished_at": None,
+    }
+    return job_id
+
+
+@router.post("/train/all/start")
+async def start_train_all_mlb(
+    min_player_games: int = Query(3, ge=0, le=100),
+):
+    markets = list(PLANNED_MARKETS)
+    job_id = _create_mlb_training_job(markets=markets, min_player_games=min_player_games)
+    asyncio.create_task(
+        run_in_threadpool(
+            _run_mlb_training_job,
+            job_id,
+            markets=markets,
+            min_player_games=min_player_games,
+        )
+    )
+    return {"sport": "mlb", "status": "queued", "job_id": job_id, "markets": markets}
+
+
+@router.post("/train/{market}/start")
+async def start_train_mlb_market(
+    market: str,
+    min_player_games: int = Query(3, ge=0, le=100),
+):
+    if market not in PLANNED_MARKETS:
+        raise HTTPException(status_code=404, detail="Unknown MLB market.")
+    job_id = _create_mlb_training_job(markets=[market], min_player_games=min_player_games)
+    asyncio.create_task(
+        run_in_threadpool(
+            _run_mlb_training_job,
+            job_id,
+            markets=[market],
+            min_player_games=min_player_games,
+        )
+    )
+    return {"sport": "mlb", "status": "queued", "job_id": job_id, "markets": [market]}
+
+
+@router.get("/train/jobs/{job_id}")
+async def get_mlb_training_job(job_id: str):
+    job = training_jobs.get(job_id)
+    if not job:
+        return {"status": "not_found", "job_id": job_id}
+    return job
 
 
 @router.post("/train/{market}")

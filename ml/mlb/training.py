@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from .features import (
 )
 
 
+logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[1]
 MODELS_DIR = BASE_DIR / "models" / "mlb"
 REPORTS_DIR = BASE_DIR / "reports" / "mlb"
@@ -195,6 +197,42 @@ def _baseline_metrics(kind: str, y_train: pd.Series, y_valid: pd.Series) -> dict
     return _evaluate(kind, y_valid, prediction)
 
 
+def _emit_progress(message: str) -> None:
+    logger.info(message)
+    print(message, flush=True)
+
+
+def _training_sample_weights(df: pd.DataFrame, train_mask: pd.Series) -> tuple[pd.Series, dict[str, float]]:
+    train_dates = pd.to_datetime(df.loc[train_mask, "game_date"])
+    max_date = train_dates.max()
+    age_days = (max_date - train_dates).dt.days.clip(lower=0)
+
+    weights = pd.Series(
+        np.power(0.5, age_days / 90.0),
+        index=train_dates.index,
+        dtype=float,
+    )
+    if "season" in df.columns and df.loc[train_mask, "season"].notna().any():
+        max_season = df.loc[train_mask, "season"].max()
+        weights *= np.where(df.loc[train_mask, "season"] == max_season, 1.65, 1.0)
+
+    weights *= np.where(age_days <= 30, 1.35, 1.0)
+    weights *= np.where(age_days <= 14, 1.25, 1.0)
+    weights = weights.clip(lower=0.15, upper=5.0)
+    weights = weights / max(float(weights.mean()), 1e-9)
+
+    summary = {
+        "half_life_days": 90.0,
+        "current_season_multiplier": 1.65,
+        "last_30_days_multiplier": 1.35,
+        "last_14_days_multiplier": 1.25,
+        "min": float(weights.min()),
+        "mean": float(weights.mean()),
+        "max": float(weights.max()),
+    }
+    return weights, summary
+
+
 def _load_frame(market: str, engine) -> pd.DataFrame:
     frame_kind = MARKETS[market]["frame"]
     if frame_kind == "batter":
@@ -218,6 +256,7 @@ def train_market(
     config = MARKETS[market]
     target_col = config["target"]
     kind = config["kind"]
+    _emit_progress(f"[mlb-training] {market}: loading {config['frame']} training frame")
     df = _load_frame(market, engine)
     if df.empty:
         raise ValueError(f"No training rows found for {market}.")
@@ -234,10 +273,16 @@ def train_market(
         raise ValueError(f"No usable numeric features found for {market}.")
 
     train_mask, valid_mask, split_date = _time_split(df)
+    _emit_progress(
+        "[mlb-training] "
+        f"{market}: rows={len(df)} train={int(train_mask.sum())} "
+        f"valid={int(valid_mask.sum())} features={len(feature_cols)} split={split_date}"
+    )
     X_train = df.loc[train_mask, feature_cols]
     y_train = df.loc[train_mask, target_col].astype(float if kind == "regression" else int)
     X_valid = df.loc[valid_mask, feature_cols]
     y_valid = df.loc[valid_mask, target_col].astype(float if kind == "regression" else int)
+    sample_weight, sample_weight_summary = _training_sample_weights(df, train_mask)
 
     baseline = _baseline_metrics(kind, y_train, y_valid)
     candidates = _candidate_models(kind, y_train)
@@ -247,13 +292,17 @@ def train_market(
     best_pipeline = None
 
     for name, model in candidates.items():
+        _emit_progress(f"[mlb-training] {market}: fitting {name}")
         pipeline = Pipeline(
             steps=[
                 ("imputer", SimpleImputer(strategy="median")),
                 ("model", model),
             ]
         )
-        pipeline.fit(X_train, y_train)
+        try:
+            pipeline.fit(X_train, y_train, model__sample_weight=sample_weight)
+        except TypeError:
+            pipeline.fit(X_train, y_train)
         if kind == "classification":
             prediction = pipeline.predict_proba(X_valid)[:, 1]
         else:
@@ -261,6 +310,12 @@ def train_market(
         metrics = _evaluate(kind, y_valid, prediction)
         model_results[name] = {"metrics": metrics}
         score = _score_for_selection(kind, metrics)
+        metric_text = ", ".join(
+            f"{metric}={value:.4f}"
+            for metric, value in metrics.items()
+            if isinstance(value, float) and not np.isnan(value)
+        )
+        _emit_progress(f"[mlb-training] {market}: {name} done ({metric_text})")
         if score < best_score:
             best_name = name
             best_score = score
@@ -291,6 +346,7 @@ def train_market(
         "rows_valid": int(len(X_valid)),
         "date_min": pd.to_datetime(df["game_date"]).min().date().isoformat(),
         "date_max": pd.to_datetime(df["game_date"]).max().date().isoformat(),
+        "sample_weighting": sample_weight_summary,
     }
     joblib.dump(artifact, model_path)
 
@@ -304,6 +360,10 @@ def train_market(
     }
     report_path.write_text(json.dumps(report, indent=2, allow_nan=True), encoding="utf-8")
     report["report_path"] = str(report_path)
+    _emit_progress(
+        f"[mlb-training] {market}: selected {best_name}; "
+        f"saved model={model_path} report={report_path}"
+    )
     return report
 
 
@@ -319,8 +379,11 @@ def _top_features(pipeline: Pipeline, feature_cols: list[str], limit: int = 30) 
 def train_all(*, database_url: str | None = None, min_player_games: int = 3) -> dict[str, Any]:
     engine = get_engine(database_url)
     results = {}
-    for market in MARKETS:
+    total = len(MARKETS)
+    for idx, market in enumerate(MARKETS, start=1):
+        _emit_progress(f"[mlb-training] train_all: starting {market} ({idx}/{total})")
         results[market] = train_market(market, engine=engine, min_player_games=min_player_games)
+        _emit_progress(f"[mlb-training] train_all: finished {market} ({idx}/{total})")
     return results
 
 
