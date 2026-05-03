@@ -1,9 +1,13 @@
+import asyncio
 import logging
+import uuid
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.mlb.session import get_mlb_db
+from app.db.mlb.session import MlbAsyncSessionLocal, get_mlb_db
 from app.db.mlb.store_ingestion import (
     bootstrap_mlb_ingestion,
     ingest_active_rosters,
@@ -27,6 +31,60 @@ from app.db.mlb.store_ingestion import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+mlb_ingest_jobs: dict[str, dict] = {}
+
+
+def _validate_yyyy_mm_dd(value: str, field_name: str) -> None:
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be YYYY-MM-DD") from exc
+
+
+def _current_mlb_date():
+    return datetime.now(ZoneInfo("America/New_York")).date()
+
+
+async def _run_mlb_bootstrap_ingest_job(
+    job_id: str,
+    *,
+    season: int,
+    since: str,
+    until: str,
+    final_only: bool,
+    include_savant: bool,
+    include_weather: bool,
+    include_umpire_roster: bool,
+    weather_dataset: str,
+    statcast_minimum: str,
+    bat_tracking_min_swings: int,
+) -> None:
+    job = mlb_ingest_jobs[job_id]
+    job["status"] = "running"
+    job["started_at"] = datetime.utcnow().isoformat()
+    try:
+        async with MlbAsyncSessionLocal() as db:
+            result = await bootstrap_mlb_ingestion(
+                db,
+                season=season,
+                start_date=since,
+                end_date=until,
+                final_only=final_only,
+                include_savant=include_savant,
+                include_weather=include_weather,
+                include_umpire_roster=include_umpire_roster,
+                weather_dataset=weather_dataset,
+                statcast_minimum=statcast_minimum,
+                bat_tracking_min_swings=bat_tracking_min_swings,
+            )
+        job["status"] = "completed"
+        job["result"] = result
+        job["finished_at"] = datetime.utcnow().isoformat()
+    except Exception as exc:
+        logger.exception("MLB bootstrap ingest job %s failed", job_id)
+        job["status"] = "failed"
+        job["error"] = str(exc)
+        job["finished_at"] = datetime.utcnow().isoformat()
 
 
 @router.post("/teams/load")
@@ -363,3 +421,100 @@ async def bootstrap_mlb_pipeline(
             until,
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/bootstrap/ingest/start")
+@router.post("/bootstrap/load/start")
+async def start_mlb_bootstrap_ingest(
+    season: int = Query(..., description="MLB season year, e.g. 2026"),
+    since: str = Query(..., description="YYYY-MM-DD"),
+    until: str = Query(..., description="YYYY-MM-DD"),
+    final_only: bool = Query(False),
+    include_savant: bool = Query(False, description="Set true for heavier Savant season refreshes."),
+    include_weather: bool = Query(True, description="Load weather snapshots for the schedule window."),
+    include_umpire_roster: bool = Query(True),
+    weather_dataset: str = Query("auto", description="auto, forecast, or historical_forecast"),
+    statcast_minimum: str = Query("0", description="Savant minimum threshold; use 0 for exhaustive"),
+    bat_tracking_min_swings: int = Query(0, ge=0, description="Bat-tracking and swing-path threshold; use 0 for exhaustive"),
+):
+    _validate_yyyy_mm_dd(since, "since")
+    _validate_yyyy_mm_dd(until, "until")
+    if datetime.strptime(since, "%Y-%m-%d").date() > datetime.strptime(until, "%Y-%m-%d").date():
+        raise HTTPException(status_code=400, detail="since must be on or before until")
+
+    job_id = f"mlb-ingest-{uuid.uuid4()}"
+    mlb_ingest_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "mlb_bootstrap_ingest",
+        "status": "queued",
+        "season": season,
+        "since": since,
+        "until": until,
+        "final_only": final_only,
+        "include_savant": include_savant,
+        "include_weather": include_weather,
+        "include_umpire_roster": include_umpire_roster,
+        "weather_dataset": weather_dataset,
+        "statcast_minimum": statcast_minimum,
+        "bat_tracking_min_swings": bat_tracking_min_swings,
+        "created_at": datetime.utcnow().isoformat(),
+        "started_at": None,
+        "finished_at": None,
+        "result": None,
+        "error": None,
+    }
+    asyncio.create_task(
+        _run_mlb_bootstrap_ingest_job(
+            job_id,
+            season=season,
+            since=since,
+            until=until,
+            final_only=final_only,
+            include_savant=include_savant,
+            include_weather=include_weather,
+            include_umpire_roster=include_umpire_roster,
+            weather_dataset=weather_dataset,
+            statcast_minimum=statcast_minimum,
+            bat_tracking_min_swings=bat_tracking_min_swings,
+        )
+    )
+    return {"status": "queued", "job_id": job_id}
+
+
+@router.post("/nightly/ingest/start")
+@router.post("/nightly/load/start")
+async def start_mlb_nightly_ingest(
+    season: int | None = Query(None, description="Defaults to current MLB date year."),
+    days_back: int = Query(1, ge=0, le=30),
+    days_forward: int = Query(1, ge=0, le=14),
+    final_only: bool = Query(False),
+    include_savant: bool = Query(False, description="Keep false for the nightly lightweight job."),
+    include_weather: bool = Query(True),
+    include_umpire_roster: bool = Query(True),
+    weather_dataset: str = Query("auto", description="auto, forecast, or historical_forecast"),
+    statcast_minimum: str = Query("0", description="Savant minimum threshold; use 0 for exhaustive"),
+    bat_tracking_min_swings: int = Query(0, ge=0),
+):
+    target_date = _current_mlb_date()
+    since = (target_date - timedelta(days=days_back)).isoformat()
+    until = (target_date + timedelta(days=days_forward)).isoformat()
+    return await start_mlb_bootstrap_ingest(
+        season=season or target_date.year,
+        since=since,
+        until=until,
+        final_only=final_only,
+        include_savant=include_savant,
+        include_weather=include_weather,
+        include_umpire_roster=include_umpire_roster,
+        weather_dataset=weather_dataset,
+        statcast_minimum=statcast_minimum,
+        bat_tracking_min_swings=bat_tracking_min_swings,
+    )
+
+
+@router.get("/ingest/jobs/{job_id}")
+async def get_mlb_ingest_job(job_id: str):
+    job = mlb_ingest_jobs.get(job_id)
+    if not job:
+        return {"status": "not_found", "job_id": job_id}
+    return job
