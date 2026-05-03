@@ -83,7 +83,7 @@ def _time_split(df: pd.DataFrame, valid_fraction: float = 0.2) -> tuple[pd.Serie
     return train_mask, valid_mask, split_date.isoformat()
 
 
-def _candidate_models(kind: str, y_train: pd.Series) -> dict[str, Any]:
+def _candidate_models(kind: str, y_train: pd.Series, *, search_models: bool = True) -> dict[str, Any]:
     models: dict[str, Any] = {}
     if kind == "classification":
         positives = max(float((y_train == 1).sum()), 1.0)
@@ -104,6 +104,8 @@ def _candidate_models(kind: str, y_train: pd.Series) -> dict[str, Any]:
                 random_state=42,
                 n_jobs=4,
             )
+            if not search_models:
+                return models
             models["xgboost_balanced"] = XGBClassifier(
                 n_estimators=500,
                 learning_rate=0.03,
@@ -119,6 +121,8 @@ def _candidate_models(kind: str, y_train: pd.Series) -> dict[str, Any]:
                 random_state=42,
                 n_jobs=4,
             )
+        if not search_models and models:
+            return models
         models["random_forest"] = RandomForestClassifier(
             n_estimators=250,
             min_samples_leaf=10,
@@ -147,6 +151,10 @@ def _candidate_models(kind: str, y_train: pd.Series) -> dict[str, Any]:
                 random_state=42,
                 n_jobs=4,
             )
+            if not search_models:
+                return models
+        if not search_models and models:
+            return models
         models["random_forest"] = RandomForestRegressor(
             n_estimators=250,
             min_samples_leaf=5,
@@ -248,6 +256,7 @@ def train_market(
     engine=None,
     database_url: str | None = None,
     min_player_games: int = 3,
+    search_models: bool = True,
 ) -> dict[str, Any]:
     if market not in MARKETS:
         raise ValueError(f"Unknown MLB market '{market}'. Choose from: {', '.join(MARKETS)}")
@@ -285,7 +294,7 @@ def train_market(
     sample_weight, sample_weight_summary = _training_sample_weights(df, train_mask)
 
     baseline = _baseline_metrics(kind, y_train, y_valid)
-    candidates = _candidate_models(kind, y_train)
+    candidates = _candidate_models(kind, y_train, search_models=search_models)
     model_results: dict[str, dict[str, Any]] = {"baseline_mean": {"metrics": baseline}}
     best_name = None
     best_score = float("inf")
@@ -341,6 +350,7 @@ def train_market(
         "trained_at": now.isoformat(),
         "split_date": split_date,
         "min_player_games": min_player_games,
+        "search_models": search_models,
         "rows_total": int(len(df)),
         "rows_train": int(len(X_train)),
         "rows_valid": int(len(X_valid)),
@@ -376,13 +386,23 @@ def _top_features(pipeline: Pipeline, feature_cols: list[str], limit: int = 30) 
     return [{"feature": name, "importance": float(value)} for name, value in pairs[:limit]]
 
 
-def train_all(*, database_url: str | None = None, min_player_games: int = 3) -> dict[str, Any]:
+def train_all(
+    *,
+    database_url: str | None = None,
+    min_player_games: int = 3,
+    search_models: bool = True,
+) -> dict[str, Any]:
     engine = get_engine(database_url)
     results = {}
     total = len(MARKETS)
     for idx, market in enumerate(MARKETS, start=1):
         _emit_progress(f"[mlb-training] train_all: starting {market} ({idx}/{total})")
-        results[market] = train_market(market, engine=engine, min_player_games=min_player_games)
+        results[market] = train_market(
+            market,
+            engine=engine,
+            min_player_games=min_player_games,
+            search_models=search_models,
+        )
         _emit_progress(f"[mlb-training] train_all: finished {market} ({idx}/{total})")
     return results
 
@@ -397,16 +417,22 @@ def main() -> None:
     )
     parser.add_argument("--database-url", default=None)
     parser.add_argument("--min-player-games", type=int, default=3)
+    parser.add_argument("--search-models", action="store_true", help="Train/evaluate all candidate model families.")
     args = parser.parse_args()
 
     if args.market == "all":
-        results = train_all(database_url=args.database_url, min_player_games=args.min_player_games)
+        results = train_all(
+            database_url=args.database_url,
+            min_player_games=args.min_player_games,
+            search_models=args.search_models,
+        )
     else:
         results = {
             args.market: train_market(
                 args.market,
                 database_url=args.database_url,
                 min_player_games=args.min_player_games,
+                search_models=args.search_models,
             )
         }
     print(json.dumps(results, indent=2, allow_nan=True))
