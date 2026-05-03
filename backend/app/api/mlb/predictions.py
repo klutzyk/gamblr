@@ -1,4 +1,6 @@
+import asyncio
 import sys
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -42,6 +44,7 @@ from ml.mlb.training import train_market  # noqa: E402
 router = APIRouter()
 
 PLANNED_MARKETS = market_names()
+prediction_precompute_jobs: dict[str, dict] = {}
 
 
 def _sync_engine():
@@ -388,6 +391,167 @@ async def get_mlb_prediction_slate(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return {**payload, "data_load": ensure_result}
+
+
+def _parse_precompute_days(days: str) -> list[str]:
+    day_values = [value.strip() for value in days.split(",") if value.strip()]
+    if not day_values:
+        raise HTTPException(status_code=400, detail="days must include at least one value.")
+    valid_days = {"today", "tomorrow", "yesterday", "auto"}
+    invalid_days = [day for day in day_values if day not in valid_days]
+    if invalid_days:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid day value(s): {', '.join(invalid_days)}",
+        )
+    return day_values
+
+
+def _slate_market_counts(payload: dict) -> dict[str, int]:
+    markets = payload.get("markets") or {}
+    return {
+        market: int((market_payload or {}).get("count") or 0)
+        for market, market_payload in markets.items()
+    }
+
+
+async def _run_mlb_prediction_precompute_job(
+    job_id: str,
+    *,
+    day_values: list[str],
+    limit_per_market: int,
+    refresh: bool,
+    ensure_data: bool,
+) -> None:
+    job = prediction_precompute_jobs[job_id]
+    job["status"] = "running"
+    job["started_at"] = datetime.utcnow().isoformat()
+    job["steps_total"] = len(day_values)
+    results: dict[str, dict] = {}
+
+    try:
+        for step, day in enumerate(day_values, start=1):
+            target_date = resolve_prediction_date(day=day)
+            job["current_day"] = day
+            job["current_date"] = target_date.isoformat()
+            job["steps_done"] = step - 1
+
+            ensure_result = {"changed": False}
+            if ensure_data:
+                ensure_result = await _ensure_mlb_slate_data(
+                    target_date=target_date,
+                    refresh=refresh,
+                )
+
+            cache_bust = datetime.utcnow().isoformat() if refresh or ensure_result.get("changed") else None
+            payload = await run_in_threadpool(
+                _build_mlb_prediction_slate_payload,
+                database_url=to_sync_db_url(settings.ML_DATABASE_URL),
+                day=day,
+                target_date=target_date.isoformat(),
+                limit_per_market=limit_per_market,
+                cache_bust=cache_bust,
+            )
+            results[day] = {
+                "date": payload.get("date"),
+                "source": payload.get("source"),
+                "market_counts": _slate_market_counts(payload),
+                "data_load": ensure_result,
+            }
+            job["steps_done"] = step
+
+        job["status"] = "completed"
+        job["result"] = results
+        job["finished_at"] = datetime.utcnow().isoformat()
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error"] = str(exc)
+        job["finished_at"] = datetime.utcnow().isoformat()
+
+
+def _create_mlb_prediction_precompute_job(
+    *,
+    day_values: list[str],
+    limit_per_market: int,
+    refresh: bool,
+    ensure_data: bool,
+) -> str:
+    job_id = f"mlb-pred-{uuid.uuid4()}"
+    prediction_precompute_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "mlb_prediction_precompute",
+        "status": "queued",
+        "days": day_values,
+        "limit_per_market": limit_per_market,
+        "refresh": refresh,
+        "ensure_data": ensure_data,
+        "steps_done": 0,
+        "steps_total": len(day_values),
+        "current_day": None,
+        "current_date": None,
+        "result": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    return job_id
+
+
+@router.post("/precompute/start")
+async def start_mlb_prediction_precompute(
+    days: str = Query("today,tomorrow", description="Comma-separated: today,tomorrow,yesterday,auto"),
+    limit_per_market: int = Query(200, ge=1, le=500),
+    refresh: bool = Query(False, description="Recompute even if prediction logs already exist."),
+    ensure_data: bool = Query(True, description="Load missing schedule/roster data before scoring."),
+):
+    day_values = _parse_precompute_days(days)
+    job_id = _create_mlb_prediction_precompute_job(
+        day_values=day_values,
+        limit_per_market=limit_per_market,
+        refresh=refresh,
+        ensure_data=ensure_data,
+    )
+    asyncio.create_task(
+        _run_mlb_prediction_precompute_job(
+            job_id,
+            day_values=day_values,
+            limit_per_market=limit_per_market,
+            refresh=refresh,
+            ensure_data=ensure_data,
+        )
+    )
+    return {"status": "queued", "job_id": job_id, "days": day_values}
+
+
+@router.post("/precompute/run")
+async def run_mlb_prediction_precompute(
+    days: str = Query("today,tomorrow", description="Comma-separated: today,tomorrow,yesterday,auto"),
+    limit_per_market: int = Query(200, ge=1, le=500),
+    refresh: bool = Query(False, description="Recompute even if prediction logs already exist."),
+    ensure_data: bool = Query(True, description="Load missing schedule/roster data before scoring."),
+):
+    day_values = _parse_precompute_days(days)
+    job_id = _create_mlb_prediction_precompute_job(
+        day_values=day_values,
+        limit_per_market=limit_per_market,
+        refresh=refresh,
+        ensure_data=ensure_data,
+    )
+    await _run_mlb_prediction_precompute_job(
+        job_id,
+        day_values=day_values,
+        limit_per_market=limit_per_market,
+        refresh=refresh,
+        ensure_data=ensure_data,
+    )
+    return prediction_precompute_jobs[job_id]
+
+
+@router.get("/precompute/jobs/{job_id}")
+async def get_mlb_prediction_precompute_job(job_id: str):
+    job = prediction_precompute_jobs.get(job_id)
+    if not job:
+        return {"status": "not_found", "job_id": job_id}
+    return job
 
 
 @router.get("/{market}")
