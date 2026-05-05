@@ -1007,6 +1007,7 @@ export function getMlbPredictions(params: {
   day?: PredictionDayParam;
   date?: string;
   limit?: number;
+  compute_if_missing?: boolean;
 }): Promise<MlbPredictionsResponse> {
   const { market, ...query } = params;
   return fetchWithCache<MlbPredictionsResponse>(
@@ -1026,6 +1027,7 @@ export function getMlbPredictionSlate(params: {
   limit_per_market?: number;
   ensure_data?: boolean;
   refresh?: boolean;
+  compute_if_missing?: boolean;
   refresh_key?: number;
 } = {}): Promise<MlbPredictionSlateResponse> {
   return fetchWithCache<MlbPredictionSlateResponse>(
@@ -1142,6 +1144,19 @@ export function startLastNUpdateJob(params: {
 }
 
 export function getUpdateJobStatus(jobId: string): Promise<UpdateJobStatus> {
+  if (jobId.startsWith("mlb-pred-")) {
+    return fetchWithCache<UpdateJobStatus>(
+      `/mlb/predictions/precompute/jobs/${jobId}`,
+      undefined,
+      0
+    );
+  }
+  if (jobId.startsWith("mlb-ingest-")) {
+    return fetchWithCache<UpdateJobStatus>(`/mlb/db/ingest/jobs/${jobId}`, undefined, 0);
+  }
+  if (jobId.startsWith("mlb-train-")) {
+    return fetchWithCache<UpdateJobStatus>(`/mlb/predictions/train/jobs/${jobId}`, undefined, 0);
+  }
   return fetchWithCache<UpdateJobStatus>(`/db/jobs/${jobId}`, undefined, 0);
 }
 

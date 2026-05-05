@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import create_engine
+from app.api.mlb.db_routes import mlb_ingest_jobs
+from app.api.mlb.predictions import prediction_precompute_jobs, training_jobs
 from app.db.session import get_db, AsyncSessionLocal
 from app.core.config import settings
 from app.db.url_utils import to_sync_db_url
@@ -1352,6 +1354,21 @@ async def start_update_last_n_games_since(
 
 @router.get("/jobs/{job_id}")
 async def get_update_job_status(job_id: str):
+    if job_id.startswith("mlb-pred-"):
+        job = prediction_precompute_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+    if job_id.startswith("mlb-ingest-"):
+        job = mlb_ingest_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+    if job_id.startswith("mlb-train-"):
+        job = training_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
     job = update_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")

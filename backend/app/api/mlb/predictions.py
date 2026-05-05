@@ -152,17 +152,15 @@ def _build_mlb_prediction_slate_payload(
     target_date: str | None,
     limit_per_market: int,
     cache_bust: str | None = None,
+    compute_if_missing: bool = True,
 ) -> dict:
     engine = create_engine(database_url)
     resolved_date = resolve_prediction_date(day=day, target_date=target_date)
     force_compute = cache_bust is not None
 
+    stored_by_market = None
     if not force_compute:
-        stored_by_market = load_mlb_prediction_slate_logs(
-            engine,
-            game_date=resolved_date,
-            limit_per_market=None,
-        )
+        stored_by_market = load_mlb_prediction_slate_logs(engine, game_date=resolved_date, limit_per_market=None)
         if all(
             _stored_market_is_complete(market, stored, requested_limit=limit_per_market)
             for market, stored in stored_by_market.items()
@@ -174,6 +172,20 @@ def _build_mlb_prediction_slate_payload(
                 "day": day,
                 "date": resolved_date.isoformat(),
                 "cache_bust": cache_bust,
+                "markets": {
+                    market: _stored_market_payload(market, stored, limit=limit_per_market)
+                    for market, stored in stored_by_market.items()
+                },
+            }
+        if not compute_if_missing:
+            return {
+                "sport": "mlb",
+                "status": "stored_partial",
+                "source": "stored_partial",
+                "day": day,
+                "date": resolved_date.isoformat(),
+                "cache_bust": cache_bust,
+                "needs_precompute": True,
                 "markets": {
                     market: _stored_market_payload(market, stored, limit=limit_per_market)
                     for market, stored in stored_by_market.items()
@@ -222,6 +234,7 @@ def _build_mlb_market_prediction_payload(
     target_date: str | None,
     limit: int,
     cache_bust: str | None = None,
+    compute_if_missing: bool = True,
 ) -> dict:
     engine = create_engine(database_url)
     resolved_date = resolve_prediction_date(day=day, target_date=target_date)
@@ -241,6 +254,18 @@ def _build_mlb_market_prediction_payload(
                 "day": day,
                 "date": resolved_date.isoformat(),
                 "cache_bust": cache_bust,
+                **_stored_market_payload(market, stored, limit=limit),
+            }
+        if not compute_if_missing:
+            return {
+                "sport": "mlb",
+                "status": "stored_partial",
+                "source": "stored_partial",
+                "market": market,
+                "day": day,
+                "date": resolved_date.isoformat(),
+                "cache_bust": cache_bust,
+                "needs_precompute": True,
                 **_stored_market_payload(market, stored, limit=limit),
             }
 
@@ -520,6 +545,7 @@ async def get_mlb_prediction_slate(
     limit_per_market: int = Query(60, ge=1, le=200),
     ensure_data: bool = Query(True, description="Auto-load missing schedule/roster rows before scoring."),
     refresh: bool = Query(False, description="Force-refresh schedule/rosters and bypass prediction cache."),
+    compute_if_missing: bool = Query(False, description="Compute synchronously if stored prediction logs are missing."),
 ):
     target_date = resolve_prediction_date(day=day, target_date=date)
     ensure_result = {"changed": False}
@@ -529,7 +555,7 @@ async def get_mlb_prediction_slate(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"MLB slate data load failed: {exc}") from exc
 
-    cache_bust = datetime.utcnow().isoformat() if refresh or ensure_result.get("changed") else None
+    cache_bust = datetime.utcnow().isoformat() if refresh else None
     try:
         payload = await run_in_threadpool(
             _build_mlb_prediction_slate_payload,
@@ -538,6 +564,7 @@ async def get_mlb_prediction_slate(
             target_date=target_date.isoformat(),
             limit_per_market=limit_per_market,
             cache_bust=cache_bust,
+            compute_if_missing=compute_if_missing,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -603,6 +630,7 @@ async def _run_mlb_prediction_precompute_job(
                 target_date=target_date.isoformat(),
                 limit_per_market=limit_per_market,
                 cache_bust=cache_bust,
+                compute_if_missing=True,
             )
             results[day] = {
                 "date": payload.get("date"),
@@ -714,6 +742,7 @@ async def get_mlb_predictions(
     limit: int = Query(100, ge=1, le=500),
     ensure_data: bool = Query(True, description="Auto-load missing schedule/roster rows before scoring."),
     refresh: bool = Query(False, description="Force-refresh schedule/rosters and bypass prediction cache."),
+    compute_if_missing: bool = Query(False, description="Compute synchronously if stored prediction logs are missing."),
 ):
     if market not in PLANNED_MARKETS:
         raise HTTPException(status_code=404, detail="Unknown MLB market.")
@@ -726,7 +755,7 @@ async def get_mlb_predictions(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"MLB slate data load failed: {exc}") from exc
 
-    cache_bust = datetime.utcnow().isoformat() if refresh or ensure_result.get("changed") else None
+    cache_bust = datetime.utcnow().isoformat() if refresh else None
     try:
         payload = await run_in_threadpool(
             _build_mlb_market_prediction_payload,
@@ -736,6 +765,7 @@ async def get_mlb_predictions(
             target_date=target_date.isoformat(),
             limit=limit,
             cache_bust=cache_bust,
+            compute_if_missing=compute_if_missing,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

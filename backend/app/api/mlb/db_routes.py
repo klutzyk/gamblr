@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import uuid
+from datetime import date as date_type
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.mlb.session import MlbAsyncSessionLocal, get_mlb_db
@@ -34,11 +36,18 @@ router = APIRouter()
 mlb_ingest_jobs: dict[str, dict] = {}
 
 
-def _validate_yyyy_mm_dd(value: str, field_name: str) -> None:
+def _validate_yyyy_mm_dd(value: str, field_name: str) -> str:
+    normalized = str(value).strip()
     try:
-        datetime.strptime(value, "%Y-%m-%d")
+        datetime.strptime(normalized, "%Y-%m-%d")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be YYYY-MM-DD") from exc
+    return normalized
+
+
+def _parse_yyyy_mm_dd_date(value: str, field_name: str) -> date_type:
+    normalized = _validate_yyyy_mm_dd(value, field_name)
+    return datetime.strptime(normalized, "%Y-%m-%d").date()
 
 
 def _current_mlb_date():
@@ -437,8 +446,8 @@ async def start_mlb_bootstrap_ingest(
     statcast_minimum: str = Query("0", description="Savant minimum threshold; use 0 for exhaustive"),
     bat_tracking_min_swings: int = Query(0, ge=0, description="Bat-tracking and swing-path threshold; use 0 for exhaustive"),
 ):
-    _validate_yyyy_mm_dd(since, "since")
-    _validate_yyyy_mm_dd(until, "until")
+    since = _validate_yyyy_mm_dd(since, "since")
+    until = _validate_yyyy_mm_dd(until, "until")
     if datetime.strptime(since, "%Y-%m-%d").date() > datetime.strptime(until, "%Y-%m-%d").date():
         raise HTTPException(status_code=400, detail="since must be on or before until")
 
@@ -518,3 +527,126 @@ async def get_mlb_ingest_job(job_id: str):
     if not job:
         return {"status": "not_found", "job_id": job_id}
     return job
+
+
+@router.get("/cron/status")
+async def get_mlb_cron_status(
+    date: str | None = Query(None, description="YYYY-MM-DD. Defaults to current MLB date."),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    target_date_value = _parse_yyyy_mm_dd_date(date or _current_mlb_date().isoformat(), "date")
+
+    stmt = text(
+        """
+        WITH target_games AS (
+            SELECT game_pk
+            FROM mlb_games
+            WHERE official_date = :target_date
+        ),
+        prediction_counts AS (
+            SELECT
+                market,
+                count(*)::integer AS rows,
+                max(updated_at) AS latest_updated_at,
+                max(model_path) AS model_path
+            FROM mlb_prediction_logs
+            WHERE game_date = :target_date
+            GROUP BY market
+        )
+        SELECT
+            (SELECT count(*)::integer FROM target_games) AS games_count,
+            (
+                SELECT max(last_ingested_at)
+                FROM mlb_games
+                WHERE official_date = :target_date
+            ) AS latest_game_ingested_at,
+            (
+                SELECT count(*)::integer
+                FROM mlb_roster_snapshots
+                WHERE roster_date = :target_date
+            ) AS roster_rows,
+            (
+                SELECT max(captured_at)
+                FROM mlb_roster_snapshots
+                WHERE roster_date = :target_date
+            ) AS latest_roster_captured_at,
+            (
+                SELECT count(*)::integer
+                FROM mlb_weather_snapshots ws
+                JOIN target_games tg ON tg.game_pk = ws.game_pk
+            ) AS weather_rows,
+            (
+                SELECT max(pulled_at)
+                FROM mlb_weather_snapshots ws
+                JOIN target_games tg ON tg.game_pk = ws.game_pk
+            ) AS latest_weather_pulled_at,
+            (
+                SELECT count(*)::integer
+                FROM mlb_game_official_assignments oa
+                JOIN target_games tg ON tg.game_pk = oa.game_pk
+            ) AS official_assignment_rows,
+            (
+                SELECT count(*)::integer
+                FROM mlb_prop_odds_snapshots
+                WHERE game_date = :target_date
+                  AND market = 'batter_home_runs'
+            ) AS hr_odds_rows,
+            (
+                SELECT max(fetched_at)
+                FROM mlb_prop_odds_snapshots
+                WHERE game_date = :target_date
+                  AND market = 'batter_home_runs'
+            ) AS latest_hr_odds_fetched_at,
+            (
+                SELECT jsonb_agg(
+                    jsonb_build_object(
+                        'market', market,
+                        'rows', rows,
+                        'latest_updated_at', latest_updated_at,
+                        'model_path', model_path
+                    )
+                    ORDER BY market
+                )
+                FROM prediction_counts
+            ) AS prediction_markets,
+            (
+                SELECT jsonb_agg(
+                    jsonb_build_object(
+                        'provider', provider,
+                        'bookmaker', bookmaker,
+                        'status', status,
+                        'props_count', props_count,
+                        'events_count', events_count,
+                        'fetched_at', fetched_at
+                    )
+                    ORDER BY fetched_at DESC
+                )
+                FROM mlb_prop_odds_fetch_logs
+                WHERE game_date = :target_date
+            ) AS odds_fetch_logs
+        """
+    )
+    row = (await db.execute(stmt, {"target_date": target_date_value})).mappings().first()
+    payload = dict(row or {})
+    prediction_markets = payload.get("prediction_markets") or []
+    market_counts = {
+        item["market"]: item["rows"]
+        for item in prediction_markets
+        if isinstance(item, dict) and item.get("market")
+    }
+    expected_prediction_markets = [
+        "batter_home_runs",
+        "batter_hits",
+        "batter_total_bases",
+        "pitcher_strikeouts",
+    ]
+    return {
+        "status": "ok",
+        "date": target_date_value.isoformat(),
+        **payload,
+        "prediction_market_counts": market_counts,
+        "predictions_complete": all(market_counts.get(market, 0) > 0 for market in expected_prediction_markets),
+        "ingestion_has_schedule": int(payload.get("games_count") or 0) > 0,
+        "ingestion_has_rosters": int(payload.get("roster_rows") or 0) > 0,
+        "ingestion_has_weather": int(payload.get("weather_rows") or 0) > 0,
+    }

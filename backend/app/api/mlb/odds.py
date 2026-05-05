@@ -18,6 +18,7 @@ from app.db.mlb.store_prop_odds import (
     record_mlb_prop_odds_fetch,
     upsert_mlb_prop_odds,
 )
+from app.db.mlb.store_prediction_logs import load_mlb_prediction_logs, upsert_mlb_prediction_logs
 from app.db.url_utils import to_sync_db_url
 from app.services.propline_client import PropLineClient
 
@@ -249,6 +250,52 @@ async def _load_or_fetch_hr_props(
     }
 
 
+async def _load_or_score_hr_predictions(
+    *,
+    engine,
+    day: str,
+    target_date,
+    limit: int,
+    refresh: bool,
+) -> tuple[Any, dict[str, Any]]:
+    if not refresh:
+        stored = await run_in_threadpool(
+            load_mlb_prediction_logs,
+            engine,
+            market=HR_MARKET,
+            game_date=target_date,
+            limit=limit,
+        )
+        if not stored.empty:
+            return stored, {
+                "source": "stored",
+                "rows": len(stored),
+                "model_path": stored["model_path"].dropna().iloc[0] if stored["model_path"].notna().any() else None,
+            }
+
+    scored = await run_in_threadpool(
+        score_batter_home_run_pregame,
+        engine=engine,
+        day=day,
+        target_date=target_date,
+        limit=limit,
+    )
+    stored_count = await run_in_threadpool(
+        upsert_mlb_prediction_logs,
+        engine,
+        HR_MARKET,
+        scored,
+        model_path=scored.attrs.get("artifact_path"),
+        prediction_date=scored.attrs.get("prediction_date"),
+    )
+    return scored, {
+        "source": "computed",
+        "rows": len(scored),
+        "stored_count": stored_count,
+        "model_path": scored.attrs.get("artifact_path") if hasattr(scored, "attrs") else None,
+    }
+
+
 @router.get("/propline/events")
 async def get_propline_mlb_events():
     try:
@@ -411,12 +458,12 @@ async def get_propline_hr_ev_board(
     target_date = resolve_prediction_date(day=day, target_date=date)
     try:
         engine = _sync_engine()
-        scored = await run_in_threadpool(
-            score_batter_home_run_pregame,
+        scored, prediction_cache = await _load_or_score_hr_predictions(
             engine=engine,
             day=day,
             target_date=target_date,
             limit=prediction_limit,
+            refresh=refresh,
         )
         props, odds_cache = await _load_or_fetch_hr_props(
             engine=engine,
@@ -435,8 +482,9 @@ async def get_propline_hr_ev_board(
             "market": HR_MARKET,
             "day": day,
             "date": target_date.isoformat(),
+            "prediction_cache": prediction_cache,
             "odds_cache": odds_cache,
-            "model_path": scored.attrs.get("artifact_path") if hasattr(scored, "attrs") else None,
+            "model_path": prediction_cache.get("model_path"),
             "scored_players": len(scored),
             "props_count": len(props),
             "missing_model_feature_count": len(scored.attrs.get("missing_model_features", [])),
