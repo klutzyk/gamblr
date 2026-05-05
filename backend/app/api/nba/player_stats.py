@@ -457,9 +457,9 @@ def _predictor_for_stat(stat_type: str):
     return predictor
 
 
-def _get_or_compute_predictions(stat_type: str, day: str) -> tuple[list[dict], str]:
+def _get_or_compute_predictions(stat_type: str, day: str, *, refresh: bool = False) -> tuple[list[dict], str]:
     stored_df = _load_stored_predictions(sync_engine, stat_type, day)
-    if not stored_df.empty:
+    if not refresh and not stored_df.empty:
         enriched = _enrich_prediction_frame(
             stored_df,
             stat_type,
@@ -494,7 +494,7 @@ def _get_or_compute_predictions(stat_type: str, day: str) -> tuple[list[dict], s
         stat_type,
         enriched["model_version"].iloc[0] if "model_version" in enriched else None,
     )
-    return df_to_dict(enriched), "computed"
+    return df_to_dict(enriched), "refreshed" if refresh else "computed"
 
 @router.get("/top_scorers")
 def top_scorers(season: str = "2025-26", top_n: int = 10):
@@ -564,12 +564,13 @@ def recent_performers(season: str = "2025-26", last_n_games: int = 5, top_n: int
 @router.get("/predictions/points")
 async def predict_points_api(
     day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
     Predict player points for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    payload, source = await run_in_threadpool(_get_or_compute_predictions, "points", day)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "points", day, refresh=refresh)
     if not payload:
         return {"message": f"No games found for {day}", "data": [], "source": source}
     return {"data": payload, "source": source}
@@ -578,12 +579,13 @@ async def predict_points_api(
 @router.get("/predictions/assists")
 async def predict_assists_api(
     day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
     Predict player assists for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    payload, source = await run_in_threadpool(_get_or_compute_predictions, "assists", day)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "assists", day, refresh=refresh)
     if not payload:
         return {"message": f"No games found for {day}", "data": [], "source": source}
     return {"data": payload, "source": source}
@@ -592,12 +594,13 @@ async def predict_assists_api(
 @router.get("/predictions/rebounds")
 async def predict_rebounds_api(
     day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
     Predict player rebounds for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    payload, source = await run_in_threadpool(_get_or_compute_predictions, "rebounds", day)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "rebounds", day, refresh=refresh)
     if not payload:
         return {"message": f"No games found for {day}", "data": [], "source": source}
     return {"data": payload, "source": source}
@@ -606,12 +609,13 @@ async def predict_rebounds_api(
 @router.get("/predictions/threept")
 async def predict_threept_api(
     day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
     Predict player made 3-pointers for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    payload, source = await run_in_threadpool(_get_or_compute_predictions, "threept", day)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "threept", day, refresh=refresh)
     if not payload:
         return {"message": f"No games found for {day}", "data": [], "source": source}
     return {"data": payload, "source": source}
@@ -620,18 +624,19 @@ async def predict_threept_api(
 @router.get("/predictions/threepa")
 async def predict_threepa_api(
     day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
     Predict player 3-point attempts for NBA games.
     day = today | tomorrow | yesterday | two_days_ago
     """
-    payload, source = await run_in_threadpool(_get_or_compute_predictions, "threepa", day)
+    payload, source = await run_in_threadpool(_get_or_compute_predictions, "threepa", day, refresh=refresh)
     if not payload:
         return {"message": f"No games found for {day}", "data": [], "source": source}
     return {"data": payload, "source": source}
 
 
-def _run_prediction_precompute_job(job_id: str, days: list[str], stat_types: list[str]):
+def _run_prediction_precompute_job(job_id: str, days: list[str], stat_types: list[str], refresh: bool = False):
     prediction_precompute_jobs[job_id]["status"] = "running"
     results: dict[str, dict[str, dict[str, int | str]]] = {}
     total_steps = len(days) * len(stat_types)
@@ -645,7 +650,7 @@ def _run_prediction_precompute_job(job_id: str, days: list[str], stat_types: lis
                 prediction_precompute_jobs[job_id]["current_stat"] = stat_type
                 prediction_precompute_jobs[job_id]["steps_done"] = step
                 prediction_precompute_jobs[job_id]["steps_total"] = total_steps
-                payload, source = _get_or_compute_predictions(stat_type, day)
+                payload, source = _get_or_compute_predictions(stat_type, day, refresh=refresh)
                 results[day][stat_type] = {"rows": len(payload), "source": source}
 
         prediction_precompute_jobs[job_id]["status"] = "completed"
@@ -661,6 +666,7 @@ def _run_prediction_precompute_job(job_id: str, days: list[str], stat_types: lis
 async def start_prediction_precompute(
     days: str = "today,tomorrow",
     stats: str = "points,assists,rebounds,threept,threepa",
+    refresh: bool = False,
 ):
     day_values = [value.strip() for value in days.split(",") if value.strip()]
     stat_values = [value.strip() for value in stats.split(",") if value.strip()]
@@ -678,6 +684,7 @@ async def start_prediction_precompute(
         "status": "queued",
         "days": day_values,
         "stats": stat_values,
+        "refresh": refresh,
         "steps_done": 0,
         "steps_total": len(day_values) * len(stat_values),
         "current_day": None,
@@ -687,9 +694,9 @@ async def start_prediction_precompute(
         "created_at": datetime.utcnow().isoformat(),
     }
     asyncio.create_task(
-        run_in_threadpool(_run_prediction_precompute_job, job_id, day_values, stat_values)
+        run_in_threadpool(_run_prediction_precompute_job, job_id, day_values, stat_values, refresh)
     )
-    return {"status": "queued", "job_id": job_id, "days": day_values, "stats": stat_values}
+    return {"status": "queued", "job_id": job_id, "days": day_values, "stats": stat_values, "refresh": refresh}
 
 
 @router.get("/predictions/precompute/jobs/{job_id}")
