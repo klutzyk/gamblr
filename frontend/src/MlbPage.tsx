@@ -20,7 +20,6 @@ import logo from "./assets/logo2.png";
 type UserRegion = "au" | "us" | "uk";
 type MainTab = "predictions" | "home_run_ev" | "simulation";
 type MlbDay = "auto" | "today" | "tomorrow" | "yesterday";
-type MlbSlateDay = "auto" | "today" | "tomorrow" | "yesterday" | "two_days_ago";
 type MlbSort = "value_desc" | "value_asc" | "lineup_asc" | "player_az";
 type SimulationPlaybackMode = "full" | "highlights";
 type SimulationDetailTab = "boxscore" | "projections" | "play_by_play";
@@ -83,8 +82,6 @@ const SORT_OPTIONS: Array<{ value: MlbSort; label: string }> = [
   { value: "lineup_asc", label: "Lineup Order" },
   { value: "player_az", label: "Player A-Z" },
 ];
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 const MARKET_CONFIG: Record<
   MlbMarketName,
@@ -163,10 +160,6 @@ function getDatePartsInTimeZone(date: Date, timeZone: string) {
   };
 }
 
-function toUtcMidnightMs(parts: { year: number; month: number; day: number }) {
-  return Date.UTC(parts.year, parts.month - 1, parts.day);
-}
-
 function dateValueFromParts(parts: { year: number; month: number; day: number }) {
   const month = String(parts.month).padStart(2, "0");
   const day = String(parts.day).padStart(2, "0");
@@ -179,58 +172,15 @@ function addDaysToDateValue(dateValue: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
-function mapMlbDayToEtSlateDay(day: MlbDay, region: UserRegion): MlbSlateDay {
+function resolveMlbSlateDate(day: MlbDay, region: UserRegion) {
   const selectedOffset: Record<Exclude<MlbDay, "auto">, number> = {
     yesterday: -1,
     today: 0,
     tomorrow: 1,
   };
   const now = new Date();
-  const etToday = getDatePartsInTimeZone(now, "America/New_York");
-  const userToday = getDatePartsInTimeZone(now, REGION_TIMEZONE[region]);
-  const userEtDeltaDays = Math.round((toUtcMidnightMs(userToday) - toUtcMidnightMs(etToday)) / DAY_MS);
-
-  if (region === "au") {
-    const auMapsDirectlyToCurrentEtSlate = userEtDeltaDays >= 1;
-    if (day === "auto") {
-      return auMapsDirectlyToCurrentEtSlate ? "today" : "yesterday";
-    }
-    if (auMapsDirectlyToCurrentEtSlate) {
-      if (day === "yesterday") return "yesterday";
-      if (day === "today") return "today";
-      return "tomorrow";
-    }
-
-    if (day === "yesterday") return "two_days_ago";
-    if (day === "today") return "yesterday";
-    return "today";
-  }
-
-  if (day === "auto") {
-    return "auto";
-  }
-
-  const etOffset = selectedOffset[day] - userEtDeltaDays;
-  if (etOffset <= -2) return "two_days_ago";
-  if (etOffset === -1) return "yesterday";
-  if (etOffset === 0) return "today";
-  if (etOffset >= 1) return "tomorrow";
-  return "auto";
-}
-
-function resolveMlbSlateDate(day: MlbDay, region: UserRegion) {
-  const now = new Date();
-  const etToday = getDatePartsInTimeZone(now, "America/New_York");
-  const etTodayValue = dateValueFromParts(etToday);
-  const slateDay = mapMlbDayToEtSlateDay(day, region);
-  const slateOffset: Record<MlbSlateDay, number> = {
-    two_days_ago: -2,
-    yesterday: -1,
-    today: 0,
-    auto: 0,
-    tomorrow: 1,
-  };
-  return addDaysToDateValue(etTodayValue, slateOffset[slateDay]);
+  const userToday = dateValueFromParts(getDatePartsInTimeZone(now, REGION_TIMEZONE[region]));
+  return day === "auto" ? userToday : addDaysToDateValue(userToday, selectedOffset[day]);
 }
 
 function formatMlbDateValue(dateValue: string, region: UserRegion) {
@@ -239,6 +189,68 @@ function formatMlbDateValue(dateValue: string, region: UserRegion) {
     month: "short",
     day: "numeric",
   }).format(new Date(`${dateValue}T12:00:00Z`));
+}
+
+function localDateValueFromUtc(value: string | null | undefined, region: UserRegion) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return dateValueFromParts(getDatePartsInTimeZone(date, REGION_TIMEZONE[region]));
+}
+
+function mlbOfficialDateCandidatesForLocalDate(dateValue: string) {
+  return [addDaysToDateValue(dateValue, -1), dateValue];
+}
+
+function filterSlateToLocalDate(
+  payloads: MlbPredictionSlateResponse[],
+  {
+    localDate,
+    region,
+  }: {
+    localDate: string;
+    region: UserRegion;
+  },
+): MlbPredictionSlateResponse {
+  const firstPayload = payloads[0];
+  const markets = {} as MlbPredictionSlateResponse["markets"];
+
+  (Object.keys(MARKET_CONFIG) as MlbMarketName[]).forEach((market) => {
+    const rows = payloads
+      .flatMap((payload) => payload.markets?.[market]?.data ?? [])
+      .filter((row) => localDateValueFromUtc(row.start_time_utc, region) === localDate);
+    const seen = new Set<string>();
+    const uniqueRows = rows.filter((row) => {
+      const key = `${row.game_pk}-${row.player_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const marketPayload = payloads.find((payload) => payload.markets?.[market])?.markets[market];
+    markets[market] = {
+      market,
+      count: uniqueRows.length,
+      missing_model_feature_count: marketPayload?.missing_model_feature_count ?? 0,
+      missing_model_features_sample: marketPayload?.missing_model_features_sample ?? [],
+      model_status: marketPayload?.model_status,
+      data: uniqueRows,
+    };
+  });
+
+  return {
+    sport: firstPayload?.sport ?? "mlb",
+    status: firstPayload?.status ?? "scored",
+    source: firstPayload?.source,
+    day: firstPayload?.day ?? "date",
+    date: localDate,
+    data_load: {
+      mode: "local_start_date",
+      local_date: localDate,
+      region,
+      official_dates_checked: mlbOfficialDateCandidatesForLocalDate(localDate),
+    },
+    markets,
+  };
 }
 
 function formatGameTime(value: string | null | undefined, region: UserRegion) {
@@ -1637,15 +1649,36 @@ export default function MlbPage() {
   const loadPredictions = async (force = false) => {
     setPredictionsState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const data = await getMlbPredictionSlate({
-        day: predictionDay,
-        date: resolvedMlbDate,
-        limit_per_market: 60,
-        ensure_data: true,
-        refresh: force,
-        refresh_key: force ? Date.now() : undefined,
+      const officialDateCandidates = mlbOfficialDateCandidatesForLocalDate(resolvedMlbDate);
+      const payloads: MlbPredictionSlateResponse[] = [];
+      const failures: string[] = [];
+      for (const date of officialDateCandidates) {
+        try {
+          payloads.push(
+            await getMlbPredictionSlate({
+            day: predictionDay,
+            date,
+            limit_per_market: 200,
+            ensure_data: true,
+            refresh: force,
+            refresh_key: force ? Date.now() : undefined,
+          })
+          );
+        } catch (error) {
+          failures.push(`${date}: ${error instanceof Error ? error.message : "request failed"}`);
+        }
+      }
+      if (payloads.length === 0) {
+        throw new Error(failures.join("; ") || "Failed to load MLB predictions.");
+      }
+      setPredictionsState({
+        data: filterSlateToLocalDate(payloads, {
+          localDate: resolvedMlbDate,
+          region: userRegion,
+        }),
+        loading: false,
+        error: null,
       });
-      setPredictionsState({ data, loading: false, error: null });
     } catch (error) {
       setPredictionsState({
         data: null,
@@ -1957,7 +1990,7 @@ export default function MlbPage() {
                                 </option>
                               ))}
                             </select>
-                            <span className="text-xs text-secondary mt-1">MLB slate {resolvedMlbDateLabel}</span>
+                            <span className="text-xs text-secondary mt-1">Games on {resolvedMlbDateLabel}</span>
                           </label>
                           <label className="prediction-select-field">
                             <span className="prediction-select-label">Sort</span>
@@ -2059,7 +2092,7 @@ export default function MlbPage() {
                               </option>
                             ))}
                           </select>
-                          <span className="text-xs text-secondary">MLB slate {resolvedMlbDateLabel}</span>
+                          <span className="text-xs text-secondary">Games on {resolvedMlbDateLabel}</span>
                         </div>
                         <div className="control-group">
                           <label className="form-label" htmlFor="mlb-bookie">
@@ -2140,7 +2173,7 @@ export default function MlbPage() {
                               </option>
                             ))}
                           </select>
-                          <span className="text-xs text-secondary">MLB slate {resolvedMlbDateLabel}</span>
+                          <span className="text-xs text-secondary">Games on {resolvedMlbDateLabel}</span>
                         </div>
                         <div className="control-group simulation-game-select">
                           <label className="form-label" htmlFor="mlb-sim-game">
@@ -2262,7 +2295,7 @@ export default function MlbPage() {
               <div className="section-card mb-4 prediction-focus">
                 <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Slate</p>
                 <h4 className="mb-1">{selectedDayLabel} ({dayLabelSuffix})</h4>
-                <p className="text-xs text-secondary mb-3">MLB official slate {resolvedMlbDate}</p>
+                <p className="text-xs text-secondary mb-3">Games starting on {resolvedMlbDateLabel}</p>
                 <div className="row g-3">
                   <div className="col-6">
                     <div className="mlb-stat-tile">

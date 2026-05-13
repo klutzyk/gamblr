@@ -71,6 +71,8 @@ def resolve_prediction_date(day: str = "tomorrow", target_date: str | date | Non
         return today
     if day == "yesterday":
         return today - timedelta(days=1)
+    if day == "two_days_ago":
+        return today - timedelta(days=2)
     if day in {"tomorrow", "auto"}:
         return today + timedelta(days=1)
     return pd.to_datetime(day).date()

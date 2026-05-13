@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.db.mlb.store_prediction_logs import (
@@ -49,13 +50,20 @@ training_jobs: dict[str, dict] = {}
 
 
 def _sync_engine():
-    return create_engine(to_sync_db_url(settings.ML_DATABASE_URL))
+    return create_engine(
+        to_sync_db_url(settings.ML_DATABASE_URL),
+        poolclass=NullPool,
+        pool_pre_ping=True,
+    )
 
 
 def _count_sync(sql: str, params: dict) -> int:
-    engine = create_engine(to_sync_db_url(settings.ML_DATABASE_URL))
-    with engine.connect() as conn:
-        return int(conn.execute(text(sql), params).scalar() or 0)
+    engine = _sync_engine()
+    try:
+        with engine.connect() as conn:
+            return int(conn.execute(text(sql), params).scalar() or 0)
+    finally:
+        engine.dispose()
 
 
 async def _ensure_mlb_slate_data(
@@ -154,75 +162,78 @@ def _build_mlb_prediction_slate_payload(
     cache_bust: str | None = None,
     compute_if_missing: bool = True,
 ) -> dict:
-    engine = create_engine(database_url)
-    resolved_date = resolve_prediction_date(day=day, target_date=target_date)
-    force_compute = cache_bust is not None
+    engine = create_engine(database_url, poolclass=NullPool, pool_pre_ping=True)
+    try:
+        resolved_date = resolve_prediction_date(day=day, target_date=target_date)
+        force_compute = cache_bust is not None
 
-    stored_by_market = None
-    if not force_compute:
-        stored_by_market = load_mlb_prediction_slate_logs(engine, game_date=resolved_date, limit_per_market=None)
-        if all(
-            _stored_market_is_complete(market, stored, requested_limit=limit_per_market)
-            for market, stored in stored_by_market.items()
-        ):
-            return {
-                "sport": "mlb",
-                "status": "scored",
-                "source": "stored",
-                "day": day,
-                "date": resolved_date.isoformat(),
-                "cache_bust": cache_bust,
-                "markets": {
-                    market: _stored_market_payload(market, stored, limit=limit_per_market)
-                    for market, stored in stored_by_market.items()
-                },
-            }
-        if not compute_if_missing:
-            return {
-                "sport": "mlb",
-                "status": "stored_partial",
-                "source": "stored_partial",
-                "day": day,
-                "date": resolved_date.isoformat(),
-                "cache_bust": cache_bust,
-                "needs_precompute": True,
-                "markets": {
-                    market: _stored_market_payload(market, stored, limit=limit_per_market)
-                    for market, stored in stored_by_market.items()
-                },
-            }
+        stored_by_market = None
+        if not force_compute:
+            stored_by_market = load_mlb_prediction_slate_logs(engine, game_date=resolved_date, limit_per_market=None)
+            if all(
+                _stored_market_is_complete(market, stored, requested_limit=limit_per_market)
+                for market, stored in stored_by_market.items()
+            ):
+                return {
+                    "sport": "mlb",
+                    "status": "scored",
+                    "source": "stored",
+                    "day": day,
+                    "date": resolved_date.isoformat(),
+                    "cache_bust": cache_bust,
+                    "markets": {
+                        market: _stored_market_payload(market, stored, limit=limit_per_market)
+                        for market, stored in stored_by_market.items()
+                    },
+                }
+            if not compute_if_missing:
+                return {
+                    "sport": "mlb",
+                    "status": "stored_partial",
+                    "source": "stored_partial",
+                    "day": day,
+                    "date": resolved_date.isoformat(),
+                    "cache_bust": cache_bust,
+                    "needs_precompute": True,
+                    "markets": {
+                        market: _stored_market_payload(market, stored, limit=limit_per_market)
+                        for market, stored in stored_by_market.items()
+                    },
+                }
 
-    scored_by_market = score_pregame_slate(
-        database_url=database_url,
-        day=day,
-        target_date=target_date,
-        limit_per_market=None,
-    )
-    markets = {}
-    prediction_date = target_date
-    for market, scored in scored_by_market.items():
-        prediction_date = scored.attrs.get("prediction_date") or prediction_date
-        upsert_mlb_prediction_logs(
-            engine,
-            market,
-            scored,
-            model_path=scored.attrs.get("artifact_path"),
-            prediction_date=prediction_date,
+        scored_by_market = score_pregame_slate(
+            database_url=database_url,
+            day=day,
+            target_date=target_date,
+            limit_per_market=None,
         )
-        markets[market] = _payload_for_scored_market(
-            market,
-            scored,
-            limit=limit_per_market,
-        )
-    return {
-        "sport": "mlb",
-        "status": "scored",
-        "source": "computed",
-        "day": day,
-        "date": prediction_date,
-        "cache_bust": cache_bust,
-        "markets": markets,
-    }
+        markets = {}
+        prediction_date = target_date
+        for market, scored in scored_by_market.items():
+            prediction_date = scored.attrs.get("prediction_date") or prediction_date
+            upsert_mlb_prediction_logs(
+                engine,
+                market,
+                scored,
+                model_path=scored.attrs.get("artifact_path"),
+                prediction_date=prediction_date,
+            )
+            markets[market] = _payload_for_scored_market(
+                market,
+                scored,
+                limit=limit_per_market,
+            )
+        return {
+            "sport": "mlb",
+            "status": "scored",
+            "source": "computed",
+            "day": day,
+            "date": prediction_date,
+            "cache_bust": cache_bust,
+            "markets": markets,
+        }
+    finally:
+        engine.dispose()
 
 
 @cached(ttl_seconds=300)
@@ -236,63 +247,66 @@ def _build_mlb_market_prediction_payload(
     cache_bust: str | None = None,
     compute_if_missing: bool = True,
 ) -> dict:
-    engine = create_engine(database_url)
-    resolved_date = resolve_prediction_date(day=day, target_date=target_date)
-    if cache_bust is None:
-        stored = load_mlb_prediction_logs(
-            engine,
-            market=market,
-            game_date=resolved_date,
+    engine = create_engine(database_url, poolclass=NullPool, pool_pre_ping=True)
+    try:
+        resolved_date = resolve_prediction_date(day=day, target_date=target_date)
+        if cache_bust is None:
+            stored = load_mlb_prediction_logs(
+                engine,
+                market=market,
+                game_date=resolved_date,
+                limit=None,
+            )
+            if _stored_market_is_complete(market, stored, requested_limit=limit):
+                return {
+                    "sport": "mlb",
+                    "status": "scored",
+                    "source": "stored",
+                    "market": market,
+                    "day": day,
+                    "date": resolved_date.isoformat(),
+                    "cache_bust": cache_bust,
+                    **_stored_market_payload(market, stored, limit=limit),
+                }
+            if not compute_if_missing:
+                return {
+                    "sport": "mlb",
+                    "status": "stored_partial",
+                    "source": "stored_partial",
+                    "market": market,
+                    "day": day,
+                    "date": resolved_date.isoformat(),
+                    "cache_bust": cache_bust,
+                    "needs_precompute": True,
+                    **_stored_market_payload(market, stored, limit=limit),
+                }
+
+        scored = score_market_pregame(
+            market,
+            database_url=database_url,
+            day=day,
+            target_date=target_date,
             limit=None,
         )
-        if _stored_market_is_complete(market, stored, requested_limit=limit):
-            return {
-                "sport": "mlb",
-                "status": "scored",
-                "source": "stored",
-                "market": market,
-                "day": day,
-                "date": resolved_date.isoformat(),
-                "cache_bust": cache_bust,
-                **_stored_market_payload(market, stored, limit=limit),
-            }
-        if not compute_if_missing:
-            return {
-                "sport": "mlb",
-                "status": "stored_partial",
-                "source": "stored_partial",
-                "market": market,
-                "day": day,
-                "date": resolved_date.isoformat(),
-                "cache_bust": cache_bust,
-                "needs_precompute": True,
-                **_stored_market_payload(market, stored, limit=limit),
-            }
-
-    scored = score_market_pregame(
-        market,
-        database_url=database_url,
-        day=day,
-        target_date=target_date,
-        limit=None,
-    )
-    upsert_mlb_prediction_logs(
-        engine,
-        market,
-        scored,
-        model_path=scored.attrs.get("artifact_path"),
-        prediction_date=scored.attrs.get("prediction_date"),
-    )
-    return {
-        "sport": "mlb",
-        "status": "scored",
-        "source": "computed",
-        "market": market,
-        "day": day,
-        "date": scored.attrs.get("prediction_date"),
-        "cache_bust": cache_bust,
-        **_payload_for_scored_market(market, scored, limit=limit),
-    }
+        upsert_mlb_prediction_logs(
+            engine,
+            market,
+            scored,
+            model_path=scored.attrs.get("artifact_path"),
+            prediction_date=scored.attrs.get("prediction_date"),
+        )
+        return {
+            "sport": "mlb",
+            "status": "scored",
+            "source": "computed",
+            "market": market,
+            "day": day,
+            "date": scored.attrs.get("prediction_date"),
+            "cache_bust": cache_bust,
+            **_payload_for_scored_market(market, scored, limit=limit),
+        }
+    finally:
+        engine.dispose()
 
 
 @router.get("/markets")
@@ -370,22 +384,25 @@ def _run_mlb_training_job(
 
     try:
         engine = _sync_engine()
-        for step, market in enumerate(markets, start=1):
-            job["current_market"] = market
-            job["steps_done"] = step - 1
-            report = train_market(
-                market,
-                engine=engine,
-                min_player_games=min_player_games,
-                search_models=search_models,
-            )
-            reports[market] = report
-            job["selected_models"] = {
-                report_market: report_payload.get("model_name")
-                for report_market, report_payload in reports.items()
-            }
-            job["reports"] = reports
-            job["steps_done"] = step
+        try:
+            for step, market in enumerate(markets, start=1):
+                job["current_market"] = market
+                job["steps_done"] = step - 1
+                report = train_market(
+                    market,
+                    engine=engine,
+                    min_player_games=min_player_games,
+                    search_models=search_models,
+                )
+                reports[market] = report
+                job["selected_models"] = {
+                    report_market: report_payload.get("model_name")
+                    for report_market, report_payload in reports.items()
+                }
+                job["reports"] = reports
+                job["steps_done"] = step
+        finally:
+            engine.dispose()
 
         job["status"] = "completed"
         job["finished_at"] = datetime.utcnow().isoformat()
@@ -493,16 +510,19 @@ async def train_mlb_market(
 ):
     if market not in PLANNED_MARKETS:
         raise HTTPException(status_code=404, detail="Unknown MLB market.")
+    engine = _sync_engine()
     try:
         report = await run_in_threadpool(
             train_market,
             market,
-            engine=_sync_engine(),
+            engine=engine,
             min_player_games=min_player_games,
             search_models=search_models,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        engine.dispose()
     return {
         "sport": "mlb",
         "status": "trained",
@@ -540,7 +560,7 @@ async def evaluate_mlb_market(
 
 @router.get("/slate")
 async def get_mlb_prediction_slate(
-    day: str = Query("tomorrow", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("tomorrow", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
     date: str | None = Query(None, description="Optional YYYY-MM-DD override."),
     limit_per_market: int = Query(60, ge=1, le=200),
     ensure_data: bool = Query(True, description="Auto-load missing schedule/roster rows before scoring."),
@@ -576,7 +596,7 @@ def _parse_precompute_days(days: str) -> list[str]:
     day_values = [value.strip() for value in days.split(",") if value.strip()]
     if not day_values:
         raise HTTPException(status_code=400, detail="days must include at least one value.")
-    valid_days = {"today", "tomorrow", "yesterday", "auto"}
+    valid_days = {"today", "tomorrow", "yesterday", "two_days_ago", "auto"}
     invalid_days = [day for day in day_values if day not in valid_days]
     if invalid_days:
         raise HTTPException(
@@ -678,7 +698,7 @@ def _create_mlb_prediction_precompute_job(
 
 @router.post("/precompute/start")
 async def start_mlb_prediction_precompute(
-    days: str = Query("today,tomorrow", description="Comma-separated: today,tomorrow,yesterday,auto"),
+    days: str = Query("today,tomorrow", description="Comma-separated: today,tomorrow,yesterday,two_days_ago,auto"),
     limit_per_market: int = Query(200, ge=1, le=500),
     refresh: bool = Query(False, description="Recompute even if prediction logs already exist."),
     ensure_data: bool = Query(True, description="Load missing schedule/roster data before scoring."),
@@ -704,7 +724,7 @@ async def start_mlb_prediction_precompute(
 
 @router.post("/precompute/run")
 async def run_mlb_prediction_precompute(
-    days: str = Query("today,tomorrow", description="Comma-separated: today,tomorrow,yesterday,auto"),
+    days: str = Query("today,tomorrow", description="Comma-separated: today,tomorrow,yesterday,two_days_ago,auto"),
     limit_per_market: int = Query(200, ge=1, le=500),
     refresh: bool = Query(False, description="Recompute even if prediction logs already exist."),
     ensure_data: bool = Query(True, description="Load missing schedule/roster data before scoring."),
@@ -737,7 +757,7 @@ async def get_mlb_prediction_precompute_job(job_id: str):
 @router.get("/{market}")
 async def get_mlb_predictions(
     market: str,
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
     date: str | None = Query(None, description="Optional YYYY-MM-DD override."),
     limit: int = Query(100, ge=1, le=500),
     ensure_data: bool = Query(True, description="Auto-load missing schedule/roster rows before scoring."),
