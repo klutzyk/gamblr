@@ -300,6 +300,18 @@ function formatAmerican(value?: number | null) {
   return value > 0 ? `+${value}` : String(value);
 }
 
+function formatKelly(value?: number | null) {
+  if (typeof value !== "number" || Number.isNaN(value) || value <= 0) return "0.0%";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function bettingGradeClass(grade?: string | null) {
+  if (grade === "A+" || grade === "A") return "bet-grade bet-grade-strong";
+  if (grade === "B") return "bet-grade bet-grade-good";
+  if (grade === "C") return "bet-grade bet-grade-watch";
+  return "bet-grade bet-grade-pass";
+}
+
 function formatMarketValue(row: MlbPredictionRow, market: MlbMarketName) {
   const config = MARKET_CONFIG[market];
   const rawValue = row[config.valueKey];
@@ -572,7 +584,9 @@ function EvRowTable({ rows, userRegion }: { rows: MlbHrEvRow[]; userRegion: User
             <th className="text-center">Order</th>
             <th className="text-center">Time</th>
             <th className="text-center">Projected</th>
+            <th className="text-center">Grade</th>
             <th className="text-center">Odds</th>
+            <th className="text-center">Fair</th>
             <th className="text-center">Book Chance</th>
             <th className="text-center">Edge</th>
             <th className="text-center">Value / $1</th>
@@ -598,7 +612,19 @@ function EvRowTable({ rows, userRegion }: { rows: MlbHrEvRow[]; userRegion: User
               <td className="text-center text-sm">{row.batting_order ? Math.round(row.batting_order) : "-"}</td>
               <td className="text-center text-sm">{formatGameTime(row.commence_time, userRegion)}</td>
               <td className="text-center fw-bold">{formatPct(row.model_probability)}</td>
+              <td className="text-center">
+                <div className="d-flex flex-column align-items-center gap-1">
+                  <span className={bettingGradeClass(row.betting_grade)} title={(row.grade_reasons ?? []).join(" / ")}>
+                    {row.betting_grade ?? "-"}
+                  </span>
+                  <span className="text-xs text-secondary">
+                    {typeof row.betting_score === "number" ? `${row.betting_score.toFixed(0)} / 100` : "-"}
+                  </span>
+                  <span className="text-xs text-secondary">Kelly {formatKelly(row.kelly_fraction)}</span>
+                </div>
+              </td>
               <td className="text-center fw-bold">{formatAmerican(row.american_odds)}</td>
+              <td className="text-center">{formatAmerican(row.fair_american_odds)}</td>
               <td className="text-center">{formatPct(row.implied_probability)}</td>
               <td className={`text-center fw-bold ${row.edge > 0 ? "text-success" : "text-danger"}`}>
                 {formatPct(row.edge)}
@@ -2319,7 +2345,9 @@ export default function MlbPage() {
                   <p className="text-xs text-secondary fw-bold text-uppercase mb-2">Best Value</p>
                   <h5 className="mb-1">{bestEv?.player_name ?? "-"}</h5>
                   <p className="text-sm text-secondary mb-0">
-                    {bestEv ? `${formatAmerican(bestEv.american_odds)} | ${formatMoney(bestEv.ev_per_dollar)} per $1` : "Open Home Run Value"}
+                    {bestEv
+                      ? `${bestEv.betting_grade ?? "-"} grade | ${formatAmerican(bestEv.american_odds)} | ${formatMoney(bestEv.ev_per_dollar)} per $1`
+                      : "Open Home Run Value"}
                   </p>
                 </div>
                 <div className="border-top pt-3 mt-3">

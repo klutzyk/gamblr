@@ -26,6 +26,7 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
+from ml.mlb.betting_grade import add_hr_betting_grades  # noqa: E402
 from ml.mlb.pregame import resolve_prediction_date, score_batter_home_run_pregame  # noqa: E402
 
 
@@ -375,6 +376,7 @@ async def get_propline_hr_ev(request: HREvRequest):
             }
         )
 
+    add_hr_betting_grades(rows)
     rows.sort(key=lambda item: (item["ev_per_dollar"], item["edge"], item["model_probability"]), reverse=True)
     return {
         "sport": "mlb",
@@ -434,6 +436,7 @@ def _join_predictions_to_props(scored, props: list[dict[str, Any]], *, limit: in
             }
         )
 
+    add_hr_betting_grades(rows)
     rows.sort(key=lambda item: (item["ev_per_dollar"], item["edge"], item["model_probability"]), reverse=True)
     return {
         "matched": len(rows),

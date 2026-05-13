@@ -881,6 +881,38 @@
   vertical-align: middle;
 }
 
+.bet-grade {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.4rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  padding: 0 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 900;
+  color: var(--brand-dark);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+.bet-grade-strong {
+  background: linear-gradient(135deg, #5be448, #d9ff77);
+  box-shadow: 0 0.55rem 1.2rem rgba(91, 228, 72, 0.25);
+}
+
+.bet-grade-good {
+  background: #d8fbe2;
+}
+
+.bet-grade-watch {
+  background: #fff1b8;
+}
+
+.bet-grade-pass {
+  background: #edf2f2;
+  color: var(--brand-muted);
+}
+
 .mlb-recent-form {
   border: 1px solid rgba(15, 23, 42, 0.1);
   border-radius: 0.75rem;

@@ -203,6 +203,12 @@ export type MlbHrEvRow = {
   implied_probability: number;
   edge: number;
   ev_per_dollar: number;
+  betting_grade?: string | null;
+  betting_score?: number | null;
+  bet_recommendation?: string | null;
+  kelly_fraction?: number | null;
+  fair_american_odds?: number | null;
+  grade_reasons?: string[];
   american_odds: number;
   decimal_odds: number;
 };
