@@ -83,8 +83,6 @@ const SORT_OPTIONS: Array<{ value: MlbSort; label: string }> = [
   { value: "player_az", label: "Player A-Z" },
 ];
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 const MARKET_CONFIG: Record<
   MlbMarketName,
   { label: string; tabLabel: string; shortLabel: string; unit: string; icon: string; valueKey: "probability" | "prediction" }
@@ -162,10 +160,6 @@ function getDatePartsInTimeZone(date: Date, timeZone: string) {
   };
 }
 
-function toUtcMidnightMs(parts: { year: number; month: number; day: number }) {
-  return Date.UTC(parts.year, parts.month - 1, parts.day);
-}
-
 function dateValueFromParts(parts: { year: number; month: number; day: number }) {
   const month = String(parts.month).padStart(2, "0");
   const day = String(parts.day).padStart(2, "0");
@@ -185,28 +179,78 @@ function resolveMlbSlateDate(day: MlbDay, region: UserRegion) {
     tomorrow: 1,
   };
   const now = new Date();
-  const mlbToday = getDatePartsInTimeZone(now, "America/New_York");
-  const userToday = getDatePartsInTimeZone(now, REGION_TIMEZONE[region]);
-  const mlbTodayValue = dateValueFromParts(mlbToday);
-  const userMlbDeltaDays = Math.round((toUtcMidnightMs(userToday) - toUtcMidnightMs(mlbToday)) / DAY_MS);
+  const userToday = dateValueFromParts(getDatePartsInTimeZone(now, REGION_TIMEZONE[region]));
+  return day === "auto" ? userToday : addDaysToDateValue(userToday, selectedOffset[day]);
+}
 
-  if (region === "au") {
-    const auStillAheadOfMlbDate = userMlbDeltaDays >= 1;
-    if (day === "auto") {
-      return addDaysToDateValue(mlbTodayValue, auStillAheadOfMlbDate ? 0 : -1);
-    }
-    if (auStillAheadOfMlbDate) {
-      return addDaysToDateValue(mlbTodayValue, selectedOffset[day]);
-    }
-    if (day === "yesterday") return addDaysToDateValue(mlbTodayValue, -2);
-    if (day === "today") return addDaysToDateValue(mlbTodayValue, -1);
-    return mlbTodayValue;
-  }
+function formatMlbDateValue(dateValue: string, region: UserRegion) {
+  return new Intl.DateTimeFormat("en-AU", {
+    timeZone: REGION_TIMEZONE[region],
+    month: "short",
+    day: "numeric",
+  }).format(new Date(`${dateValue}T12:00:00Z`));
+}
 
-  if (day === "auto") {
-    return mlbTodayValue;
-  }
-  return addDaysToDateValue(mlbTodayValue, selectedOffset[day]);
+function localDateValueFromUtc(value: string | null | undefined, region: UserRegion) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return dateValueFromParts(getDatePartsInTimeZone(date, REGION_TIMEZONE[region]));
+}
+
+function mlbOfficialDateCandidatesForLocalDate(dateValue: string) {
+  return [addDaysToDateValue(dateValue, -1), dateValue];
+}
+
+function filterSlateToLocalDate(
+  payloads: MlbPredictionSlateResponse[],
+  {
+    localDate,
+    region,
+  }: {
+    localDate: string;
+    region: UserRegion;
+  },
+): MlbPredictionSlateResponse {
+  const firstPayload = payloads[0];
+  const markets = {} as MlbPredictionSlateResponse["markets"];
+
+  (Object.keys(MARKET_CONFIG) as MlbMarketName[]).forEach((market) => {
+    const rows = payloads
+      .flatMap((payload) => payload.markets?.[market]?.data ?? [])
+      .filter((row) => localDateValueFromUtc(row.start_time_utc, region) === localDate);
+    const seen = new Set<string>();
+    const uniqueRows = rows.filter((row) => {
+      const key = `${row.game_pk}-${row.player_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const marketPayload = payloads.find((payload) => payload.markets?.[market])?.markets[market];
+    markets[market] = {
+      market,
+      count: uniqueRows.length,
+      missing_model_feature_count: marketPayload?.missing_model_feature_count ?? 0,
+      missing_model_features_sample: marketPayload?.missing_model_features_sample ?? [],
+      model_status: marketPayload?.model_status,
+      data: uniqueRows,
+    };
+  });
+
+  return {
+    sport: firstPayload?.sport ?? "mlb",
+    status: firstPayload?.status ?? "scored",
+    source: firstPayload?.source,
+    day: firstPayload?.day ?? "date",
+    date: localDate,
+    data_load: {
+      mode: "local_start_date",
+      local_date: localDate,
+      region,
+      official_dates_checked: mlbOfficialDateCandidatesForLocalDate(localDate),
+    },
+    markets,
+  };
 }
 
 function formatGameTime(value: string | null | undefined, region: UserRegion) {
@@ -254,6 +298,18 @@ function formatNumber(value?: number | null, digits = 1) {
 function formatAmerican(value?: number | null) {
   if (typeof value !== "number" || Number.isNaN(value)) return "-";
   return value > 0 ? `+${value}` : String(value);
+}
+
+function formatKelly(value?: number | null) {
+  if (typeof value !== "number" || Number.isNaN(value) || value <= 0) return "0.0%";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function bettingGradeClass(grade?: string | null) {
+  if (grade === "A+" || grade === "A") return "bet-grade bet-grade-strong";
+  if (grade === "B") return "bet-grade bet-grade-good";
+  if (grade === "C") return "bet-grade bet-grade-watch";
+  return "bet-grade bet-grade-pass";
 }
 
 function formatMarketValue(row: MlbPredictionRow, market: MlbMarketName) {
@@ -528,7 +584,9 @@ function EvRowTable({ rows, userRegion }: { rows: MlbHrEvRow[]; userRegion: User
             <th className="text-center">Order</th>
             <th className="text-center">Time</th>
             <th className="text-center">Projected</th>
+            <th className="text-center">Grade</th>
             <th className="text-center">Odds</th>
+            <th className="text-center">Fair</th>
             <th className="text-center">Book Chance</th>
             <th className="text-center">Edge</th>
             <th className="text-center">Value / $1</th>
@@ -554,7 +612,19 @@ function EvRowTable({ rows, userRegion }: { rows: MlbHrEvRow[]; userRegion: User
               <td className="text-center text-sm">{row.batting_order ? Math.round(row.batting_order) : "-"}</td>
               <td className="text-center text-sm">{formatGameTime(row.commence_time, userRegion)}</td>
               <td className="text-center fw-bold">{formatPct(row.model_probability)}</td>
+              <td className="text-center">
+                <div className="d-flex flex-column align-items-center gap-1">
+                  <span className={bettingGradeClass(row.betting_grade)} title={(row.grade_reasons ?? []).join(" / ")}>
+                    {row.betting_grade ?? "-"}
+                  </span>
+                  <span className="text-xs text-secondary">
+                    {typeof row.betting_score === "number" ? `${row.betting_score.toFixed(0)} / 100` : "-"}
+                  </span>
+                  <span className="text-xs text-secondary">Kelly {formatKelly(row.kelly_fraction)}</span>
+                </div>
+              </td>
               <td className="text-center fw-bold">{formatAmerican(row.american_odds)}</td>
+              <td className="text-center">{formatAmerican(row.fair_american_odds)}</td>
               <td className="text-center">{formatPct(row.implied_probability)}</td>
               <td className={`text-center fw-bold ${row.edge > 0 ? "text-success" : "text-danger"}`}>
                 {formatPct(row.edge)}
@@ -1605,15 +1675,36 @@ export default function MlbPage() {
   const loadPredictions = async (force = false) => {
     setPredictionsState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const data = await getMlbPredictionSlate({
-        day: predictionDay,
-        date: resolvedMlbDate,
-        limit_per_market: 60,
-        ensure_data: true,
-        refresh: force,
-        refresh_key: force ? Date.now() : undefined,
+      const officialDateCandidates = mlbOfficialDateCandidatesForLocalDate(resolvedMlbDate);
+      const payloads: MlbPredictionSlateResponse[] = [];
+      const failures: string[] = [];
+      for (const date of officialDateCandidates) {
+        try {
+          payloads.push(
+            await getMlbPredictionSlate({
+            day: predictionDay,
+            date,
+            limit_per_market: 200,
+            ensure_data: true,
+            refresh: force,
+            refresh_key: force ? Date.now() : undefined,
+          })
+          );
+        } catch (error) {
+          failures.push(`${date}: ${error instanceof Error ? error.message : "request failed"}`);
+        }
+      }
+      if (payloads.length === 0) {
+        throw new Error(failures.join("; ") || "Failed to load MLB predictions.");
+      }
+      setPredictionsState({
+        data: filterSlateToLocalDate(payloads, {
+          localDate: resolvedMlbDate,
+          region: userRegion,
+        }),
+        loading: false,
+        error: null,
       });
-      setPredictionsState({ data, loading: false, error: null });
     } catch (error) {
       setPredictionsState({
         data: null,
@@ -2025,6 +2116,7 @@ export default function MlbPage() {
                               </option>
                             ))}
                           </select>
+                          <span className="text-xs text-secondary">Games on {formatMlbDateValue(resolvedMlbDate, userRegion)}</span>
                         </div>
                         <div className="control-group">
                           <label className="form-label" htmlFor="mlb-bookie">
@@ -2105,6 +2197,7 @@ export default function MlbPage() {
                               </option>
                             ))}
                           </select>
+                          <span className="text-xs text-secondary">Games on {formatMlbDateValue(resolvedMlbDate, userRegion)}</span>
                         </div>
                         <div className="control-group simulation-game-select">
                           <label className="form-label" htmlFor="mlb-sim-game">
@@ -2225,7 +2318,8 @@ export default function MlbPage() {
             <div className="col-lg-4">
               <div className="section-card mb-4 prediction-focus">
                 <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Slate</p>
-                <h4 className="mb-3">{selectedDayLabel} ({dayLabelSuffix})</h4>
+                <h4 className="mb-1">{selectedDayLabel} ({dayLabelSuffix})</h4>
+                <p className="text-xs text-secondary mb-3">Games starting on {formatMlbDateValue(resolvedMlbDate, userRegion)}</p>
                 <div className="row g-3">
                   <div className="col-6">
                     <div className="mlb-stat-tile">
@@ -2251,7 +2345,9 @@ export default function MlbPage() {
                   <p className="text-xs text-secondary fw-bold text-uppercase mb-2">Best Value</p>
                   <h5 className="mb-1">{bestEv?.player_name ?? "-"}</h5>
                   <p className="text-sm text-secondary mb-0">
-                    {bestEv ? `${formatAmerican(bestEv.american_odds)} | ${formatMoney(bestEv.ev_per_dollar)} per $1` : "Open Home Run Value"}
+                    {bestEv
+                      ? `${bestEv.betting_grade ?? "-"} grade | ${formatAmerican(bestEv.american_odds)} | ${formatMoney(bestEv.ev_per_dollar)} per $1`
+                      : "Open Home Run Value"}
                   </p>
                 </div>
                 <div className="border-top pt-3 mt-3">

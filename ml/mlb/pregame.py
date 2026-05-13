@@ -11,6 +11,7 @@ import pandas as pd
 from .artifacts import score_frame
 from .features import (
     _add_calendar_features,
+    _add_hr_contact_physics_features,
     _add_matchup_and_venue_features,
     _add_weather_physics_features,
     _load_park_features,
@@ -20,6 +21,7 @@ from .features import (
     build_pitcher_training_frame,
     get_engine,
 )
+from .hr_physics import apply_latest_hr_physics_models
 
 
 IDENTITY_COLUMNS = {
@@ -71,6 +73,8 @@ def resolve_prediction_date(day: str = "tomorrow", target_date: str | date | Non
         return today
     if day == "yesterday":
         return today - timedelta(days=1)
+    if day == "two_days_ago":
+        return today - timedelta(days=2)
     if day in {"tomorrow", "auto"}:
         return today + timedelta(days=1)
     return pd.to_datetime(day).date()
@@ -343,13 +347,13 @@ def build_batter_home_run_pregame_frame(
     opponent_features = _latest_feature_rows(
         history,
         "opponent_team_id",
-        ("team_batting_", "opp_bullpen_"),
+        ("team_batting_", "opponent_bullpen_"),
     )
     if not opponent_features.empty:
         current_opponent_cols = [
             col
             for col in frame.columns
-            if col.startswith("team_batting_") or col.startswith("opp_bullpen_")
+            if col.startswith("team_batting_") or col.startswith("opponent_bullpen_")
         ]
         frame = frame.drop(columns=current_opponent_cols, errors="ignore").merge(
             opponent_features,
@@ -372,6 +376,8 @@ def build_batter_home_run_pregame_frame(
     frame = _add_weather_physics_features(frame)
     frame = _add_calendar_features(frame)
     frame = _add_matchup_and_venue_features(frame)
+    frame = _add_hr_contact_physics_features(frame)
+    frame = apply_latest_hr_physics_models(frame)
 
     for col in ["target_home_run", "target_hits", "target_total_bases"]:
         frame[col] = np.nan

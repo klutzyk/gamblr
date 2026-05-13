@@ -9,6 +9,8 @@ import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
+from .hr_physics import PHYSICS_TARGET_COLUMNS, add_physics_targets_from_batted_balls
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
@@ -182,6 +184,17 @@ def _load_batter_batted_ball_history(engine) -> pd.DataFrame:
     keep_cols = [
         "game_pk",
         "player_id",
+        "bbe_count",
+        "bbe_avg_launch_speed",
+        "bbe_max_launch_speed",
+        "bbe_avg_launch_angle",
+        "bbe_max_distance",
+        "bbe_hard_hit_rate",
+        "bbe_sweet_spot_rate",
+        "bbe_barrel_rate",
+        "bbe_hr_contact_rate",
+        "bbe_fly_ball_rate",
+        "bbe_line_drive_rate",
         *[col for col in history.columns if col.startswith("batter_bbe_")],
     ]
     return history[keep_cols]
@@ -633,6 +646,114 @@ def _add_matchup_and_venue_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _num(df: pd.DataFrame, col: str, default: float = np.nan) -> pd.Series:
+    if col in df.columns:
+        return pd.to_numeric(df[col], errors="coerce")
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def _add_hr_contact_physics_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Build compact HR-shape signals from contact, matchup, park, and weather inputs."""
+    index = df.index
+    zero = pd.Series(0.0, index=index, dtype=float)
+
+    park_factor = _num(df, "park_factor_hr_batter_side").fillna(_num(df, "park_factor_hr")).fillna(100.0) / 100.0
+    carry_index = _num(df, "air_density_carry_index").fillna(1.0)
+    temp_boost = _num(df, "temperature_hr_boost_index").fillna(0.0)
+    wind_carry = _num(df, "wind_speed_density_carry").fillna(0.0) / 20.0
+
+    pull_distance = _num(df, "pull_side_distance_avg")
+    corner_distance = _num(df, "venue_avg_corner_distance")
+    power_alley_distance = _num(df, "venue_avg_power_alley_distance")
+    outfield_distance = _num(df, "venue_avg_outfield_distance")
+    hr_distance = pull_distance.fillna(corner_distance).fillna(power_alley_distance).fillna(outfield_distance)
+    df["hr_pull_distance_index"] = 370.0 / hr_distance.replace(0, np.nan)
+    df["hr_park_carry_index"] = park_factor * carry_index
+    df["hr_weather_carry_index"] = carry_index * (1.0 + temp_boost) + wind_carry
+    df["hr_environment_score"] = df["hr_park_carry_index"] * df["hr_weather_carry_index"] * df["hr_pull_distance_index"]
+
+    batter_ev = _num(df, "batter_exit_velocity_avg").fillna(_num(df, "batter_bbe_bbe_avg_launch_speed_avg_last20"))
+    batter_max_ev = _num(df, "batter_bbe_bbe_max_launch_speed_avg_last5").fillna(
+        _num(df, "batter_bbe_bbe_max_launch_speed_avg_last20")
+    )
+    batter_barrel = _num(df, "batter_barrel_batted_rate").fillna(_num(df, "batter_bbe_bbe_barrel_rate_avg_last20"))
+    batter_hard_hit = _num(df, "batter_hard_hit_percent").fillna(_num(df, "batter_bbe_bbe_hard_hit_rate_avg_last20"))
+    batter_fly = _num(df, "batter_bbe_bbe_fly_ball_rate_avg_last20")
+    batter_hr_contact = _num(df, "batter_bbe_bbe_hr_contact_rate_avg_last20").fillna(batter_barrel)
+    batter_angle = _num(df, "batter_launch_angle_avg").fillna(_num(df, "batter_bbe_bbe_avg_launch_angle_avg_last20"))
+    angle_fit = 1.0 - ((batter_angle - 27.0).abs() / 27.0)
+    angle_fit = angle_fit.clip(lower=0.0, upper=1.0)
+
+    df["hr_batter_contact_quality_score"] = (
+        batter_barrel.fillna(0.0) * 0.35
+        + batter_hr_contact.fillna(0.0) * 0.25
+        + batter_fly.fillna(0.0) * 0.15
+        + batter_hard_hit.fillna(0.0) * 0.15
+        + angle_fit.fillna(0.0) * 0.10
+    )
+    df["hr_batter_power_score"] = (
+        _num(df, "batter_xiso").fillna(0.0) * 0.35
+        + _num(df, "batter_xslg").fillna(0.0) * 0.20
+        + _num(df, "batter_hr_rate_last20").fillna(0.0) * 0.20
+        + (batter_ev.fillna(88.0) - 88.0).clip(lower=0.0) / 25.0 * 0.15
+        + (batter_max_ev.fillna(100.0) - 100.0).clip(lower=0.0) / 20.0 * 0.10
+    )
+    df["hr_expected_contact_score"] = df["hr_batter_contact_quality_score"] * df["hr_batter_power_score"]
+
+    starter_barrel_allowed = _num(
+        df, "opp_starter_bbe_allowed_bbe_allowed_barrel_rate_avg_last20"
+    ).fillna(_num(df, "pitcher_barrel_batted_rate"))
+    starter_hr_contact_allowed = _num(
+        df, "opp_starter_bbe_allowed_bbe_allowed_hr_contact_rate_avg_last20"
+    ).fillna(starter_barrel_allowed)
+    starter_fly_allowed = _num(df, "opp_starter_bbe_allowed_bbe_allowed_fly_ball_rate_avg_last20")
+    starter_hard_allowed = _num(
+        df, "opp_starter_bbe_allowed_bbe_allowed_hard_hit_rate_avg_last20"
+    ).fillna(_num(df, "pitcher_hard_hit_percent"))
+    bullpen_barrel_allowed = _num(
+        df, "opponent_bullpen_bbe_allowed_bullpen_bbe_allowed_barrel_rate_avg_last5"
+    )
+    bullpen_hr_contact_allowed = _num(
+        df, "opponent_bullpen_bbe_allowed_bullpen_bbe_allowed_hr_contact_rate_avg_last5"
+    ).fillna(bullpen_barrel_allowed)
+    bullpen_fly_allowed = _num(df, "opponent_bullpen_bbe_allowed_bullpen_bbe_allowed_fly_ball_rate_avg_last5")
+
+    df["hr_pitcher_contact_allowed_score"] = (
+        starter_barrel_allowed.fillna(0.0) * 0.35
+        + starter_hr_contact_allowed.fillna(0.0) * 0.30
+        + starter_fly_allowed.fillna(0.0) * 0.15
+        + starter_hard_allowed.fillna(0.0) * 0.10
+        + _num(df, "opp_starter_home_runs_allowed_avg_last20").fillna(0.0) * 0.10
+    )
+    df["hr_bullpen_contact_allowed_score"] = (
+        bullpen_barrel_allowed.fillna(0.0) * 0.35
+        + bullpen_hr_contact_allowed.fillna(0.0) * 0.35
+        + bullpen_fly_allowed.fillna(0.0) * 0.15
+        + _num(df, "opponent_bullpen_hr_per_bf_last5").fillna(0.0) * 0.15
+    )
+
+    fastball_rate = _num(df, "opp_starter_pitch_pitch_fastball_rate_avg_last20").fillna(zero)
+    breaking_rate = _num(df, "opp_starter_pitch_pitch_breaking_rate_avg_last20").fillna(zero)
+    offspeed_rate = _num(df, "opp_starter_pitch_pitch_offspeed_rate_avg_last20").fillna(zero)
+    fastball_power = _num(df, "batter_bat_speed").fillna(0.0) + _num(df, "batter_xiso").fillna(0.0) * 100.0
+    breaking_risk = _num(df, "batter_swing_length").fillna(0.0) + _num(df, "batter_k_rate_last20").fillna(0.0)
+    df["hr_fastball_power_matchup"] = fastball_rate * fastball_power
+    df["hr_breaking_ball_risk_matchup"] = breaking_rate * breaking_risk
+    df["hr_offspeed_contact_matchup"] = offspeed_rate * df["hr_batter_contact_quality_score"]
+
+    df["hr_contact_environment_score"] = df["hr_expected_contact_score"] * df["hr_environment_score"]
+    df["hr_matchup_pressure_score"] = (
+        df["hr_batter_contact_quality_score"]
+        * (df["hr_pitcher_contact_allowed_score"] * 0.7 + df["hr_bullpen_contact_allowed_score"] * 0.3)
+    )
+    df["hr_total_physics_score"] = (
+        df["hr_contact_environment_score"] * 0.55
+        + df["hr_matchup_pressure_score"] * 0.35
+        + df["hr_fastball_power_matchup"].fillna(0.0) * 0.10
+    )
+    return df
+
+
 def _load_starting_pitchers(engine) -> pd.DataFrame:
     starters = _read_sql(
         """
@@ -649,7 +770,8 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
             p.walks,
             p.hits_allowed,
             p.home_runs_allowed,
-            g.official_date as game_date
+            g.official_date as game_date,
+            g.season
         from mlb_player_game_pitching p
         join mlb_games g on g.game_pk = p.game_pk
         left join mlb_players sp on sp.id = p.player_id
@@ -682,6 +804,10 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
     for extra in (_load_pitcher_pitch_history(engine), _load_pitcher_batted_ball_allowed_history(engine)):
         if not extra.empty:
             starters = starters.merge(extra, on=["game_pk", "starter_pitcher_id"], how="left")
+    pitcher_context = _load_pitcher_context(engine)
+    if not pitcher_context.empty:
+        pitcher_context = pitcher_context.rename(columns={"player_id": "starter_pitcher_id"})
+        starters = starters.merge(pitcher_context, on=["season", "starter_pitcher_id"], how="left")
     keep_cols = [
         "game_pk",
         "team_id",
@@ -689,6 +815,7 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
         "starter_pitcher_age",
         "starter_pitcher_pitch_hand",
         *[col for col in starters.columns if col.startswith("opp_starter_")],
+        *[col for col in starters.columns if col.startswith("pitcher_")],
     ]
     return starters[keep_cols]
 
@@ -853,11 +980,13 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
     batter_bbe = _load_batter_batted_ball_history(engine)
     if not batter_bbe.empty:
         df = df.merge(batter_bbe, on=["game_pk", "player_id"], how="left")
+        df = add_physics_targets_from_batted_balls(df)
     df["weather_available"] = df["temperature_2m_c"].notna().astype(int)
     df["is_night"] = (df["day_night"].fillna("").str.lower() == "night").astype(int)
     df = _add_weather_physics_features(df)
     df = _add_calendar_features(df)
     df = _add_matchup_and_venue_features(df)
+    df = _add_hr_contact_physics_features(df)
     return df
 
 
@@ -1000,6 +1129,7 @@ def model_feature_columns(df: pd.DataFrame, target_col: str) -> list[str]:
         "target_hits",
         "target_total_bases",
         "target_strikeouts",
+        *PHYSICS_TARGET_COLUMNS,
         "plate_appearances",
         "at_bats",
         "hits",
@@ -1018,6 +1148,17 @@ def model_feature_columns(df: pd.DataFrame, target_col: str) -> list[str]:
         "hits_allowed",
         "home_runs_allowed",
         "earned_runs",
+        "bbe_count",
+        "bbe_avg_launch_speed",
+        "bbe_max_launch_speed",
+        "bbe_avg_launch_angle",
+        "bbe_max_distance",
+        "bbe_hard_hit_rate",
+        "bbe_sweet_spot_rate",
+        "bbe_barrel_rate",
+        "bbe_hr_contact_rate",
+        "bbe_fly_ball_rate",
+        "bbe_line_drive_rate",
     }
     numeric_cols = []
     for col in df.columns:
