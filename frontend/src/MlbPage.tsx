@@ -1838,7 +1838,6 @@ export default function MlbPage() {
   const simulationGames = simulationGamesState.data?.games ?? [];
   const selectedSimulationGame = simulationGames.find((game) => game.game_pk === selectedSimulationGamePk) ?? null;
   const dayLabelSuffix = REGION_SHORT[userRegion];
-  const resolvedMlbDateLabel = formatMlbDateValue(resolvedMlbDate, userRegion);
   const selectedDayLabel = DAY_OPTIONS.find((option) => option.value === predictionDay)?.label ?? "Slate";
   const evLoadedForCurrentView = Boolean(evState.data && evRequestKey === `${resolvedMlbDate}:${bookmaker}`);
 
@@ -1990,7 +1989,6 @@ export default function MlbPage() {
                                 </option>
                               ))}
                             </select>
-                            <span className="text-xs text-secondary mt-1">Games on {resolvedMlbDateLabel}</span>
                           </label>
                           <label className="prediction-select-field">
                             <span className="prediction-select-label">Sort</span>
@@ -2092,7 +2090,7 @@ export default function MlbPage() {
                               </option>
                             ))}
                           </select>
-                          <span className="text-xs text-secondary">Games on {resolvedMlbDateLabel}</span>
+                          <span className="text-xs text-secondary">Games on {formatMlbDateValue(resolvedMlbDate, userRegion)}</span>
                         </div>
                         <div className="control-group">
                           <label className="form-label" htmlFor="mlb-bookie">
@@ -2173,7 +2171,7 @@ export default function MlbPage() {
                               </option>
                             ))}
                           </select>
-                          <span className="text-xs text-secondary">Games on {resolvedMlbDateLabel}</span>
+                          <span className="text-xs text-secondary">Games on {formatMlbDateValue(resolvedMlbDate, userRegion)}</span>
                         </div>
                         <div className="control-group simulation-game-select">
                           <label className="form-label" htmlFor="mlb-sim-game">
@@ -2295,7 +2293,7 @@ export default function MlbPage() {
               <div className="section-card mb-4 prediction-focus">
                 <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Slate</p>
                 <h4 className="mb-1">{selectedDayLabel} ({dayLabelSuffix})</h4>
-                <p className="text-xs text-secondary mb-3">Games starting on {resolvedMlbDateLabel}</p>
+                <p className="text-xs text-secondary mb-3">Games starting on {formatMlbDateValue(resolvedMlbDate, userRegion)}</p>
                 <div className="row g-3">
                   <div className="col-6">
                     <div className="mlb-stat-tile">
