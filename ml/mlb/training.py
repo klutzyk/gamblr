@@ -34,6 +34,7 @@ from .features import (
     get_engine,
     model_feature_columns,
 )
+from .hr_physics import fit_hr_physics_models
 
 
 logger = logging.getLogger(__name__)
@@ -277,11 +278,20 @@ def train_market(
     if df.empty:
         raise ValueError(f"No rows remain for {market} after minimum history filtering.")
 
+    train_mask, valid_mask, split_date = _time_split(df)
+    physics_summary = None
+    if market == "batter_home_runs":
+        _emit_progress(f"[mlb-training] {market}: fitting HR physics/contact ensemble")
+        df, physics_summary = fit_hr_physics_models(
+            df,
+            train_mask=train_mask,
+            valid_mask=valid_mask,
+        )
+
     feature_cols = model_feature_columns(df, target_col)
     if not feature_cols:
         raise ValueError(f"No usable numeric features found for {market}.")
 
-    train_mask, valid_mask, split_date = _time_split(df)
     _emit_progress(
         "[mlb-training] "
         f"{market}: rows={len(df)} train={int(train_mask.sum())} "
@@ -357,6 +367,7 @@ def train_market(
         "date_min": pd.to_datetime(df["game_date"]).min().date().isoformat(),
         "date_max": pd.to_datetime(df["game_date"]).max().date().isoformat(),
         "sample_weighting": sample_weight_summary,
+        "physics_ensemble": physics_summary,
     }
     joblib.dump(artifact, model_path)
 
