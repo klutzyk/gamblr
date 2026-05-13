@@ -292,18 +292,30 @@ def fit_hr_physics_models(
             "max_ev": "hr_physics_max_ev_p50",
         }[name]
         out[output_col] = all_pred
+        valid_eval_mask = valid_mask & out[target_col].notna()
+        valid_eval_pred = pd.Series(valid_pred, index=out.loc[valid_mask].index)
+        metric_frame = pd.DataFrame(
+            {
+                "actual": out.loc[valid_eval_mask, target_col],
+                "prediction": valid_eval_pred.reindex(out.loc[valid_eval_mask].index),
+            }
+        ).dropna()
         if name == "max_ev":
-            valid_actual = out.loc[valid_mask, target_col]
-            valid_error = valid_actual - valid_pred
+            valid_actual = metric_frame["actual"]
+            valid_prediction = metric_frame["prediction"]
+            valid_error = valid_actual - valid_prediction
             residual_std = float(np.nanstd(valid_error)) if len(valid_error) else 4.0
             residual_std = max(residual_std, 3.0)
             out["hr_physics_max_ev_p10"] = out[output_col] - 1.28 * residual_std
             out["hr_physics_max_ev_p90"] = out[output_col] + 1.28 * residual_std
-            metric_payload = {"mae": float(mean_absolute_error(valid_actual, valid_pred)), "residual_std": residual_std}
+            metric_payload = {
+                "mae": float(mean_absolute_error(valid_actual, valid_prediction)) if len(valid_actual) else float("nan"),
+                "residual_std": residual_std,
+            }
         else:
-            valid_actual = out.loc[valid_mask, target_col].astype(int)
-            clipped = np.clip(valid_pred, 1e-6, 1 - 1e-6)
-            metric_payload = {"brier": float(brier_score_loss(valid_actual, clipped))}
+            valid_actual = metric_frame["actual"].astype(int)
+            clipped = np.clip(metric_frame["prediction"], 1e-6, 1 - 1e-6)
+            metric_payload = {"brier": float(brier_score_loss(valid_actual, clipped)) if len(valid_actual) else float("nan")}
             if valid_actual.nunique() > 1:
                 metric_payload["roc_auc"] = float(roc_auc_score(valid_actual, clipped))
         metrics[name] = metric_payload
