@@ -20,6 +20,7 @@ import logo from "./assets/logo2.png";
 type UserRegion = "au" | "us" | "uk";
 type MainTab = "predictions" | "home_run_ev" | "simulation";
 type MlbDay = "auto" | "today" | "tomorrow" | "yesterday";
+type MlbSlateDay = "auto" | "today" | "tomorrow" | "yesterday" | "two_days_ago";
 type MlbSort = "value_desc" | "value_asc" | "lineup_asc" | "player_az";
 type SimulationPlaybackMode = "full" | "highlights";
 type SimulationDetailTab = "boxscore" | "projections" | "play_by_play";
@@ -178,35 +179,66 @@ function addDaysToDateValue(dateValue: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
-function resolveMlbSlateDate(day: MlbDay, region: UserRegion) {
+function mapMlbDayToEtSlateDay(day: MlbDay, region: UserRegion): MlbSlateDay {
   const selectedOffset: Record<Exclude<MlbDay, "auto">, number> = {
     yesterday: -1,
     today: 0,
     tomorrow: 1,
   };
   const now = new Date();
-  const mlbToday = getDatePartsInTimeZone(now, "America/New_York");
+  const etToday = getDatePartsInTimeZone(now, "America/New_York");
   const userToday = getDatePartsInTimeZone(now, REGION_TIMEZONE[region]);
-  const mlbTodayValue = dateValueFromParts(mlbToday);
-  const userMlbDeltaDays = Math.round((toUtcMidnightMs(userToday) - toUtcMidnightMs(mlbToday)) / DAY_MS);
+  const userEtDeltaDays = Math.round((toUtcMidnightMs(userToday) - toUtcMidnightMs(etToday)) / DAY_MS);
 
   if (region === "au") {
-    const auStillAheadOfMlbDate = userMlbDeltaDays >= 1;
+    const auMapsDirectlyToCurrentEtSlate = userEtDeltaDays >= 1;
     if (day === "auto") {
-      return addDaysToDateValue(mlbTodayValue, auStillAheadOfMlbDate ? 0 : -1);
+      return auMapsDirectlyToCurrentEtSlate ? "today" : "yesterday";
     }
-    if (auStillAheadOfMlbDate) {
-      return addDaysToDateValue(mlbTodayValue, selectedOffset[day]);
+    if (auMapsDirectlyToCurrentEtSlate) {
+      if (day === "yesterday") return "yesterday";
+      if (day === "today") return "today";
+      return "tomorrow";
     }
-    if (day === "yesterday") return addDaysToDateValue(mlbTodayValue, -2);
-    if (day === "today") return addDaysToDateValue(mlbTodayValue, -1);
-    return mlbTodayValue;
+
+    if (day === "yesterday") return "two_days_ago";
+    if (day === "today") return "yesterday";
+    return "today";
   }
 
   if (day === "auto") {
-    return mlbTodayValue;
+    return "auto";
   }
-  return addDaysToDateValue(mlbTodayValue, selectedOffset[day]);
+
+  const etOffset = selectedOffset[day] - userEtDeltaDays;
+  if (etOffset <= -2) return "two_days_ago";
+  if (etOffset === -1) return "yesterday";
+  if (etOffset === 0) return "today";
+  if (etOffset >= 1) return "tomorrow";
+  return "auto";
+}
+
+function resolveMlbSlateDate(day: MlbDay, region: UserRegion) {
+  const now = new Date();
+  const etToday = getDatePartsInTimeZone(now, "America/New_York");
+  const etTodayValue = dateValueFromParts(etToday);
+  const slateDay = mapMlbDayToEtSlateDay(day, region);
+  const slateOffset: Record<MlbSlateDay, number> = {
+    two_days_ago: -2,
+    yesterday: -1,
+    today: 0,
+    auto: 0,
+    tomorrow: 1,
+  };
+  return addDaysToDateValue(etTodayValue, slateOffset[slateDay]);
+}
+
+function formatMlbDateValue(dateValue: string, region: UserRegion) {
+  return new Intl.DateTimeFormat("en-AU", {
+    timeZone: REGION_TIMEZONE[region],
+    month: "short",
+    day: "numeric",
+  }).format(new Date(`${dateValue}T12:00:00Z`));
 }
 
 function formatGameTime(value: string | null | undefined, region: UserRegion) {
@@ -1773,6 +1805,7 @@ export default function MlbPage() {
   const simulationGames = simulationGamesState.data?.games ?? [];
   const selectedSimulationGame = simulationGames.find((game) => game.game_pk === selectedSimulationGamePk) ?? null;
   const dayLabelSuffix = REGION_SHORT[userRegion];
+  const resolvedMlbDateLabel = formatMlbDateValue(resolvedMlbDate, userRegion);
   const selectedDayLabel = DAY_OPTIONS.find((option) => option.value === predictionDay)?.label ?? "Slate";
   const evLoadedForCurrentView = Boolean(evState.data && evRequestKey === `${resolvedMlbDate}:${bookmaker}`);
 
@@ -1924,6 +1957,7 @@ export default function MlbPage() {
                                 </option>
                               ))}
                             </select>
+                            <span className="text-xs text-secondary mt-1">MLB slate {resolvedMlbDateLabel}</span>
                           </label>
                           <label className="prediction-select-field">
                             <span className="prediction-select-label">Sort</span>
@@ -2025,6 +2059,7 @@ export default function MlbPage() {
                               </option>
                             ))}
                           </select>
+                          <span className="text-xs text-secondary">MLB slate {resolvedMlbDateLabel}</span>
                         </div>
                         <div className="control-group">
                           <label className="form-label" htmlFor="mlb-bookie">
@@ -2105,6 +2140,7 @@ export default function MlbPage() {
                               </option>
                             ))}
                           </select>
+                          <span className="text-xs text-secondary">MLB slate {resolvedMlbDateLabel}</span>
                         </div>
                         <div className="control-group simulation-game-select">
                           <label className="form-label" htmlFor="mlb-sim-game">
@@ -2225,7 +2261,8 @@ export default function MlbPage() {
             <div className="col-lg-4">
               <div className="section-card mb-4 prediction-focus">
                 <p className="text-uppercase text-xs text-secondary fw-bold mb-2">Slate</p>
-                <h4 className="mb-3">{selectedDayLabel} ({dayLabelSuffix})</h4>
+                <h4 className="mb-1">{selectedDayLabel} ({dayLabelSuffix})</h4>
+                <p className="text-xs text-secondary mb-3">MLB official slate {resolvedMlbDate}</p>
                 <div className="row g-3">
                   <div className="col-6">
                     <div className="mlb-stat-tile">
