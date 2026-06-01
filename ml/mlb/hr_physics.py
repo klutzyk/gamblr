@@ -242,6 +242,52 @@ def _add_output_defaults(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def add_lightweight_hr_physics_outputs(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    expected_contact = _s(out, "hr_expected_contact_score").fillna(0.0)
+    batter_power = _s(out, "hr_batter_power_score").fillna(0.0)
+    contact_quality = _s(out, "hr_batter_contact_quality_score").fillna(0.0)
+    pitcher_contact = _s(out, "hr_pitcher_contact_allowed_score").fillna(0.0)
+    bullpen_contact = _s(out, "hr_bullpen_contact_allowed_score").fillna(0.0)
+
+    batter_barrel = _s(out, "batter_barrel_batted_rate").fillna(_s(out, "batter_bbe_bbe_barrel_rate_avg_last20"))
+    batter_fly = _s(out, "batter_bbe_bbe_fly_ball_rate_avg_last20")
+    batter_hr_contact = _s(out, "batter_bbe_bbe_hr_contact_rate_avg_last20").fillna(batter_barrel)
+    max_ev = _s(out, "batter_bbe_bbe_max_launch_speed_avg_last5").fillna(
+        _s(out, "batter_bbe_bbe_max_launch_speed_avg_last20")
+    )
+    avg_ev = _s(out, "batter_exit_velocity_avg").fillna(_s(out, "batter_bbe_bbe_avg_launch_speed_avg_last20"))
+
+    out["hr_physics_barrel_probability"] = np.clip(
+        batter_barrel.fillna(0.04) * 0.55 + expected_contact * 0.16 + pitcher_contact * 0.06,
+        0.005,
+        0.45,
+    )
+    out["hr_physics_fly_ball_probability"] = np.clip(
+        batter_fly.fillna(0.32) * 0.65 + contact_quality * 0.12 + pitcher_contact * 0.05,
+        0.08,
+        0.70,
+    )
+    out["hr_physics_hr_contact_probability"] = np.clip(
+        batter_hr_contact.fillna(0.045) * 0.55
+        + batter_power * 0.11
+        + pitcher_contact * 0.07
+        + bullpen_contact * 0.04,
+        0.003,
+        0.40,
+    )
+    out["hr_physics_max_ev_p50"] = np.clip(
+        max_ev.fillna(avg_ev.fillna(89.0) + 7.5) + batter_power * 6.0,
+        82.0,
+        122.0,
+    )
+    out["hr_physics_max_ev_p10"] = out["hr_physics_max_ev_p50"] - 7.0
+    out["hr_physics_max_ev_p90"] = out["hr_physics_max_ev_p50"] + 7.0
+    out = _add_output_defaults(out)
+    out["hr_physics_game_hr_probability"] = _game_hr_probability(out)
+    return out
+
+
 def fit_hr_physics_models(
     df: pd.DataFrame,
     *,
