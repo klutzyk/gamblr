@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any
@@ -21,7 +22,7 @@ from .features import (
     build_pitcher_training_frame,
     get_engine,
 )
-from .hr_physics import apply_latest_hr_physics_models
+from .hr_physics import add_lightweight_hr_physics_outputs, apply_latest_hr_physics_models
 
 
 IDENTITY_COLUMNS = {
@@ -377,7 +378,11 @@ def build_batter_home_run_pregame_frame(
     frame = _add_calendar_features(frame)
     frame = _add_matchup_and_venue_features(frame)
     frame = _add_hr_contact_physics_features(frame)
-    frame = apply_latest_hr_physics_models(frame)
+    physics_mode = os.getenv("MLB_HR_PHYSICS_MODE", "lite" if os.getenv("RENDER") else "staged").lower()
+    if physics_mode in {"lite", "lightweight", "off"}:
+        frame = add_lightweight_hr_physics_outputs(frame)
+    else:
+        frame = apply_latest_hr_physics_models(frame)
 
     for col in ["target_home_run", "target_hits", "target_total_bases"]:
         frame[col] = np.nan
