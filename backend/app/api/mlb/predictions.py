@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import uuid
 from datetime import datetime, timedelta
@@ -64,6 +65,167 @@ def _count_sync(sql: str, params: dict) -> int:
             return int(conn.execute(text(sql), params).scalar() or 0)
     finally:
         engine.dispose()
+
+
+def _ensure_precompute_job_table(conn) -> None:
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS mlb_prediction_precompute_jobs (
+                job_id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                days JSONB NOT NULL,
+                limit_per_market INTEGER NOT NULL,
+                refresh BOOLEAN NOT NULL,
+                ensure_data BOOLEAN NOT NULL,
+                steps_done INTEGER NOT NULL DEFAULT 0,
+                steps_total INTEGER NOT NULL DEFAULT 0,
+                current_day TEXT NULL,
+                current_date_value TEXT NULL,
+                result JSONB NULL,
+                error TEXT NULL,
+                created_at TIMESTAMPTZ NULL,
+                started_at TIMESTAMPTZ NULL,
+                finished_at TIMESTAMPTZ NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+    )
+
+
+def _persist_precompute_job(job: dict) -> None:
+    engine = _sync_engine()
+    try:
+        with engine.begin() as conn:
+            _ensure_precompute_job_table(conn)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO mlb_prediction_precompute_jobs (
+                        job_id,
+                        type,
+                        status,
+                        days,
+                        limit_per_market,
+                        refresh,
+                        ensure_data,
+                        steps_done,
+                        steps_total,
+                        current_day,
+                        current_date_value,
+                        result,
+                        error,
+                        created_at,
+                        started_at,
+                        finished_at,
+                        updated_at
+                    )
+                    VALUES (
+                        :job_id,
+                        :type,
+                        :status,
+                        CAST(:days AS jsonb),
+                        :limit_per_market,
+                        :refresh,
+                        :ensure_data,
+                        :steps_done,
+                        :steps_total,
+                        :current_day,
+                        :current_date_value,
+                        CAST(:result AS jsonb),
+                        :error,
+                        :created_at,
+                        :started_at,
+                        :finished_at,
+                        now()
+                    )
+                    ON CONFLICT (job_id)
+                    DO UPDATE SET
+                        status = EXCLUDED.status,
+                        days = EXCLUDED.days,
+                        limit_per_market = EXCLUDED.limit_per_market,
+                        refresh = EXCLUDED.refresh,
+                        ensure_data = EXCLUDED.ensure_data,
+                        steps_done = EXCLUDED.steps_done,
+                        steps_total = EXCLUDED.steps_total,
+                        current_day = EXCLUDED.current_day,
+                        current_date_value = EXCLUDED.current_date_value,
+                        result = EXCLUDED.result,
+                        error = EXCLUDED.error,
+                        started_at = EXCLUDED.started_at,
+                        finished_at = EXCLUDED.finished_at,
+                        updated_at = now()
+                    """
+                ),
+                {
+                    "job_id": job.get("job_id"),
+                    "type": job.get("type") or "mlb_prediction_precompute",
+                    "status": job.get("status") or "queued",
+                    "days": json.dumps(job.get("days") or []),
+                    "limit_per_market": int(job.get("limit_per_market") or 0),
+                    "refresh": bool(job.get("refresh")),
+                    "ensure_data": bool(job.get("ensure_data")),
+                    "steps_done": int(job.get("steps_done") or 0),
+                    "steps_total": int(job.get("steps_total") or 0),
+                    "current_day": job.get("current_day"),
+                    "current_date_value": job.get("current_date"),
+                    "result": json.dumps(job.get("result")) if job.get("result") is not None else None,
+                    "error": job.get("error"),
+                    "created_at": job.get("created_at"),
+                    "started_at": job.get("started_at"),
+                    "finished_at": job.get("finished_at"),
+                },
+            )
+    finally:
+        engine.dispose()
+
+
+def _load_precompute_job(job_id: str) -> dict | None:
+    engine = _sync_engine()
+    try:
+        with engine.begin() as conn:
+            _ensure_precompute_job_table(conn)
+            row = conn.execute(
+                text(
+                    """
+                    SELECT
+                        job_id,
+                        type,
+                        status,
+                        days,
+                        limit_per_market,
+                        refresh,
+                        ensure_data,
+                        steps_done,
+                        steps_total,
+                        current_day,
+                        current_date_value,
+                        result,
+                        error,
+                        created_at,
+                        started_at,
+                        finished_at,
+                        updated_at
+                    FROM mlb_prediction_precompute_jobs
+                    WHERE job_id = :job_id
+                    """
+                ),
+                {"job_id": job_id},
+            ).mappings().first()
+    finally:
+        engine.dispose()
+
+    if not row:
+        return None
+
+    job = dict(row)
+    job["current_date"] = job.pop("current_date_value")
+    for key in ("created_at", "started_at", "finished_at", "updated_at"):
+        if job.get(key) is not None:
+            job[key] = job[key].isoformat()
+    return job
 
 
 async def _ensure_mlb_slate_data(
@@ -597,11 +759,18 @@ def _parse_precompute_days(days: str) -> list[str]:
     if not day_values:
         raise HTTPException(status_code=400, detail="days must include at least one value.")
     valid_days = {"today", "tomorrow", "yesterday", "two_days_ago", "auto"}
-    invalid_days = [day for day in day_values if day not in valid_days]
+    invalid_days = []
+    for day in day_values:
+        if day in valid_days:
+            continue
+        try:
+            pd.to_datetime(day, format="%Y-%m-%d", errors="raise")
+        except (TypeError, ValueError):
+            invalid_days.append(day)
     if invalid_days:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid day value(s): {', '.join(invalid_days)}",
+            detail=f"Invalid day/date value(s): {', '.join(invalid_days)}",
         )
     return day_values
 
@@ -626,6 +795,7 @@ async def _run_mlb_prediction_precompute_job(
     job["status"] = "running"
     job["started_at"] = datetime.utcnow().isoformat()
     job["steps_total"] = len(day_values)
+    _persist_precompute_job(job)
     results: dict[str, dict] = {}
 
     try:
@@ -634,6 +804,7 @@ async def _run_mlb_prediction_precompute_job(
             job["current_day"] = day
             job["current_date"] = target_date.isoformat()
             job["steps_done"] = step - 1
+            _persist_precompute_job(job)
 
             ensure_result = {"changed": False}
             if ensure_data:
@@ -659,14 +830,17 @@ async def _run_mlb_prediction_precompute_job(
                 "data_load": ensure_result,
             }
             job["steps_done"] = step
+            _persist_precompute_job(job)
 
         job["status"] = "completed"
         job["result"] = results
         job["finished_at"] = datetime.utcnow().isoformat()
+        _persist_precompute_job(job)
     except Exception as exc:
         job["status"] = "failed"
         job["error"] = str(exc)
         job["finished_at"] = datetime.utcnow().isoformat()
+        _persist_precompute_job(job)
 
 
 def _create_mlb_prediction_precompute_job(
@@ -693,12 +867,16 @@ def _create_mlb_prediction_precompute_job(
         "error": None,
         "created_at": datetime.utcnow().isoformat(),
     }
+    _persist_precompute_job(prediction_precompute_jobs[job_id])
     return job_id
 
 
 @router.post("/precompute/start")
 async def start_mlb_prediction_precompute(
-    days: str = Query("today,tomorrow", description="Comma-separated: today,tomorrow,yesterday,two_days_ago,auto"),
+    days: str = Query(
+        "today,tomorrow",
+        description="Comma-separated relative days or YYYY-MM-DD dates: today,tomorrow,yesterday,two_days_ago,auto,2026-06-01",
+    ),
     limit_per_market: int = Query(200, ge=1, le=500),
     refresh: bool = Query(False, description="Recompute even if prediction logs already exist."),
     ensure_data: bool = Query(True, description="Load missing schedule/roster data before scoring."),
@@ -724,7 +902,10 @@ async def start_mlb_prediction_precompute(
 
 @router.post("/precompute/run")
 async def run_mlb_prediction_precompute(
-    days: str = Query("today,tomorrow", description="Comma-separated: today,tomorrow,yesterday,two_days_ago,auto"),
+    days: str = Query(
+        "today,tomorrow",
+        description="Comma-separated relative days or YYYY-MM-DD dates: today,tomorrow,yesterday,two_days_ago,auto,2026-06-01",
+    ),
     limit_per_market: int = Query(200, ge=1, le=500),
     refresh: bool = Query(False, description="Recompute even if prediction logs already exist."),
     ensure_data: bool = Query(True, description="Load missing schedule/roster data before scoring."),
@@ -749,6 +930,8 @@ async def run_mlb_prediction_precompute(
 @router.get("/precompute/jobs/{job_id}")
 async def get_mlb_prediction_precompute_job(job_id: str):
     job = prediction_precompute_jobs.get(job_id)
+    if not job:
+        job = await run_in_threadpool(_load_precompute_job, job_id)
     if not job:
         return {"status": "not_found", "job_id": job_id}
     return job
