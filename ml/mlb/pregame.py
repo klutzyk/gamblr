@@ -57,8 +57,8 @@ IDENTITY_COLUMNS = {
 
 
 @lru_cache(maxsize=4)
-def _cached_batter_training_history(database_url: str) -> pd.DataFrame:
-    return build_batter_training_frame(database_url=database_url)
+def _cached_batter_training_history(database_url: str, min_game_date: str | None = None) -> pd.DataFrame:
+    return build_batter_training_frame(database_url=database_url, min_game_date=min_game_date)
 
 
 @lru_cache(maxsize=4)
@@ -79,6 +79,21 @@ def resolve_prediction_date(day: str = "tomorrow", target_date: str | date | Non
     if day in {"tomorrow", "auto"}:
         return today + timedelta(days=1)
     return pd.to_datetime(day).date()
+
+
+def _pregame_history_min_date(resolved_date: date) -> str | None:
+    raw_days = os.getenv("MLB_PREGAME_HISTORY_DAYS")
+    if raw_days is None and os.getenv("RENDER"):
+        raw_days = "240"
+    if raw_days in (None, "", "0", "none", "None"):
+        return None
+    try:
+        days = int(raw_days)
+    except ValueError:
+        days = 240
+    if days <= 0:
+        return None
+    return (resolved_date - timedelta(days=days)).isoformat()
 
 
 def _load_candidate_batters(engine, target_date: date) -> pd.DataFrame:
@@ -309,10 +324,11 @@ def build_batter_home_run_pregame_frame(
         return candidates
 
     candidates["game_date"] = pd.to_datetime(candidates["game_date"])
+    min_history_date = _pregame_history_min_date(resolved_date)
     history = (
-        _cached_batter_training_history(database_url).copy()
+        _cached_batter_training_history(database_url, min_history_date).copy()
         if database_url and not provided_engine
-        else build_batter_training_frame(engine=engine)
+        else build_batter_training_frame(engine=engine, min_game_date=min_history_date)
     )
     if history.empty:
         candidates.attrs["prediction_date"] = resolved_date.isoformat()

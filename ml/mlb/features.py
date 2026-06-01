@@ -122,7 +122,7 @@ def _load_park_features(engine) -> pd.DataFrame:
     )
 
 
-def _load_batter_batted_ball_history(engine) -> pd.DataFrame:
+def _load_batter_batted_ball_history(engine, min_game_date=None) -> pd.DataFrame:
     history = _read_sql(
         """
         select
@@ -147,9 +147,11 @@ def _load_batter_batted_ball_history(engine) -> pd.DataFrame:
         from mlb_batted_ball_events bb
         join mlb_games g on g.game_pk = bb.game_pk
         where bb.batter_id is not null
+          and (%(min_game_date)s is null or g.official_date >= %(min_game_date)s)
         group by bb.game_pk, bb.batter_id, g.official_date
         """,
         engine,
+        params={"min_game_date": min_game_date},
     )
     if history.empty:
         return history
@@ -200,7 +202,7 @@ def _load_batter_batted_ball_history(engine) -> pd.DataFrame:
     return history[keep_cols]
 
 
-def _load_pitcher_pitch_history(engine) -> pd.DataFrame:
+def _load_pitcher_pitch_history(engine, min_game_date=None) -> pd.DataFrame:
     history = _read_sql(
         """
         select
@@ -232,9 +234,11 @@ def _load_pitcher_pitch_history(engine) -> pd.DataFrame:
         from mlb_pitch_events pe
         join mlb_games g on g.game_pk = pe.game_pk
         where pe.pitcher_id is not null
+          and (%(min_game_date)s is null or g.official_date >= %(min_game_date)s)
         group by pe.game_pk, pe.pitcher_id, g.official_date
         """,
         engine,
+        params={"min_game_date": min_game_date},
     )
     if history.empty:
         return history
@@ -281,7 +285,7 @@ def _load_pitcher_pitch_history(engine) -> pd.DataFrame:
     return history[keep_cols]
 
 
-def _load_pitcher_batted_ball_allowed_history(engine) -> pd.DataFrame:
+def _load_pitcher_batted_ball_allowed_history(engine, min_game_date=None) -> pd.DataFrame:
     history = _read_sql(
         """
         select
@@ -306,9 +310,11 @@ def _load_pitcher_batted_ball_allowed_history(engine) -> pd.DataFrame:
         from mlb_batted_ball_events bb
         join mlb_games g on g.game_pk = bb.game_pk
         where bb.pitcher_id is not null
+          and (%(min_game_date)s is null or g.official_date >= %(min_game_date)s)
         group by bb.game_pk, bb.pitcher_id, g.official_date
         """,
         engine,
+        params={"min_game_date": min_game_date},
     )
     if history.empty:
         return history
@@ -348,7 +354,7 @@ def _load_pitcher_batted_ball_allowed_history(engine) -> pd.DataFrame:
     return history[keep_cols]
 
 
-def _load_bullpen_history(engine) -> pd.DataFrame:
+def _load_bullpen_history(engine, min_game_date=None) -> pd.DataFrame:
     relief = _read_sql(
         """
         select
@@ -367,9 +373,11 @@ def _load_bullpen_history(engine) -> pd.DataFrame:
         from mlb_player_game_pitching p
         join mlb_games g on g.game_pk = p.game_pk
         where p.is_starter = false
+          and (%(min_game_date)s is null or g.official_date >= %(min_game_date)s)
         group by p.game_pk, p.team_id, g.official_date
         """,
         engine,
+        params={"min_game_date": min_game_date},
     )
     if relief.empty:
         return relief
@@ -436,9 +444,11 @@ def _load_bullpen_history(engine) -> pd.DataFrame:
             on p.game_pk = bb.game_pk and p.player_id = bb.pitcher_id
         join mlb_games g on g.game_pk = bb.game_pk
         where p.is_starter = false
+          and (%(min_game_date)s is null or g.official_date >= %(min_game_date)s)
         group by bb.game_pk, p.team_id, g.official_date
         """,
         engine,
+        params={"min_game_date": min_game_date},
     )
     if not relief_bbe.empty:
         relief_bbe["game_date"] = pd.to_datetime(relief_bbe["game_date"])
@@ -754,7 +764,7 @@ def _add_hr_contact_physics_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _load_starting_pitchers(engine) -> pd.DataFrame:
+def _load_starting_pitchers(engine, min_game_date=None) -> pd.DataFrame:
     starters = _read_sql(
         """
         select
@@ -776,8 +786,10 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
         join mlb_games g on g.game_pk = p.game_pk
         left join mlb_players sp on sp.id = p.player_id
         where p.is_starter = true
+          and (%(min_game_date)s is null or g.official_date >= %(min_game_date)s)
         """,
         engine,
+        params={"min_game_date": min_game_date},
     )
     if starters.empty:
         return starters
@@ -801,7 +813,10 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
         windows=(5, 10, 20),
         prefix="opp_starter",
     )
-    for extra in (_load_pitcher_pitch_history(engine), _load_pitcher_batted_ball_allowed_history(engine)):
+    for extra in (
+        _load_pitcher_pitch_history(engine, min_game_date=min_game_date),
+        _load_pitcher_batted_ball_allowed_history(engine, min_game_date=min_game_date),
+    ):
         if not extra.empty:
             starters = starters.merge(extra, on=["game_pk", "starter_pitcher_id"], how="left")
     pitcher_context = _load_pitcher_context(engine)
@@ -820,7 +835,7 @@ def _load_starting_pitchers(engine) -> pd.DataFrame:
     return starters[keep_cols]
 
 
-def build_batter_training_frame(engine=None, database_url: str | None = None) -> pd.DataFrame:
+def build_batter_training_frame(engine=None, database_url: str | None = None, min_game_date=None) -> pd.DataFrame:
     engine = engine or get_engine(database_url)
     df = _read_sql(
         """
@@ -868,8 +883,10 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
         where b.plate_appearances is not null
           and b.plate_appearances > 0
           and g.detailed_state in ('Final', 'Game Over', 'Completed Early')
+          and (%(min_game_date)s is null or g.official_date >= %(min_game_date)s)
         """,
         engine,
+        params={"min_game_date": min_game_date},
     )
     if df.empty:
         return df
@@ -965,19 +982,19 @@ def build_batter_training_frame(engine=None, database_url: str | None = None) ->
     ]
     df = df.merge(opponent_team[opponent_cols], on=["game_pk", "opponent_team_id"], how="left")
 
-    starters = _load_starting_pitchers(engine)
+    starters = _load_starting_pitchers(engine, min_game_date=min_game_date)
     if not starters.empty:
         starters = starters.rename(columns={"team_id": "opponent_team_id"})
         df = df.merge(starters, on=["game_pk", "opponent_team_id"], how="left")
 
-    bullpen = _load_bullpen_history(engine)
+    bullpen = _load_bullpen_history(engine, min_game_date=min_game_date)
     if not bullpen.empty:
         df = df.merge(bullpen, on=["game_pk", "opponent_team_id"], how="left")
 
     for extra in (_load_batter_context(engine), _load_weather_features(engine), _load_park_features(engine)):
         keys = ["season", "player_id"] if "player_id" in extra.columns else ["game_pk"] if "game_pk" in extra.columns else ["season", "venue_id"]
         df = df.merge(extra, on=keys, how="left")
-    batter_bbe = _load_batter_batted_ball_history(engine)
+    batter_bbe = _load_batter_batted_ball_history(engine, min_game_date=min_game_date)
     if not batter_bbe.empty:
         df = df.merge(batter_bbe, on=["game_pk", "player_id"], how="left")
         df = add_physics_targets_from_batted_balls(df)
