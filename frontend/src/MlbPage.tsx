@@ -344,7 +344,7 @@ function getPlayerStatsSearchUrl(playerName: string | null | undefined): string 
       ? playerName.trim()
       : "MLB player";
   const url = new URL("https://www.google.com/search");
-  url.searchParams.set("q", `${safeName} MLB stats`);
+  url.searchParams.set("q", `${safeName} stats`);
   return url.toString();
 }
 

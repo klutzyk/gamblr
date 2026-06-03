@@ -764,7 +764,7 @@ def _parse_precompute_days(days: str) -> list[str]:
         if day in valid_days:
             continue
         try:
-            pd.to_datetime(day, format="%Y-%m-%d", errors="raise")
+            datetime.strptime(day, "%Y-%m-%d")
         except (TypeError, ValueError):
             invalid_days.append(day)
     if invalid_days:

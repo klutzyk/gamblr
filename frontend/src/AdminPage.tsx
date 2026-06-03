@@ -2,20 +2,38 @@ import { useEffect, useMemo, useState } from "react";
 import {
   evaluateAllPredictions,
   getLatestIngestionRun,
+  getMlbCronStatus,
+  getRecentMlbPlayerGameRows,
   getRecentPlayerGameDates,
   recalcUnderRiskAll,
   refreshPlayerTeamAbbr,
   runWalkforwardBacktest,
   startGamesIngestJob,
   startLastNUpdateJob,
+  startMlbBootstrapIngest,
+  startMlbPredictionPrecompute,
+  startTrainAllMlb,
+  startTrainMlbMarket,
   trainAllModels,
   updateRollingFeatures,
   updateTeamGames,
   getUpdateJobStatus,
+  getMlbHrEvBoard,
+  type MlbRecentPlayerGameRow,
+  type MlbCronStatusResponse,
+  type MlbMarketName,
 } from "./api";
 import "./AdminPage.css";
 
 type BacktestStat = "points" | "assists" | "rebounds" | "threept" | "threepa";
+type AdminSportTab = "nba" | "mlb";
+
+const MLB_MARKETS: MlbMarketName[] = [
+  "batter_home_runs",
+  "batter_hits",
+  "batter_total_bases",
+  "pitcher_strikeouts",
+];
 
 const BACKTEST_STATS: BacktestStat[] = [
   "points",
@@ -27,6 +45,11 @@ const BACKTEST_STATS: BacktestStat[] = [
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const toLocalIsoDate = (date = new Date()) => {
+  const localTime = date.getTime() - date.getTimezoneOffset() * 60_000;
+  return new Date(localTime).toISOString().slice(0, 10);
+};
+
 const formatElapsed = (elapsedMs: number) => {
   const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -36,7 +59,8 @@ const formatElapsed = (elapsedMs: number) => {
 };
 
 export default function AdminPage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = toLocalIsoDate();
+  const [activeSportTab, setActiveSportTab] = useState<AdminSportTab>("nba");
   const [sinceDate, setSinceDate] = useState("");
   const [untilDate, setUntilDate] = useState(todayIso);
   const [season, setSeason] = useState("2025-26");
@@ -72,6 +96,16 @@ export default function AdminPage() {
       rebounds: number | null;
     }>
   >([]);
+  const [mlbSeason, setMlbSeason] = useState("2026");
+  const [mlbDate, setMlbDate] = useState(todayIso);
+  const [mlbPrecomputeLimit, setMlbPrecomputeLimit] = useState(200);
+  const [mlbTrainMarket, setMlbTrainMarket] = useState<MlbMarketName>("batter_home_runs");
+  const [mlbTrainAll, setMlbTrainAll] = useState(false);
+  const [mlbMinPlayerGames, setMlbMinPlayerGames] = useState(3);
+  const [mlbSearchModels, setMlbSearchModels] = useState(false);
+  const [mlbStatus, setMlbStatus] = useState<MlbCronStatusResponse | null>(null);
+  const [mlbStatusLoading, setMlbStatusLoading] = useState(false);
+  const [latestMlbPlayerGames, setLatestMlbPlayerGames] = useState<MlbRecentPlayerGameRow[]>([]);
 
   const canRun = useMemo(() => {
     if (isRunning) return false;
@@ -102,6 +136,45 @@ export default function AdminPage() {
       return result;
     } finally {
       window.clearInterval(interval);
+    }
+  };
+
+  const pollJob = async (jobId: string, label: string) => {
+    appendLog(`${label} job queued: ${jobId}`);
+    while (true) {
+      const status = await getUpdateJobStatus(jobId);
+      const done = status.steps_done ?? status.games_done ?? status.players_done ?? 0;
+      const total = status.steps_total ?? status.games_total ?? status.players_total ?? null;
+      const current =
+        status.current_market ?? status.current_day ?? status.current_date ?? status.current_game_date ?? status.current_game_id;
+      const pct =
+        typeof total === "number" && total > 0
+          ? Math.max(0, Math.min(100, (Number(done) / total) * 100))
+          : null;
+      setProgressPct(pct);
+      setProgressLabel(
+        total && total > 0
+          ? `${label}: ${done}/${total}${current ? ` - ${current}` : ""}`
+          : `${label}: ${status.status}${current ? ` - ${current}` : ""}`
+      );
+      appendLog(
+        total && total > 0
+          ? `${label} ${status.status} (${done}/${total})${current ? ` - ${current}` : ""}`
+          : `${label} ${status.status}${current ? ` - ${current}` : ""}`
+      );
+      if (status.status === "completed") {
+        setProgressPct(100);
+        setProgressLabel(`${label} completed.`);
+        appendLog(`${label} result: ${JSON.stringify(status.result ?? status)}`);
+        return status;
+      }
+      if (status.status === "failed") {
+        throw new Error(`${label} failed: ${status.error ?? "unknown error"}`);
+      }
+      if (status.status === "not_found") {
+        throw new Error(`${label} job not found: ${jobId}`);
+      }
+      await wait(8000);
     }
   };
 
@@ -272,6 +345,106 @@ export default function AdminPage() {
     }
   };
 
+  const runAdminAction = async (label: string, action: () => Promise<void>) => {
+    setIsRunning(true);
+    setProgressLabel(null);
+    setProgressPct(null);
+    try {
+      appendLog(`${label} started...`);
+      await action();
+      appendLog(`${label} finished.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      appendLog(`${label} failed: ${message}`);
+      setProgressLabel(`Failed: ${message}`);
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  const refreshMlbStatus = async () => {
+    setMlbStatusLoading(true);
+    try {
+      const status = await getMlbCronStatus(mlbDate);
+      setMlbStatus(status);
+      appendLog(`MLB status ${status.date}: ${JSON.stringify(status.prediction_market_counts ?? {})}`);
+    } catch (error) {
+      appendLog(`MLB status failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setMlbStatusLoading(false);
+    }
+  };
+
+  const loadRecentMlbRows = async () => {
+    try {
+      const res = await getRecentMlbPlayerGameRows(5);
+      setLatestMlbPlayerGames(res.data ?? []);
+    } catch {
+      setLatestMlbPlayerGames([]);
+    }
+  };
+
+  const runMlbScheduleRoster = () =>
+    runAdminAction("MLB slate data ingest", async () => {
+      const started = await startMlbBootstrapIngest({
+        season: Number(mlbSeason),
+        since: mlbDate,
+        until: mlbDate,
+        final_only: false,
+        include_savant: false,
+        include_weather: true,
+        include_umpire_roster: true,
+      });
+      await pollJob(started.job_id, "MLB slate data ingest");
+      await refreshMlbStatus();
+      await loadRecentMlbRows();
+    });
+
+  const runMlbPrecomputeStart = () =>
+    runAdminAction("MLB prediction precompute", async () => {
+      const started = await startMlbPredictionPrecompute({
+        days: mlbDate,
+        limit_per_market: mlbPrecomputeLimit,
+        refresh: true,
+        ensure_data: false,
+      });
+      await pollJob(started.job_id, "MLB prediction precompute");
+      await refreshMlbStatus();
+    });
+
+  const runMlbTrain = () =>
+    runAdminAction("MLB model training", async () => {
+      const started = mlbTrainAll
+        ? await startTrainAllMlb({
+            min_player_games: mlbMinPlayerGames,
+            search_models: mlbSearchModels,
+          })
+        : await startTrainMlbMarket(mlbTrainMarket, {
+            min_player_games: mlbMinPlayerGames,
+            search_models: mlbSearchModels,
+          });
+      await pollJob(started.job_id, "MLB model training");
+    });
+
+  const runMlbHrOddsRefresh = () =>
+    runAdminAction("MLB HR odds refresh", async () => {
+      const result = await runWithHeartbeat("Refreshing MLB HR odds/value board", () =>
+        getMlbHrEvBoard({
+          date: mlbDate,
+          day: "auto",
+          bookmaker: "fanduel",
+          max_events: 30,
+          max_age_minutes: 30,
+          refresh: true,
+          prediction_limit: 300,
+          limit: 75,
+          refresh_key: Date.now(),
+        })
+      );
+      appendLog(`HR odds/value: matched ${result.matched}, positive EV ${result.positive_ev.length}`);
+      await refreshMlbStatus();
+    });
+
   useEffect(() => {
     const loadLatestIngestion = async () => {
       try {
@@ -307,6 +480,8 @@ export default function AdminPage() {
     };
     void loadLatestIngestion();
     void loadRecentGameDates();
+    void refreshMlbStatus();
+    void loadRecentMlbRows();
   }, []);
 
   return (
@@ -315,6 +490,31 @@ export default function AdminPage() {
         <div className="admin-card admin-card-narrow">
           <div className="admin-header">
             <h2 className="mb-1">Data Ingestion Console</h2>
+            <p className="mb-0">NBA pipeline controls and MLB operations from one panel.</p>
+          </div>
+
+          <div className="admin-tabs mt-4">
+            <button
+              type="button"
+              className={`admin-tab ${activeSportTab === "nba" ? "active" : ""}`}
+              onClick={() => setActiveSportTab("nba")}
+            >
+              NBA
+            </button>
+            <button
+              type="button"
+              className={`admin-tab ${activeSportTab === "mlb" ? "active" : ""}`}
+              onClick={() => setActiveSportTab("mlb")}
+            >
+              MLB
+            </button>
+          </div>
+
+          {activeSportTab === "nba" && (
+          <>
+          <div className="admin-section-title mt-4">
+            <span>NBA</span>
+            <strong>Ingestion and model maintenance</strong>
           </div>
 
           <div className="row g-3">
@@ -389,6 +589,102 @@ export default function AdminPage() {
               {isRunning ? "Running..." : "Run Pipeline"}
             </button>
           </div>
+          </>
+          )}
+
+          {activeSportTab === "mlb" && (
+          <>
+
+          <div className="admin-section-title mt-4">
+            <span>MLB</span>
+            <strong>Slate data, predictions, odds, and models</strong>
+          </div>
+
+          <div className="row g-3 mt-2">
+            <div className="col-md-3">
+              <label className="admin-label">Slate Date</label>
+              <input
+                className="admin-input"
+                type="date"
+                value={mlbDate}
+                onChange={(e) => setMlbDate(e.target.value)}
+              />
+              <small className="admin-help">Used for schedule, rosters, odds, and prediction precompute.</small>
+            </div>
+            <div className="col-md-2">
+              <label className="admin-label">Season</label>
+              <input
+                className="admin-input"
+                value={mlbSeason}
+                onChange={(e) => setMlbSeason(e.target.value)}
+              />
+            </div>
+            <div className="col-md-2">
+              <label className="admin-label">Limit / Market</label>
+              <input
+                className="admin-input"
+                type="number"
+                min={1}
+                max={500}
+                value={mlbPrecomputeLimit}
+                onChange={(e) => setMlbPrecomputeLimit(Number(e.target.value) || 200)}
+              />
+            </div>
+            <div className="col-md-5 d-flex align-items-end gap-2 flex-wrap">
+              <button className="btn btn-outline-dark btn-sm" onClick={() => void refreshMlbStatus()} disabled={mlbStatusLoading}>
+                {mlbStatusLoading ? "Checking..." : "Check MLB Status"}
+              </button>
+            </div>
+          </div>
+
+          <div className="admin-action-grid mt-3">
+            <div className="admin-action-panel">
+              <h6>Slate Data</h6>
+              <p className="admin-help mb-3">
+                Runs the one-date MLB ingest for schedule, rosters, game feeds, weather, and umpires.
+              </p>
+              <button className="btn btn-sm btn-success" onClick={runMlbScheduleRoster} disabled={isRunning}>
+                Ingest Slate Data
+              </button>
+            </div>
+
+            <div className="admin-action-panel">
+              <h6>Predictions</h6>
+              <p className="admin-help mb-3">
+                Runs the stored prediction precompute for the selected slate date with refresh enabled.
+              </p>
+              <button className="btn btn-sm btn-success" onClick={runMlbPrecomputeStart} disabled={isRunning}>
+                Precompute Slate
+              </button>
+            </div>
+
+            <div className="admin-action-panel">
+              <h6>Home Run Value</h6>
+              <p className="admin-help mb-3">Fetch FanDuel HR odds and join to stored/model HR predictions for the selected date.</p>
+              <button className="btn btn-sm btn-success" onClick={runMlbHrOddsRefresh} disabled={isRunning}>
+                Refresh HR Odds
+              </button>
+            </div>
+
+            <div className="admin-action-panel">
+              <h6>Training</h6>
+              <label className="admin-label">Market</label>
+              <select className="admin-select" value={mlbTrainMarket} onChange={(e) => setMlbTrainMarket(e.target.value as MlbMarketName)} disabled={mlbTrainAll}>
+                {MLB_MARKETS.map((market) => <option key={market} value={market}>{market}</option>)}
+              </select>
+              <div className="admin-options admin-options-compact mt-2">
+                <label><input type="checkbox" checked={mlbTrainAll} onChange={(e) => setMlbTrainAll(e.target.checked)} /> Train all</label>
+                <label><input type="checkbox" checked={mlbSearchModels} onChange={(e) => setMlbSearchModels(e.target.checked)} /> Search models</label>
+              </div>
+              <label className="admin-label mt-2">Min Player Games</label>
+              <input className="admin-input" type="number" min={0} max={100} value={mlbMinPlayerGames} onChange={(e) => setMlbMinPlayerGames(Number(e.target.value) || 0)} />
+              <button className="btn btn-sm btn-success mt-3" onClick={runMlbTrain} disabled={isRunning}>
+                Start Training
+              </button>
+            </div>
+          </div>
+          </>
+          )}
 
           <div className="admin-logs mt-4">
             {(isRunning || progressLabel) && (
@@ -405,7 +701,11 @@ export default function AdminPage() {
                 </div>
               </div>
             )}
-            <div className="admin-log-meta">{latestIngestionText}</div>
+            <div className="admin-log-meta">
+              {activeSportTab === "mlb"
+                ? `MLB slate ${mlbStatus?.date ?? mlbDate} | games: ${mlbStatus?.games_count ?? "-"} | rosters: ${mlbStatus?.roster_rows ?? "-"} | predictions: ${mlbStatus?.predictions_complete ? "ready" : "missing"} | HR odds: ${mlbStatus?.hr_odds_rows ?? "-"}`
+                : latestIngestionText}
+            </div>
             {logs.length === 0 ? (
               <p className="mb-0 text-muted">No runs yet.</p>
             ) : (
@@ -417,43 +717,89 @@ export default function AdminPage() {
             )}
           </div>
 
-          <div className="admin-recent mt-3">
-            <h6 className="mb-2">Latest 5 rows in `player_game_stats`</h6>
-            {latestGameDates.length === 0 ? (
-              <p className="mb-0 text-muted">No recent rows available.</p>
-            ) : (
-              <div className="table-responsive">
-                <table className="table table-sm mb-0">
-                  <thead>
-                    <tr>
-                      <th>ID</th>
-                      <th>Game Date</th>
-                      <th>Player</th>
-                      <th>Game</th>
-                      <th>Matchup</th>
-                      <th>PTS</th>
-                      <th>AST</th>
-                      <th>REB</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {latestGameDates.map((row) => (
-                      <tr key={row.id}>
-                        <td>{row.id}</td>
-                        <td>{String(row.game_date).slice(0, 10)}</td>
-                        <td>{row.player_id}</td>
-                        <td>{row.game_id}</td>
-                        <td>{row.matchup ?? "-"}</td>
-                        <td>{row.points ?? "-"}</td>
-                        <td>{row.assists ?? "-"}</td>
-                        <td>{row.rebounds ?? "-"}</td>
+          {activeSportTab === "nba" ? (
+            <div className="admin-recent mt-3">
+              <h6 className="mb-2">Latest 5 rows in `player_game_stats`</h6>
+              {latestGameDates.length === 0 ? (
+                <p className="mb-0 text-muted">No recent rows available.</p>
+              ) : (
+                <div className="table-responsive">
+                  <table className="table table-sm mb-0">
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Game Date</th>
+                        <th>Player</th>
+                        <th>Game</th>
+                        <th>Matchup</th>
+                        <th>PTS</th>
+                        <th>AST</th>
+                        <th>REB</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+                    </thead>
+                    <tbody>
+                      {latestGameDates.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.id}</td>
+                          <td>{String(row.game_date).slice(0, 10)}</td>
+                          <td>{row.player_id}</td>
+                          <td>{row.game_id}</td>
+                          <td>{row.matchup ?? "-"}</td>
+                          <td>{row.points ?? "-"}</td>
+                          <td>{row.assists ?? "-"}</td>
+                          <td>{row.rebounds ?? "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="admin-recent mt-3">
+              <h6 className="mb-2">Latest 5 rows in `mlb_player_game_batting`</h6>
+              {latestMlbPlayerGames.length === 0 ? (
+                <p className="mb-0 text-muted">No recent MLB batting rows available.</p>
+              ) : (
+                <div className="table-responsive">
+                  <table className="table table-sm mb-0">
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Game Date</th>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>Game</th>
+                        <th>PA</th>
+                        <th>H</th>
+                        <th>HR</th>
+                        <th>TB</th>
+                        <th>BB</th>
+                        <th>K</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {latestMlbPlayerGames.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.id}</td>
+                          <td>{String(row.game_date).slice(0, 10)}</td>
+                          <td>{row.player_name ?? row.player_id}</td>
+                          <td>{row.team_abbreviation ?? "-"}</td>
+                          <td>{row.game_pk}</td>
+                          <td>{row.plate_appearances ?? "-"}</td>
+                          <td>{row.hits ?? "-"}</td>
+                          <td>{row.home_runs ?? "-"}</td>
+                          <td>{row.total_bases ?? "-"}</td>
+                          <td>{row.walks ?? "-"}</td>
+                          <td>{row.strikeouts ?? "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

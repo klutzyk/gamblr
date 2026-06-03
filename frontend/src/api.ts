@@ -1013,7 +1013,10 @@ export function getMlbPredictions(params: {
   day?: PredictionDayParam;
   date?: string;
   limit?: number;
+  ensure_data?: boolean;
+  refresh?: boolean;
   compute_if_missing?: boolean;
+  refresh_key?: number;
 }): Promise<MlbPredictionsResponse> {
   const { market, ...query } = params;
   return fetchWithCache<MlbPredictionsResponse>(
@@ -1083,6 +1086,99 @@ export function loadMlbActiveRosters(params: {
   return postJson<Record<string, unknown>>("/mlb/db/rosters/active/load", params);
 }
 
+export type MlbCronStatusResponse = {
+  status: string;
+  date: string;
+  games_count?: number | null;
+  roster_rows?: number | null;
+  weather_rows?: number | null;
+  official_assignment_rows?: number | null;
+  hr_odds_rows?: number | null;
+  prediction_market_counts?: Record<string, number>;
+  predictions_complete?: boolean;
+  ingestion_has_schedule?: boolean;
+  ingestion_has_rosters?: boolean;
+  ingestion_has_weather?: boolean;
+  latest_game_ingested_at?: string | null;
+  latest_roster_captured_at?: string | null;
+  latest_weather_pulled_at?: string | null;
+  latest_hr_odds_fetched_at?: string | null;
+  prediction_markets?: Array<Record<string, unknown>>;
+  odds_fetch_logs?: Array<Record<string, unknown>>;
+};
+
+export function getMlbCronStatus(date?: string): Promise<MlbCronStatusResponse> {
+  return fetchWithCache<MlbCronStatusResponse>("/mlb/db/cron/status", { date }, 0);
+}
+
+export function startMlbNightlyIngest(params: {
+  season?: number;
+  days_back?: number;
+  days_forward?: number;
+  final_only?: boolean;
+  include_savant?: boolean;
+  include_weather?: boolean;
+  include_umpire_roster?: boolean;
+  weather_dataset?: string;
+  statcast_minimum?: string;
+  bat_tracking_min_swings?: number;
+}): Promise<{ status: string; job_id: string }> {
+  return postJson<{ status: string; job_id: string }>("/mlb/db/nightly/ingest/start", params);
+}
+
+export function startMlbBootstrapIngest(params: {
+  season: number;
+  since: string;
+  until: string;
+  final_only?: boolean;
+  include_savant?: boolean;
+  include_weather?: boolean;
+  include_umpire_roster?: boolean;
+  weather_dataset?: string;
+  statcast_minimum?: string;
+  bat_tracking_min_swings?: number;
+}): Promise<{ status: string; job_id: string }> {
+  return postJson<{ status: string; job_id: string }>("/mlb/db/bootstrap/ingest/start", params);
+}
+
+export function startMlbPredictionPrecompute(params: {
+  days: string;
+  limit_per_market?: number;
+  refresh?: boolean;
+  ensure_data?: boolean;
+}): Promise<{ status: string; job_id: string; days?: string[] }> {
+  return postJson<{ status: string; job_id: string; days?: string[] }>("/mlb/predictions/precompute/start", params);
+}
+
+export function runMlbPredictionPrecompute(params: {
+  days: string;
+  limit_per_market?: number;
+  refresh?: boolean;
+  ensure_data?: boolean;
+}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/mlb/predictions/precompute/run", params);
+}
+
+export function startTrainAllMlb(params: {
+  min_player_games?: number;
+  search_models?: boolean;
+} = {}): Promise<{ status: string; job_id: string; markets?: string[] }> {
+  return postJson<{ status: string; job_id: string; markets?: string[] }>("/mlb/predictions/train/all/start", params);
+}
+
+export function startTrainMlbMarket(
+  market: MlbMarketName,
+  params: {
+    min_player_games?: number;
+    search_models?: boolean;
+  } = {}
+): Promise<{ status: string; job_id: string; markets?: string[] }> {
+  return postJson<{ status: string; job_id: string; markets?: string[] }>(
+    `/mlb/predictions/train/${market}/start`,
+    params
+  );
+}
+
 export type UpdateJobStatus = {
   job_id: string;
   status: "queued" | "running" | "completed" | "failed" | string;
@@ -1090,11 +1186,17 @@ export type UpdateJobStatus = {
   players_total?: number | null;
   games_done?: number;
   games_total?: number | null;
+  steps_done?: number;
+  steps_total?: number | null;
   current_game_id?: string | null;
   current_game_date?: string | null;
+  current_day?: string | null;
+  current_date?: string | null;
+  current_market?: string | null;
   type?: string;
   error?: string | null;
   result?: Record<string, unknown> | null;
+  market_counts?: Record<string, number>;
 };
 
 export type LatestIngestionRunResponse = {
@@ -1121,6 +1223,22 @@ export type RecentPlayerGameDateRow = {
   points: number | null;
   assists: number | null;
   rebounds: number | null;
+};
+
+export type MlbRecentPlayerGameRow = {
+  id: number;
+  game_pk: number;
+  game_date: string;
+  player_id: number;
+  player_name: string | null;
+  team_abbreviation: string | null;
+  batting_order: number | null;
+  plate_appearances: number | null;
+  hits: number | null;
+  home_runs: number | null;
+  total_bases: number | null;
+  walks: number | null;
+  strikeouts: number | null;
 };
 
 export function ingestGamesByDate(params: {
@@ -1175,6 +1293,16 @@ export function getRecentPlayerGameDates(
 ): Promise<{ status: string; data: RecentPlayerGameDateRow[] }> {
   return fetchWithCache<{ status: string; data: RecentPlayerGameDateRow[] }>(
     "/db/player-games/recent-dates",
+    { limit },
+    10_000
+  );
+}
+
+export function getRecentMlbPlayerGameRows(
+  limit = 5
+): Promise<{ status: string; data: MlbRecentPlayerGameRow[] }> {
+  return fetchWithCache<{ status: string; data: MlbRecentPlayerGameRow[] }>(
+    "/mlb/db/player-games/recent",
     { limit },
     10_000
   );

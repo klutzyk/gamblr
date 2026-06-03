@@ -21,10 +21,122 @@
   color: #5a6f82;
 }
 
+.admin-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 14px;
+  background: #eef1ef;
+}
+
+.admin-tab {
+  min-width: 92px;
+  height: 38px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #5a6f82;
+  font-size: 0.9rem;
+  font-weight: 800;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.admin-tab.active {
+  background: #6adf4f;
+  color: #102235;
+  box-shadow: 0 10px 20px rgba(106, 223, 79, 0.22);
+}
+
+.admin-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(16, 34, 53, 0.08);
+}
+
+.admin-section-title span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 26px;
+  border-radius: 999px;
+  background: #6adf4f;
+  color: #102235;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.admin-section-title strong {
+  color: #102235;
+  font-size: 1rem;
+}
+
+.admin-divider {
+  height: 1px;
+  margin: 26px 0 20px;
+  background: rgba(16, 34, 53, 0.1);
+}
+
+.admin-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.admin-status-tile,
+.admin-action-panel {
+  border: 1px solid rgba(16, 34, 53, 0.08);
+  border-radius: 12px;
+  background: #fbfbfb;
+}
+
+.admin-status-tile {
+  padding: 12px;
+}
+
+.admin-status-tile span {
+  display: block;
+  color: #6e7f8f;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.admin-status-tile strong {
+  display: block;
+  margin-top: 4px;
+  color: #102235;
+  font-size: 1.1rem;
+}
+
+.admin-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.admin-action-panel {
+  padding: 14px;
+}
+
+.admin-action-panel h6 {
+  margin-bottom: 10px;
+  color: #102235;
+  font-weight: 800;
+}
+
 .admin-options {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.admin-options-compact {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 6px;
 }
 
 .admin-options label,

@@ -307,6 +307,18 @@ def _latest_feature_rows(history: pd.DataFrame, key: str, prefixes: tuple[str, .
     )
 
 
+def _normalize_merge_key(df: pd.DataFrame, key: str) -> pd.DataFrame:
+    if key in df.columns:
+        df[key] = pd.to_numeric(df[key], errors="coerce").astype("Int64")
+    return df
+
+
+def _normalize_merge_keys(df: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    for key in keys:
+        _normalize_merge_key(df, key)
+    return df
+
+
 def build_batter_home_run_pregame_frame(
     engine=None,
     *,
@@ -324,6 +336,10 @@ def build_batter_home_run_pregame_frame(
         return candidates
 
     candidates["game_date"] = pd.to_datetime(candidates["game_date"])
+    candidates = _normalize_merge_keys(
+        candidates,
+        ["game_pk", "player_id", "team_id", "opponent_team_id", "starter_pitcher_id", "season", "venue_id"],
+    )
     min_history_date = _pregame_history_min_date(resolved_date)
     history = (
         _cached_batter_training_history(database_url, min_history_date).copy()
@@ -336,6 +352,10 @@ def build_batter_home_run_pregame_frame(
         return candidates
 
     history = history[history["game_date"] < pd.Timestamp(resolved_date)].copy()
+    history = _normalize_merge_keys(
+        history,
+        ["game_pk", "player_id", "team_id", "opponent_team_id", "starter_pitcher_id", "season", "venue_id"],
+    )
     player_features = (
         history.sort_values(["player_id", "game_date", "game_pk"])
         .drop_duplicates("player_id", keep="last")
@@ -350,6 +370,7 @@ def build_batter_home_run_pregame_frame(
         ("opp_starter_",),
     )
     if not starter_features.empty:
+        starter_features = _normalize_merge_key(starter_features, "starter_pitcher_id")
         current_starter_cols = [
             col
             for col in frame.columns
@@ -367,6 +388,7 @@ def build_batter_home_run_pregame_frame(
         ("team_batting_", "opponent_bullpen_"),
     )
     if not opponent_features.empty:
+        opponent_features = _normalize_merge_key(opponent_features, "opponent_team_id")
         current_opponent_cols = [
             col
             for col in frame.columns
@@ -382,6 +404,8 @@ def build_batter_home_run_pregame_frame(
         if extra.empty:
             continue
         keys = ["game_pk"] if "game_pk" in extra.columns else ["season", "venue_id"]
+        frame = _normalize_merge_keys(frame, keys)
+        extra = _normalize_merge_keys(extra.copy(), keys)
         frame = frame.drop(columns=[col for col in extra.columns if col not in keys and col in frame.columns], errors="ignore")
         frame = frame.merge(extra, on=keys, how="left")
 
@@ -581,6 +605,10 @@ def build_pitcher_pregame_frame(
         return candidates
 
     candidates["game_date"] = pd.to_datetime(candidates["game_date"])
+    candidates = _normalize_merge_keys(
+        candidates,
+        ["game_pk", "player_id", "team_id", "opponent_team_id", "home_team_id", "away_team_id", "season", "venue_id"],
+    )
     history = (
         _cached_pitcher_training_history(database_url).copy()
         if database_url and not provided_engine
@@ -592,6 +620,10 @@ def build_pitcher_pregame_frame(
         return candidates
 
     history = history[history["game_date"] < pd.Timestamp(resolved_date)].copy()
+    history = _normalize_merge_keys(
+        history,
+        ["game_pk", "player_id", "team_id", "opponent_team_id", "home_team_id", "away_team_id", "season", "venue_id"],
+    )
     identity_cols = {
         "game_pk",
         "player_id",
@@ -620,6 +652,7 @@ def build_pitcher_pregame_frame(
         ("opponent_batting_", "opponent_k_rate_"),
     )
     if not opponent_features.empty:
+        opponent_features = _normalize_merge_key(opponent_features, "opponent_team_id")
         current_opponent_cols = [
             col
             for col in frame.columns
@@ -635,6 +668,8 @@ def build_pitcher_pregame_frame(
         if extra.empty:
             continue
         keys = ["game_pk"] if "game_pk" in extra.columns else ["season", "venue_id"]
+        frame = _normalize_merge_keys(frame, keys)
+        extra = _normalize_merge_keys(extra.copy(), keys)
         frame = frame.drop(columns=[col for col in extra.columns if col not in keys and col in frame.columns], errors="ignore")
         frame = frame.merge(extra, on=keys, how="left")
 
