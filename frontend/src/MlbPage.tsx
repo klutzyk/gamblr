@@ -253,6 +253,55 @@ function filterSlateToLocalDate(
   };
 }
 
+function filterEvBoardsToLocalDate(
+  payloads: MlbHrEvBoardResponse[],
+  {
+    localDate,
+    region,
+  }: {
+    localDate: string;
+    region: UserRegion;
+  },
+): MlbHrEvBoardResponse {
+  const firstPayload = payloads[0];
+  const selectRows = (rows: MlbHrEvRow[]) => {
+    const seen = new Set<string>();
+    return rows
+      .filter((row) => localDateValueFromUtc(row.commence_time, region) === localDate)
+      .filter((row) => {
+        const key = `${row.event_id ?? ""}-${row.player_id ?? row.player_name}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  };
+  const all = selectRows(payloads.flatMap((payload) => payload.all ?? []));
+  const positive_ev = selectRows(payloads.flatMap((payload) => payload.positive_ev ?? []))
+    .sort((a, b) => (b.ev_per_dollar - a.ev_per_dollar) || (b.edge - a.edge));
+
+  return {
+    sport: firstPayload?.sport ?? "mlb",
+    status: firstPayload?.status ?? "scored",
+    provider: firstPayload?.provider ?? "propline",
+    bookmaker: firstPayload?.bookmaker ?? "",
+    market: firstPayload?.market ?? "batter_home_runs",
+    day: firstPayload?.day ?? "date",
+    date: localDate,
+    odds_cache: firstPayload?.odds_cache,
+    scored_players: payloads.reduce((sum, payload) => sum + (payload.scored_players ?? 0), 0),
+    props_count: payloads.reduce((sum, payload) => sum + (payload.props_count ?? 0), 0),
+    matched: all.length,
+    unmatched_count: payloads.reduce((sum, payload) => sum + (payload.unmatched_count ?? 0), 0),
+    positive_ev,
+    all,
+    missing_model_feature_count: payloads.reduce(
+      (sum, payload) => sum + (payload.missing_model_feature_count ?? 0),
+      0,
+    ),
+    missing_model_features_sample: firstPayload?.missing_model_features_sample ?? [],
+  };
+}
+
 function formatGameTime(value: string | null | undefined, region: UserRegion) {
   if (!value) return "-";
   const date = new Date(value);
@@ -342,7 +391,7 @@ function getPlayerStatsSearchUrl(playerName: string | null | undefined): string 
   const safeName =
     typeof playerName === "string" && playerName.trim().length > 0
       ? playerName.trim()
-      : "MLB player";
+      : "player";
   const url = new URL("https://www.google.com/search");
   url.searchParams.set("q", `${safeName} stats`);
   return url.toString();
@@ -1721,18 +1770,39 @@ export default function MlbPage() {
     }
     setEvState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const data = await getMlbHrEvBoard({
-        day: predictionDay,
-        date: resolvedMlbDate,
-        bookmaker,
-        max_events: 30,
-        max_age_minutes: 30,
-        refresh: force,
-        refresh_key: force ? Date.now() : undefined,
-        prediction_limit: 300,
-        limit: 75,
+      const officialDateCandidates = mlbOfficialDateCandidatesForLocalDate(resolvedMlbDate);
+      const payloads: MlbHrEvBoardResponse[] = [];
+      const failures: string[] = [];
+      for (const date of officialDateCandidates) {
+        try {
+          payloads.push(
+            await getMlbHrEvBoard({
+              day: predictionDay,
+              date,
+              bookmaker,
+              max_events: 30,
+              max_age_minutes: 30,
+              refresh: force,
+              refresh_key: force ? Date.now() : undefined,
+              prediction_limit: 300,
+              limit: 75,
+            }),
+          );
+        } catch (error) {
+          failures.push(`${date}: ${error instanceof Error ? error.message : "request failed"}`);
+        }
+      }
+      if (payloads.length === 0) {
+        throw new Error(failures.join("; ") || "Failed to load home run prices.");
+      }
+      setEvState({
+        data: filterEvBoardsToLocalDate(payloads, {
+          localDate: resolvedMlbDate,
+          region: userRegion,
+        }),
+        loading: false,
+        error: null,
       });
-      setEvState({ data, loading: false, error: null });
       setEvRequestKey(requestKey);
     } catch (error) {
       setEvState({

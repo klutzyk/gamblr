@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+import httpx
 import pandas as pd
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
@@ -42,6 +44,7 @@ from app.services.open_meteo_client import OpenMeteoClient
 
 
 UTC = timezone.utc
+logger = logging.getLogger(__name__)
 
 
 def _daterange(start_value: date, end_value: date) -> list[date]:
@@ -1736,9 +1739,18 @@ async def ingest_weather_for_games(
                     "reason": str(exc),
                 }
             )
+        except httpx.HTTPError as exc:
+            await db.rollback()
+            logger.warning("Skipping MLB weather ingest for game_pk=%s after Open-Meteo error: %s", game_pk, exc)
+            skipped_games.append(
+                {
+                    "game_pk": game_pk,
+                    "reason": f"Open-Meteo request failed: {exc}",
+                }
+            )
 
     return {
-        "status": "success",
+        "status": "partial_success" if skipped_games else "success",
         "season": season,
         "start_date": start_date,
         "end_date": end_date,
