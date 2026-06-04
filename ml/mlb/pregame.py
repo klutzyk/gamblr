@@ -84,7 +84,7 @@ def resolve_prediction_date(day: str = "tomorrow", target_date: str | date | Non
 def _pregame_history_min_date(resolved_date: date) -> str | None:
     raw_days = os.getenv("MLB_PREGAME_HISTORY_DAYS")
     if raw_days is None and os.getenv("RENDER"):
-        raw_days = "240"
+        raw_days = "120"
     if raw_days in (None, "", "0", "none", "None"):
         return None
     try:

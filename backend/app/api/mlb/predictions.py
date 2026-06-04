@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import json
 import sys
 import uuid
@@ -395,6 +396,7 @@ def _build_mlb_prediction_slate_payload(
             "markets": markets,
         }
     finally:
+        gc.collect()
         engine.dispose()
 
 
@@ -468,6 +470,7 @@ def _build_mlb_market_prediction_payload(
             **_payload_for_scored_market(market, scored, limit=limit),
         }
     finally:
+        gc.collect()
         engine.dispose()
 
 
