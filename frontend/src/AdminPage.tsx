@@ -602,14 +602,16 @@ export default function AdminPage() {
 
           <div className="row g-3 mt-2">
             <div className="col-md-3">
-              <label className="admin-label">Slate Date</label>
+              <label className="admin-label">Slate Date (MLB / US)</label>
               <input
                 className="admin-input"
                 type="date"
                 value={mlbDate}
                 onChange={(e) => setMlbDate(e.target.value)}
               />
-              <small className="admin-help">Used for schedule, rosters, odds, and prediction precompute.</small>
+              <small className="admin-help">
+                MLB official date, usually one day behind Australia for games already played today.
+              </small>
             </div>
             <div className="col-md-2">
               <label className="admin-label">Season</label>

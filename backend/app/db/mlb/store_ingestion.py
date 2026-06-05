@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -1720,6 +1722,9 @@ async def ingest_weather_for_games(
 
     per_game_results = []
     skipped_games = []
+    request_delay_seconds = float(
+        os.getenv("OPEN_METEO_REQUEST_DELAY_SECONDS", "1.5" if os.getenv("RENDER") else "0")
+    )
     for game_pk in game_pks:
         try:
             per_game_results.append(
@@ -1748,6 +1753,8 @@ async def ingest_weather_for_games(
                     "reason": f"Open-Meteo request failed: {exc}",
                 }
             )
+        if request_delay_seconds > 0:
+            await asyncio.sleep(request_delay_seconds)
 
     return {
         "status": "partial_success" if skipped_games else "success",
