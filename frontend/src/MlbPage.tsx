@@ -1,10 +1,15 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import "./App.css";
 import {
+  getMlbBestBets,
   getMlbHrEvBoard,
   getMlbPredictionSlate,
   getMlbSimulationGames,
+  getOddsUsageSnapshot,
   runMlbGameSimulation,
+  type MlbBestBetLeg,
+  type MlbBestBetParlay,
+  type MlbBestBetsResponse,
   type MlbHrEvBoardResponse,
   type MlbHrEvRow,
   type MlbMarketName,
@@ -14,11 +19,12 @@ import {
   type MlbSimulationGamesResponse,
   type MlbSimulationPitchLogRow,
   type MlbSimulationRunResponse,
+  type OddsUsageSnapshot,
 } from "./api";
 import logo from "./assets/logo2.png";
 
 type UserRegion = "au" | "us" | "uk";
-type MainTab = "predictions" | "home_run_ev" | "simulation";
+type MainTab = "predictions" | "best_bets" | "home_run_ev" | "simulation";
 type MlbDay = "auto" | "today" | "tomorrow" | "yesterday";
 type MlbSort = "value_desc" | "value_asc" | "lineup_asc" | "player_az";
 type SimulationPlaybackMode = "full" | "highlights";
@@ -128,6 +134,18 @@ const initialPredictionsState: ApiState<MlbPredictionSlateResponse> = {
 };
 
 const initialEvState: ApiState<MlbHrEvBoardResponse> = {
+  data: null,
+  loading: false,
+  error: null,
+};
+
+const initialBestBetsState: ApiState<MlbBestBetsResponse> = {
+  data: null,
+  loading: false,
+  error: null,
+};
+
+const initialOddsUsageState: ApiState<OddsUsageSnapshot> = {
   data: null,
   loading: false,
   error: null,
@@ -299,6 +317,66 @@ function filterEvBoardsToLocalDate(
       0,
     ),
     missing_model_features_sample: firstPayload?.missing_model_features_sample ?? [],
+  };
+}
+
+function filterBestBetsToLocalDate(
+  payloads: MlbBestBetsResponse[],
+  {
+    localDate,
+    region,
+  }: {
+    localDate: string;
+    region: UserRegion;
+  },
+): MlbBestBetsResponse {
+  const firstPayload = payloads[0];
+  const selectLegs = (rows: MlbBestBetLeg[]) => {
+    const seen = new Set<string>();
+    return rows
+      .filter((row) => localDateValueFromUtc(row.commence_time, region) === localDate)
+      .filter((row) => {
+        const key = `${row.event_id ?? ""}-${row.market}-${row.player_id ?? row.player_name}-${row.line ?? ""}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => (b.ev_per_dollar - a.ev_per_dollar) || (b.edge - a.edge));
+  };
+  const top_single_legs = selectLegs(payloads.flatMap((payload) => payload.top_single_legs ?? []));
+  const recommended_parlays = payloads
+    .flatMap((payload) => payload.recommended_parlays ?? [])
+    .map((parlay) => ({
+      ...parlay,
+      legs: parlay.legs.filter((leg) => localDateValueFromUtc(leg.commence_time, region) === localDate),
+    }))
+    .filter((parlay) => parlay.legs.length === parlay.leg_count)
+    .sort((a, b) => (b.expected_value_per_unit - a.expected_value_per_unit));
+
+  return {
+    sport: firstPayload?.sport ?? "mlb",
+    status: top_single_legs.length ? "ok" : firstPayload?.status ?? "no_candidates",
+    message: top_single_legs.length ? null : firstPayload?.message ?? "No MLB bets met the current filters.",
+    provider: firstPayload?.provider ?? "theodds",
+    bookmaker: firstPayload?.bookmaker ?? "",
+    day: firstPayload?.day ?? "date",
+    date: localDate,
+    markets: Array.from(new Set(payloads.flatMap((payload) => payload.markets ?? []))),
+    target_multiplier: firstPayload?.target_multiplier,
+    leg_count: firstPayload?.leg_count,
+    filters: firstPayload?.filters,
+    prediction_market_counts: payloads.reduce<Record<string, number>>((acc, payload) => {
+      Object.entries(payload.prediction_market_counts ?? {}).forEach(([key, value]) => {
+        acc[key] = (acc[key] ?? 0) + value;
+      });
+      return acc;
+    }, {}),
+    odds_cache: firstPayload?.odds_cache,
+    props_count: payloads.reduce((sum, payload) => sum + (payload.props_count ?? 0), 0),
+    pool_size: top_single_legs.length,
+    top_single_legs,
+    recommended_parlays,
+    debug: firstPayload?.debug,
   };
 }
 
@@ -685,6 +763,117 @@ function EvRowTable({ rows, userRegion }: { rows: MlbHrEvRow[]; userRegion: User
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function BestBetLegTable({ rows, userRegion }: { rows: MlbBestBetLeg[]; userRegion: UserRegion }) {
+  if (!rows.length) {
+    return <p className="text-secondary mt-3 mb-0">No MLB best bets met the current filters.</p>;
+  }
+
+  return (
+    <div className="table-responsive">
+      <table className="table align-items-center mb-0">
+        <thead>
+          <tr>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Player</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Bet</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Odds</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Model Prob</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Edge</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">EV</th>
+            <th className="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Grade</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={`${row.event_id}-${row.market}-${row.player_id ?? row.player_name}-${row.line ?? ""}`}>
+              <td className="text-sm">
+                <div className="d-flex flex-column">
+                  <a
+                    href={getPlayerStatsSearchUrl(row.player_name)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="player-name-link fw-bold"
+                  >
+                    {row.player_name}
+                  </a>
+                  <span className="text-xs text-secondary">
+                    {row.team_abbreviation ?? "-"} / {row.matchup ?? `${row.away_team ?? "-"} @ ${row.home_team ?? "-"}`} / {formatGameTime(row.commence_time, userRegion)}
+                  </span>
+                </div>
+              </td>
+              <td className="text-sm">
+                {row.side ?? "Over"} {typeof row.line === "number" ? row.line : "-"} ({row.market_label ?? row.market})
+                <div className="text-xs text-secondary">
+                  {row.probability_method === "poisson_count_approximation" ? "Count approximation" : "Direct model"}
+                </div>
+              </td>
+              <td className="text-sm fw-bold">{formatAmerican(row.american_odds)}</td>
+              <td className="text-sm">{formatPct(row.model_probability)}</td>
+              <td className={`text-sm fw-bold ${row.edge > 0 ? "text-success" : "text-danger"}`}>
+                {formatPct(row.edge)}
+              </td>
+              <td className={`text-sm fw-bold ${row.ev_per_dollar > 0 ? "text-success" : "text-danger"}`}>
+                {formatMoney(row.ev_per_dollar)}
+              </td>
+              <td className="text-sm">
+                <span className={bettingGradeClass(row.betting_grade)}>{row.betting_grade ?? "-"}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BestBetParlays({
+  parlays,
+  userRegion,
+}: {
+  parlays: MlbBestBetParlay[];
+  userRegion: UserRegion;
+}) {
+  if (!parlays.length) return null;
+  return (
+    <div className="best-bets-results">
+      <h6 className="mb-2">Recommended Parlays</h6>
+      <div className="best-parlays-grid mb-4">
+        {parlays.map((parlay, index) => (
+          <div className="best-parlay-card" key={`mlb-parlay-${index}`}>
+            <div className="d-flex justify-content-between mb-2">
+              <strong>
+                Parlay #{index + 1}
+                {parlay.leg_count ? ` (${parlay.leg_count} legs)` : ""}
+              </strong>
+              <span>{parlay.combined_odds.toFixed(2)}x</span>
+            </div>
+            <p className="text-xs text-secondary mb-2">
+              Hit chance {formatPct(parlay.combined_probability)} / EV {parlay.expected_value_per_unit.toFixed(2)}
+            </p>
+            <ul className="best-leg-list">
+                {parlay.legs.map((leg) => (
+                  <li key={`${leg.event_id}-${leg.market}-${leg.player_name}`}>
+                    <a
+                      href={getPlayerStatsSearchUrl(leg.player_name)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="player-name-link"
+                    >
+                      {leg.player_name}
+                    </a>{" "}
+                    {leg.team_abbreviation ? `(${leg.team_abbreviation}) ` : ""}
+                    {leg.side ?? "Over"} {leg.line ?? "-"} ({leg.market_label ?? leg.market}) @{" "}
+                    {formatAmerican(leg.american_odds)}
+                    {leg.commence_time ? ` / ${formatGameTime(leg.commence_time, userRegion)}` : ""}
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1702,10 +1891,15 @@ export default function MlbPage() {
   const [mainTab, setMainTab] = useState<MainTab>("predictions");
   const [market, setMarket] = useState<MlbMarketName>("batter_home_runs");
   const [evView, setEvView] = useState<"positive" | "all">("positive");
+  const [bestBetsView, setBestBetsView] = useState<"singles" | "parlays">("singles");
   const [bookmaker, setBookmaker] = useState("fanduel");
+  const [bestBetsTargetInput, setBestBetsTargetInput] = useState("2");
+  const [bestBetsLegCount, setBestBetsLegCount] = useState(2);
   const [predictionsState, setPredictionsState] =
     useState<ApiState<MlbPredictionSlateResponse>>(initialPredictionsState);
   const [evState, setEvState] = useState<ApiState<MlbHrEvBoardResponse>>(initialEvState);
+  const [bestBetsState, setBestBetsState] = useState<ApiState<MlbBestBetsResponse>>(initialBestBetsState);
+  const [oddsUsageState, setOddsUsageState] = useState<ApiState<OddsUsageSnapshot>>(initialOddsUsageState);
   const [simulationGamesState, setSimulationGamesState] =
     useState<ApiState<MlbSimulationGamesResponse>>(initialSimulationGamesState);
   const [simulationRunState, setSimulationRunState] =
@@ -1813,6 +2007,77 @@ export default function MlbPage() {
     }
   };
 
+  const loadBestBets = async ({
+    refreshOdds = false,
+    fetchIfMissing = true,
+  }: {
+    refreshOdds?: boolean;
+    fetchIfMissing?: boolean;
+  } = {}) => {
+    const parsedTarget = Number(bestBetsTargetInput);
+    const targetMultiplier = Number.isFinite(parsedTarget) && parsedTarget >= 1.1 ? parsedTarget : 2;
+    setBestBetsState((current) => ({ ...current, loading: true, error: null }));
+    try {
+      const officialDateCandidates = mlbOfficialDateCandidatesForLocalDate(resolvedMlbDate);
+      const payloads: MlbBestBetsResponse[] = [];
+      const failures: string[] = [];
+      for (const date of officialDateCandidates) {
+        try {
+          payloads.push(
+            await getMlbBestBets({
+              day: predictionDay,
+              date,
+              bookmaker,
+              max_events: 30,
+              max_age_minutes: 30,
+              refresh: refreshOdds,
+              fetch_if_missing: fetchIfMissing,
+              refresh_key: refreshOdds ? Date.now() : undefined,
+              target_multiplier: targetMultiplier,
+              leg_count: bestBetsLegCount,
+              limit: 80,
+            }),
+          );
+        } catch (error) {
+          failures.push(`${date}: ${error instanceof Error ? error.message : "request failed"}`);
+        }
+      }
+      if (payloads.length === 0) {
+        throw new Error(failures.join("; ") || "Failed to load MLB best bets.");
+      }
+      setBestBetsState({
+        data: filterBestBetsToLocalDate(payloads, {
+          localDate: resolvedMlbDate,
+          region: userRegion,
+        }),
+        loading: false,
+        error: null,
+      });
+      void loadOddsUsageSnapshot(true);
+    } catch (error) {
+      setBestBetsState({
+        data: null,
+        loading: false,
+        error: error instanceof Error ? error.message : "Failed to load MLB best bets.",
+      });
+    }
+  };
+
+  const loadOddsUsageSnapshot = async (force = false) => {
+    if (!force && oddsUsageState.data) return;
+    setOddsUsageState((current) => ({ ...current, loading: true, error: null }));
+    try {
+      const data = await getOddsUsageSnapshot();
+      setOddsUsageState({ data, loading: false, error: null });
+    } catch (error) {
+      setOddsUsageState({
+        data: null,
+        loading: false,
+        error: error instanceof Error ? error.message : "Failed to load odds usage.",
+      });
+    }
+  };
+
   const resetSimulation = () => {
     setSimulationGamesState(initialSimulationGamesState);
     setSimulationRunState(initialSimulationRunState);
@@ -1874,6 +2139,12 @@ export default function MlbPage() {
   }, [mainTab, resolvedMlbDate, bookmaker]);
 
   useEffect(() => {
+    if (mainTab === "best_bets") {
+      void loadOddsUsageSnapshot();
+    }
+  }, [mainTab]);
+
+  useEffect(() => {
     if (mainTab === "simulation") {
       void loadSimulationGames();
     }
@@ -1892,6 +2163,7 @@ export default function MlbPage() {
     setPredictionTeams([]);
     setPredictionSearch("");
     setEvState(initialEvState);
+    setBestBetsState(initialBestBetsState);
     setEvRequestKey(null);
     resetSimulation();
   };
@@ -1899,12 +2171,24 @@ export default function MlbPage() {
   const handleRegionChange = (region: UserRegion) => {
     setUserRegion(region);
     setEvState(initialEvState);
+    setBestBetsState(initialBestBetsState);
     setEvRequestKey(null);
     resetSimulation();
   };
 
   const evRows = evState.data ? (evView === "positive" ? evState.data.positive_ev : evState.data.all) : [];
+  const bestBetRows = bestBetsState.data?.top_single_legs ?? [];
+  const bestBetParlays = bestBetsState.data?.recommended_parlays ?? [];
   const bestEv = evState.data?.positive_ev[0] ?? null;
+  const bestMlbBet = bestBetRows[0] ?? null;
+  const oddsCreditsRemaining =
+    typeof oddsUsageState.data?.requests_remaining === "number"
+      ? oddsUsageState.data.requests_remaining
+      : null;
+  const oddsRequestsLast =
+    typeof oddsUsageState.data?.requests_last === "number"
+      ? oddsUsageState.data.requests_last
+      : null;
   const activeMarketRows = predictionsState.data?.markets?.[market]?.data ?? [];
   const activeMarketCount = predictionsState.data?.markets?.[market]?.count ?? 0;
   const normalizedSearch = predictionSearch.trim().toLowerCase();
@@ -2006,6 +2290,8 @@ export default function MlbPage() {
                     <p className="text-secondary mb-0">
                       {mainTab === "predictions"
                         ? MARKET_CONFIG[market].label
+                        : mainTab === "best_bets"
+                          ? "Best Bets"
                         : mainTab === "home_run_ev"
                           ? "Home Run Value"
                           : "Pitch Simulation"}
@@ -2035,6 +2321,17 @@ export default function MlbPage() {
                       >
                         <i className="material-symbols-rounded me-2">paid</i>
                         Home Run Value
+                      </a>
+                    </li>
+                    <li className="nav-item">
+                      <a
+                        className={`nav-link mb-0 px-0 py-1 ${mainTab === "best_bets" ? "active" : ""}`}
+                        onClick={() => setMainTab("best_bets")}
+                        role="tab"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <i className="material-symbols-rounded me-2">workspace_premium</i>
+                        Best Bets
                       </a>
                     </li>
                     <li className="nav-item">
@@ -2164,6 +2461,207 @@ export default function MlbPage() {
                       <MlbPredictionsGrid rows={filteredPredictionRows} market={market} userRegion={userRegion} />
                     )}
                   </>
+                )}
+
+                {mainTab === "best_bets" && (
+                  <div className="best-bets-panel mt-4">
+                    <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
+                      <div>
+                        <h4 className="mb-1">Best Bet Builder</h4>
+                        <p className="text-sm text-secondary mb-0">
+                          MLB singles and parlays from stored predictions plus The Odds API prices.
+                        </p>
+                      </div>
+                      <div className="best-bets-controls">
+                        <div className="control-group">
+                          <label className="form-label mb-1" htmlFor="mlb-best-day">
+                            Day
+                          </label>
+                          <select
+                            id="mlb-best-day"
+                            className="form-select form-select-sm"
+                            value={predictionDay}
+                            onChange={(event) => handleDayChange(event.target.value as MlbDay)}
+                          >
+                            {DAY_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label} ({dayLabelSuffix})
+                              </option>
+                            ))}
+                          </select>
+                          <span className="text-xs text-secondary">Games on {formatMlbDateValue(resolvedMlbDate, userRegion)}</span>
+                        </div>
+                        <div className="control-group">
+                          <label className="form-label mb-1" htmlFor="mlb-best-bookie">
+                            Book
+                          </label>
+                          <select
+                            id="mlb-best-bookie"
+                            className="form-select form-select-sm"
+                            value={bookmaker}
+                            onChange={(event) => {
+                              setBookmaker(event.target.value);
+                              setEvState(initialEvState);
+                              setBestBetsState(initialBestBetsState);
+                              setEvRequestKey(null);
+                            }}
+                          >
+                            <option value="fanduel">FanDuel</option>
+                            <option value="draftkings">DraftKings</option>
+                            <option value="betmgm">BetMGM</option>
+                          </select>
+                        </div>
+                        <div className="control-group">
+                          <label className="form-label mb-1" htmlFor="mlb-best-view">
+                            View
+                          </label>
+                          <select
+                            id="mlb-best-view"
+                            className="form-select form-select-sm"
+                            value={bestBetsView}
+                            onChange={(event) => setBestBetsView(event.target.value as "singles" | "parlays")}
+                          >
+                            <option value="singles">Singles</option>
+                            <option value="parlays">Parlays</option>
+                          </select>
+                        </div>
+                        <div className="control-group">
+                          <label className="form-label mb-1" htmlFor="mlb-best-target">
+                            Target payout (x)
+                          </label>
+                          <input
+                            id="mlb-best-target"
+                            className="form-control form-control-sm"
+                            type="number"
+                            min={1.1}
+                            max={20}
+                            step={0.1}
+                            value={bestBetsTargetInput}
+                            onChange={(event) => {
+                              setBestBetsTargetInput(event.target.value);
+                              setBestBetsState(initialBestBetsState);
+                            }}
+                          />
+                        </div>
+                        <div className="control-group">
+                          <label className="form-label mb-1" htmlFor="mlb-best-legs">
+                            Legs
+                          </label>
+                          <select
+                            id="mlb-best-legs"
+                            className="form-select form-select-sm"
+                            value={bestBetsLegCount}
+                            onChange={(event) => {
+                              setBestBetsLegCount(Number(event.target.value));
+                              setBestBetsState(initialBestBetsState);
+                            }}
+                          >
+                            <option value={1}>1</option>
+                            <option value={2}>2</option>
+                            <option value={3}>3</option>
+                            <option value={4}>4</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="d-flex flex-wrap gap-2 mb-3">
+                      <button
+                        className="btn btn-sm bg-gradient-primary mb-0"
+                        type="button"
+                        onClick={() => void loadBestBets({ refreshOdds: true, fetchIfMissing: true })}
+                        disabled={bestBetsState.loading}
+                      >
+                        {bestBetsState.loading ? "Building bets..." : "Build Bets"}
+                      </button>
+                      <button
+                        className="btn btn-sm btn-outline-dark mb-0"
+                        type="button"
+                        onClick={() => void loadBestBets({ refreshOdds: false, fetchIfMissing: false })}
+                        disabled={bestBetsState.loading}
+                      >
+                        Recompute from Stored Odds
+                      </button>
+                    </div>
+                    <p className="text-sm text-secondary mb-3">
+                      Games on {formatMlbDateValue(resolvedMlbDate, userRegion)} / {bookmaker} / Over and Under markets
+                      {` | Credits left: ${oddsCreditsRemaining !== null ? oddsCreditsRemaining : "unknown"}`}
+                      {` | Last call: ${oddsRequestsLast !== null ? oddsRequestsLast : "none yet"}`}
+                    </p>
+                    {oddsUsageState.error && (
+                      <p className="text-sm text-secondary mb-3">Could not load current credits snapshot.</p>
+                    )}
+                    {bestBetsState.error && <div className="alert alert-danger text-sm mt-3">{bestBetsState.error}</div>}
+                    {bestBetsState.loading && !bestBetsState.data && (
+                      <div className="best-bets-loading">
+                        <div className="best-bets-loading-head">
+                          <div>
+                            <h6 className="mb-1">Building MLB best bets</h6>
+                            <p className="text-sm text-secondary mb-0">Fetching odds and scoring candidate legs.</p>
+                          </div>
+                          <span className="best-bets-loading-time">MLB</span>
+                        </div>
+                        <div className="best-bets-loading-bar" aria-hidden="true">
+                          <div className="best-bets-loading-fill"></div>
+                        </div>
+                        <p className="text-xs text-secondary mb-0">
+                          Uses stored MLB predictions; run precompute first if the slate is empty.
+                        </p>
+                      </div>
+                    )}
+                    {!bestBetsState.loading && bestBetsState.data?.message && (
+                      <div className="alert alert-warning text-dark mb-3" role="alert">
+                        {bestBetsState.data.message}
+                      </div>
+                    )}
+                    {!bestBetsState.loading && !bestBetsState.data && !bestBetsState.error && (
+                      <div className="best-bets-loading">
+                        <div className="best-bets-loading-head">
+                          <div>
+                            <h6 className="mb-1">Ready to build</h6>
+                            <p className="text-sm text-secondary mb-0">
+                              Click Build Bets when you want to spend odds API credits.
+                            </p>
+                          </div>
+                          <span className="best-bets-loading-time">
+                            {oddsCreditsRemaining !== null ? `${oddsCreditsRemaining} left` : "Manual"}
+                          </span>
+                        </div>
+                        <p className="text-xs text-secondary mb-0">
+                          Recompute from Stored Odds uses cached/stored odds when available and avoids a fresh odds pull.
+                        </p>
+                      </div>
+                    )}
+                    {bestBetsState.data && (
+                      <div className="best-bets-results">
+                        <div className="d-flex flex-wrap gap-3 mb-3">
+                          <span className="badge badge-sm bg-gradient-info">
+                            Pool: {bestBetsState.data.pool_size ?? 0}
+                          </span>
+                          <span className="badge badge-sm bg-gradient-secondary">
+                            Props: {bestBetsState.data.props_count ?? 0}
+                          </span>
+                          <span className="badge badge-sm bg-gradient-secondary">
+                            Target: {bestBetsState.data.target_multiplier?.toFixed(2)}x
+                          </span>
+                          <span className="badge badge-sm bg-gradient-secondary">
+                            Legs: {bestBetsState.data.leg_count}
+                          </span>
+                        </div>
+                        {bestBetsView === "parlays" && (
+                          <>
+                            <BestBetParlays parlays={bestBetParlays} userRegion={userRegion} />
+                            {!bestBetParlays.length && (
+                              <p className="text-sm text-secondary mb-4">
+                                No parlay hit the target. Try fewer legs or lower target.
+                              </p>
+                            )}
+                          </>
+                        )}
+                        <h6 className="mb-2">Top Single Legs</h6>
+                        <BestBetLegTable rows={bestBetRows.slice(0, 50)} userRegion={userRegion} />
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {mainTab === "home_run_ev" && (
@@ -2399,8 +2897,8 @@ export default function MlbPage() {
                   </div>
                   <div className="col-6">
                     <div className="mlb-stat-tile">
-                      <span>Best Value</span>
-                      <strong>{evState.data?.positive_ev.length ?? 0}</strong>
+                      <span>{mainTab === "best_bets" ? "Best Bets" : "Best Value"}</span>
+                      <strong>{mainTab === "best_bets" ? bestBetRows.length : evState.data?.positive_ev.length ?? 0}</strong>
                     </div>
                   </div>
                 </div>
@@ -2413,11 +2911,15 @@ export default function MlbPage() {
                 </div>
                 <div className="border-top pt-3 mt-3">
                   <p className="text-xs text-secondary fw-bold text-uppercase mb-2">Best Value</p>
-                  <h5 className="mb-1">{bestEv?.player_name ?? "-"}</h5>
+                  <h5 className="mb-1">{mainTab === "best_bets" ? bestMlbBet?.player_name ?? "-" : bestEv?.player_name ?? "-"}</h5>
                   <p className="text-sm text-secondary mb-0">
-                    {bestEv
+                    {mainTab === "best_bets" && bestMlbBet
+                      ? `${bestMlbBet.betting_grade ?? "-"} grade | ${bestMlbBet.market_label ?? bestMlbBet.market} | ${formatMoney(bestMlbBet.ev_per_dollar)} per $1`
+                      : bestEv
                       ? `${bestEv.betting_grade ?? "-"} grade | ${formatAmerican(bestEv.american_odds)} | ${formatMoney(bestEv.ev_per_dollar)} per $1`
-                      : "Open Home Run Value"}
+                      : mainTab === "best_bets"
+                        ? "Open Best Bets"
+                        : "Open Home Run Value"}
                   </p>
                 </div>
                 <div className="border-top pt-3 mt-3">

@@ -46,6 +46,12 @@ from ml.mlb.training import train_market  # noqa: E402
 router = APIRouter()
 
 PLANNED_MARKETS = market_names()
+PRECOMPUTE_MARKETS = (
+    "pitcher_strikeouts",
+    "batter_home_runs",
+    "batter_hits",
+    "batter_total_bases",
+)
 prediction_precompute_jobs: dict[str, dict] = {}
 training_jobs: dict[str, dict] = {}
 
@@ -827,17 +833,18 @@ async def _run_mlb_prediction_precompute_job(
     job = prediction_precompute_jobs[job_id]
     job["status"] = "running"
     job["started_at"] = datetime.utcnow().isoformat()
-    job["steps_total"] = len(day_values)
+    job["steps_total"] = len(day_values) * len(PRECOMPUTE_MARKETS)
     _persist_precompute_job(job)
     results: dict[str, dict] = {}
+    completed_steps = 0
 
     try:
-        for step, day in enumerate(day_values, start=1):
+        for day in day_values:
             target_date = resolve_prediction_date(day=day)
             job["current_day"] = day
             job["current_date"] = target_date.isoformat()
-            job["current_market"] = "scoring_markets"
-            job["steps_done"] = step - 1
+            job["current_market"] = None
+            job["steps_done"] = completed_steps
             _persist_precompute_job(job)
 
             ensure_result = {"changed": False}
@@ -848,22 +855,34 @@ async def _run_mlb_prediction_precompute_job(
                 )
 
             cache_bust = datetime.utcnow().isoformat() if refresh or ensure_result.get("changed") else None
-            payload = await run_in_threadpool(
-                _build_mlb_prediction_slate_payload,
-                database_url=to_sync_db_url(settings.ML_DATABASE_URL),
-                day=day,
-                target_date=target_date.isoformat(),
-                limit_per_market=limit_per_market,
-                cache_bust=cache_bust,
-                compute_if_missing=True,
-            )
+            market_counts: dict[str, int] = {}
+            for market in PRECOMPUTE_MARKETS:
+                job["current_market"] = market
+                job["steps_done"] = completed_steps
+                _persist_precompute_job(job)
+
+                market_payload = await run_in_threadpool(
+                    _build_mlb_market_prediction_payload,
+                    market=market,
+                    database_url=to_sync_db_url(settings.ML_DATABASE_URL),
+                    day=day,
+                    target_date=target_date.isoformat(),
+                    limit=limit_per_market,
+                    cache_bust=cache_bust,
+                    compute_if_missing=True,
+                )
+                market_counts[market] = int(market_payload.get("count") or 0)
+                completed_steps += 1
+                job["steps_done"] = completed_steps
+                _persist_precompute_job(job)
+                gc.collect()
+
             results[day] = {
-                "date": payload.get("date"),
-                "source": payload.get("source"),
-                "market_counts": _slate_market_counts(payload),
+                "date": target_date.isoformat(),
+                "source": "computed",
+                "market_counts": market_counts,
                 "data_load": ensure_result,
             }
-            job["steps_done"] = step
             job["current_market"] = None
             _persist_precompute_job(job)
 
@@ -896,7 +915,7 @@ def _create_mlb_prediction_precompute_job(
         "refresh": refresh,
         "ensure_data": ensure_data,
         "steps_done": 0,
-        "steps_total": len(day_values),
+        "steps_total": len(day_values) * len(PRECOMPUTE_MARKETS),
         "current_day": None,
         "current_date": None,
         "current_market": None,

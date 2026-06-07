@@ -9,14 +9,15 @@ logger = logging.getLogger(__name__)
 
 
 class TheOddsClient:
+    _global_latest_usage: dict[str, int | None] = {
+        "requests_last": None,
+        "requests_remaining": None,
+        "requests_used": None,
+    }
+
     def __init__(self):
         self.base_url = settings.THEODDS_BASE_URL
         self.api_key = settings.THEODDS_API_KEY
-        self._latest_usage: dict[str, int | None] = {
-            "requests_last": None,
-            "requests_remaining": None,
-            "requests_used": None,
-        }
 
     @staticmethod
     def _to_int(value: str | None) -> int | None:
@@ -33,11 +34,11 @@ class TheOddsClient:
             "requests_remaining": self._to_int(res.headers.get("x-requests-remaining")),
             "requests_used": self._to_int(res.headers.get("x-requests-used")),
         }
-        self._latest_usage = usage
+        type(self)._global_latest_usage = usage
         return usage
 
     def _enforce_budget(self, estimated_cost: int, min_remaining_after_call: int = 3):
-        remaining = self._latest_usage.get("requests_remaining")
+        remaining = type(self)._global_latest_usage.get("requests_remaining")
         if remaining is None:
             return
         if remaining - estimated_cost < min_remaining_after_call:
@@ -67,7 +68,7 @@ class TheOddsClient:
         return market_count * selection_count
 
     def latest_usage(self) -> dict[str, int | None]:
-        return dict(self._latest_usage)
+        return dict(type(self)._global_latest_usage)
 
     @cached(ttl_seconds=60 * 60)  # 1 hour
     async def get_sports(self):

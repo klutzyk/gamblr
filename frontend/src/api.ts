@@ -239,6 +239,66 @@ export type MlbHrEvBoardResponse = {
   missing_model_features_sample?: string[];
 };
 
+export type MlbBestBetLeg = {
+  event_id?: string | null;
+  commence_time?: string | null;
+  home_team?: string | null;
+  away_team?: string | null;
+  matchup?: string | null;
+  bookmaker: string;
+  market: string;
+  market_label?: string;
+  side?: string;
+  line?: number | null;
+  player_id?: number | null;
+  player_name: string;
+  team_abbreviation?: string | null;
+  opponent_team_abbreviation?: string | null;
+  prediction?: number | null;
+  probability?: number | null;
+  model_probability: number;
+  implied_probability: number;
+  edge: number;
+  ev_per_dollar: number;
+  american_odds: number;
+  decimal_odds: number;
+  betting_grade?: string | null;
+  betting_score?: number | null;
+  bet_recommendation?: string | null;
+  kelly_fraction?: number | null;
+  probability_method?: string | null;
+};
+
+export type MlbBestBetParlay = {
+  legs: MlbBestBetLeg[];
+  leg_count: number;
+  combined_odds: number;
+  combined_probability: number;
+  expected_value_per_unit: number;
+  meets_target: boolean;
+};
+
+export type MlbBestBetsResponse = {
+  sport: "mlb" | string;
+  status: string;
+  message?: string | null;
+  provider: string;
+  bookmaker: string;
+  day: string;
+  date: string;
+  markets?: string[];
+  target_multiplier?: number;
+  leg_count?: number;
+  filters?: Record<string, unknown>;
+  prediction_market_counts?: Record<string, number>;
+  odds_cache?: Record<string, unknown>;
+  props_count?: number;
+  pool_size?: number;
+  top_single_legs?: MlbBestBetLeg[];
+  recommended_parlays?: MlbBestBetParlay[];
+  debug?: Record<string, unknown>;
+};
+
 export type MlbMarketName =
   | "batter_home_runs"
   | "batter_hits"
@@ -1002,6 +1062,45 @@ export function getMlbHrEvBoard(
       max_age_minutes: 30,
       prediction_limit: 300,
       limit: 50,
+      ...params,
+    },
+    2 * 60 * 1000
+  );
+}
+
+export function getMlbBestBets(
+  params: {
+    day?: PredictionDayParam;
+    date?: string;
+    bookmaker?: string;
+    markets?: string;
+    max_events?: number;
+    max_age_minutes?: number;
+    refresh?: boolean;
+    fetch_if_missing?: boolean;
+    refresh_key?: number;
+    prediction_limit?: number;
+    limit?: number;
+    min_edge?: number;
+    min_prob?: number;
+    target_multiplier?: number;
+    leg_count?: number;
+  } = {}
+): Promise<MlbBestBetsResponse> {
+  return fetchWithCache<MlbBestBetsResponse>(
+    "/mlb/odds/best-bets",
+    {
+      day: "today",
+      bookmaker: "fanduel",
+      max_events: 30,
+      max_age_minutes: 30,
+      fetch_if_missing: true,
+      prediction_limit: 600,
+      limit: 60,
+      min_edge: 0.02,
+      min_prob: 0.35,
+      target_multiplier: 2,
+      leg_count: 2,
       ...params,
     },
     2 * 60 * 1000

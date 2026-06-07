@@ -701,6 +701,11 @@
   border: 1px solid rgba(15, 23, 42, 0.08);
 }
 
+.section-card > .best-bets-panel {
+  border-radius: 0.9rem;
+  padding: 1rem;
+}
+
 .best-bets-controls {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

@@ -296,6 +296,18 @@ def _minimal_player_row(player_id: int | None, full_name: str | None) -> dict[st
     }
 
 
+def _extract_probable_pitchers(
+    payload: dict[str, Any],
+    *,
+    home_team: dict[str, Any] | None = None,
+    away_team: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    probable_pitchers = payload.get("probablePitchers") or {}
+    probable_home = (home_team or {}).get("probablePitcher") or probable_pitchers.get("home") or {}
+    probable_away = (away_team or {}).get("probablePitcher") or probable_pitchers.get("away") or {}
+    return probable_home, probable_away
+
+
 def _build_umpire_row(umpire_payload: dict[str, Any], *, active: bool = True) -> dict[str, Any] | None:
     person = umpire_payload.get("person") or umpire_payload.get("official") or umpire_payload
     umpire_id = _safe_int(person.get("id"))
@@ -511,8 +523,11 @@ def _extract_schedule_game_rows(
             if home_team_id is None or away_team_id is None:
                 continue
 
-            probable_home = home.get("probablePitcher") or {}
-            probable_away = away.get("probablePitcher") or {}
+            probable_home, probable_away = _extract_probable_pitchers(
+                game,
+                home_team=home,
+                away_team=away,
+            )
             home_pitcher_row = _minimal_player_row(
                 _safe_int(probable_home.get("id")),
                 _safe_text(_candidate(probable_home, "fullName", "full_name", "name")),
@@ -1340,8 +1355,11 @@ async def ingest_game_feed(
     if home_team_id is None or away_team_id is None:
         raise ValueError(f"Game {game_pk} missing home/away team ids in feed payload.")
 
-    probable_home = home_team.get("probablePitcher") or {}
-    probable_away = away_team.get("probablePitcher") or {}
+    probable_home, probable_away = _extract_probable_pitchers(
+        game_data,
+        home_team=home_team,
+        away_team=away_team,
+    )
     weather = game_data.get("weather") or {}
     game_row = {
         "game_pk": game_pk,

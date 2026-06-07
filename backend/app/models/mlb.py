@@ -666,6 +666,7 @@ class MlbPropOddsSnapshot(Base):
     away_team = Column(Text, nullable=True)
     player_name = Column(Text, nullable=False)
     normalized_player_name = Column(Text, nullable=False)
+    side = Column(Text, nullable=False, default="Over")
     line = Column(Float, nullable=True)
     american_odds = Column(Integer, nullable=False)
     decimal_odds = Column(Float, nullable=False)
@@ -681,6 +682,7 @@ class MlbPropOddsSnapshot(Base):
             "market",
             "event_id",
             "normalized_player_name",
+            "side",
             "line",
             name="uq_mlb_prop_odds_snapshot_lookup",
         ),
