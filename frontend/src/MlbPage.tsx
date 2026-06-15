@@ -163,6 +163,8 @@ const initialSimulationRunState: ApiState<MlbSimulationRunResponse> = {
   error: null,
 };
 
+const mlbPredictionSlateCache = new Map<string, MlbPredictionSlateResponse>();
+
 function getDatePartsInTimeZone(date: Date, timeZone: string) {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -1914,8 +1916,16 @@ export default function MlbPage() {
   const [simulationPlaybackSpeed, setSimulationPlaybackSpeed] = useState<SimulationPlaybackSpeed>(1);
   const simulationResultsRef = useRef<HTMLDivElement | null>(null);
   const resolvedMlbDate = resolveMlbSlateDate(predictionDay, userRegion);
+  const predictionCacheKey = `${userRegion}:${predictionDay}:${resolvedMlbDate}:200`;
 
   const loadPredictions = async (force = false) => {
+    if (!force) {
+      const cached = mlbPredictionSlateCache.get(predictionCacheKey);
+      if (cached) {
+        setPredictionsState({ data: cached, loading: false, error: null });
+        return;
+      }
+    }
     setPredictionsState((current) => ({ ...current, loading: true, error: null }));
     try {
       const officialDateCandidates = mlbOfficialDateCandidatesForLocalDate(resolvedMlbDate);
@@ -1940,11 +1950,13 @@ export default function MlbPage() {
       if (payloads.length === 0) {
         throw new Error(failures.join("; ") || "Failed to load MLB predictions.");
       }
+      const data = filterSlateToLocalDate(payloads, {
+        localDate: resolvedMlbDate,
+        region: userRegion,
+      });
+      mlbPredictionSlateCache.set(predictionCacheKey, data);
       setPredictionsState({
-        data: filterSlateToLocalDate(payloads, {
-          localDate: resolvedMlbDate,
-          region: userRegion,
-        }),
+        data,
         loading: false,
         error: null,
       });
@@ -2130,7 +2142,7 @@ export default function MlbPage() {
 
   useEffect(() => {
     void loadPredictions();
-  }, [resolvedMlbDate]);
+  }, [predictionDay, resolvedMlbDate, userRegion]);
 
   useEffect(() => {
     if (mainTab === "home_run_ev") {
