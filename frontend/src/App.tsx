@@ -2179,9 +2179,9 @@ function App() {
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
               <div>
                 <h4 className="mb-1">Predictions</h4>
-                {/* <p className="text-xs text-secondary mb-0">
-                  Day filter follows NBA slate timing (ET). Displayed dates/times follow your selected region.
-                </p> */}
+                <p className="text-xs text-secondary mb-0">
+                  NBA is in the off-season. The 2026-27 regular season is expected to begin in October 2026.
+                </p>
               </div>
               <div className="d-flex flex-wrap gap-2 align-items-center">
                 <div className="stat-toggle">
