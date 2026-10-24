@@ -12,8 +12,11 @@ __pycache__/
 # Virtual Environments
 # =========================
 venv/
+.venv/
+.tools/
 .env
 .env.*
+!.env.example
 *.env
 
 # =========================
@@ -63,7 +66,9 @@ uvicorn.log
 *.swp
 *.tmp
 ml/models/
-docs
+docs/*
+!docs/screenshots/
+!docs/screenshots/**
 
 # =========================
 # Local Data / ML Artifacts

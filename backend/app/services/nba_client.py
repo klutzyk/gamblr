@@ -2,37 +2,78 @@ from nba_api.stats.endpoints import (
     leaguedashplayerstats,
     commonplayerinfo,
     playergamelog,
-    teamgamelog,
+    leaguegamelog,
     leaguedashlineups,
-    boxscoretraditionalv2,
 )
 try:
     from nba_api.stats.endpoints import boxscoretraditionalv3
 except ImportError:  # pragma: no cover
     boxscoretraditionalv3 = None
 from app.services.cache import cached
+from app.core.nba_season import resolve_nba_season
 import pandas as pd
+import logging
+import random
+import time
+
+
+logger = logging.getLogger(__name__)
 
 
 class NBAClient:
-    def __init__(self, timeout=30):
+    def __init__(self, timeout=30, max_attempts=3, backoff_base_seconds=0.75):
         self.timeout = timeout
+        self.max_attempts = max(1, int(max_attempts))
+        self.backoff_base_seconds = max(0.0, float(backoff_base_seconds))
+
+    def _request(self, operation: str, factory):
+        """Run an nba_api call with bounded exponential backoff and context."""
+        last_error = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                return factory()
+            except Exception as exc:
+                last_error = exc
+                if attempt >= self.max_attempts:
+                    break
+                delay = self.backoff_base_seconds * (2 ** (attempt - 1))
+                delay += random.uniform(0.0, 0.25)
+                logger.warning(
+                    "NBA provider call %s failed (%s/%s): %s; retrying in %.2fs",
+                    operation,
+                    attempt,
+                    self.max_attempts,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+        raise RuntimeError(
+            f"NBA provider call {operation} failed after {self.max_attempts} attempts: "
+            f"{type(last_error).__name__}: {last_error}"
+        ) from last_error
 
     # cache for 30 mins
     @cached(ttl_seconds=60 * 30)
     def fetch_top_players(self, top_n=30, per_mode="PerGame"):
-        stats = leaguedashplayerstats.LeagueDashPlayerStats(
-            per_mode_detailed=per_mode,
-            timeout=self.timeout,
+        stats = self._request(
+            "league player leaders",
+            lambda: leaguedashplayerstats.LeagueDashPlayerStats(
+                season=resolve_nba_season(),
+                per_mode_detailed=per_mode,
+                timeout=self.timeout,
+            ),
         )
         return stats.get_data_frames()[0].head(top_n)
 
     # cache for 1 hr
     @cached(ttl_seconds=60 * 60)
     def fetch_player_info(self, player_id: int):
-        player_info = commonplayerinfo.CommonPlayerInfo(
-            player_id=player_id,
-            timeout=self.timeout,
+        player_info = self._request(
+            f"player info {player_id}",
+            lambda: commonplayerinfo.CommonPlayerInfo(
+                player_id=player_id,
+                timeout=self.timeout,
+            ),
         )
         return (
             player_info.common_player_info.get_data_frame(),
@@ -41,55 +82,95 @@ class NBAClient:
 
     @cached(ttl_seconds=60 * 15)
     def fetch_player_stats(self, **kwargs):
-        stats = leaguedashplayerstats.LeagueDashPlayerStats(
-            timeout=self.timeout,
-            **kwargs,
+        kwargs["season"] = resolve_nba_season(kwargs.get("season"))
+        stats = self._request(
+            "league player stats",
+            lambda: leaguedashplayerstats.LeagueDashPlayerStats(
+                timeout=self.timeout,
+                **kwargs,
+            ),
         )
         return stats.get_data_frames()[0]
 
     @cached(ttl_seconds=60 * 15)
-    def fetch_player_game_log(self, player_id: int, season: str = "2025-26"):
-        gamelog = playergamelog.PlayerGameLog(
-            player_id=player_id,
-            season=season,
-            timeout=self.timeout,
+    def fetch_player_game_log(
+        self,
+        player_id: int,
+        season: str | None = None,
+        season_type: str = "Regular Season",
+    ):
+        season = resolve_nba_season(season)
+        gamelog = self._request(
+            f"player game log {player_id} {season}",
+            lambda: playergamelog.PlayerGameLog(
+                player_id=player_id,
+                season=season,
+                season_type_all_star=season_type,
+                timeout=self.timeout,
+            ),
         )
         return gamelog.get_data_frames()[0]
 
     @cached(ttl_seconds=60 * 15)
-    def fetch_team_game_log(self, team_id: int, season: str = "2025-26"):
-        gamelog = teamgamelog.TeamGameLog(
-            team_id=team_id,
-            season=season,
-            timeout=self.timeout,
+    def fetch_team_game_logs(
+        self,
+        season: str | None = None,
+        season_type: str = "Regular Season",
+    ):
+        """Fetch every team's log in one request.
+
+        TeamGameLog was removed/deprecated in recent nba_api releases.  The
+        league log is the maintained equivalent and is much gentler on the
+        upstream service than issuing one request per team.
+        """
+        season = resolve_nba_season(season)
+        gamelog = self._request(
+            f"league team game logs {season}",
+            lambda: leaguegamelog.LeagueGameLog(
+                player_or_team_abbreviation="T",
+                season=season,
+                season_type_all_star=season_type,
+                timeout=self.timeout,
+            ),
         )
         return gamelog.get_data_frames()[0]
+
+    @cached(ttl_seconds=60 * 15)
+    def fetch_team_game_log(
+        self,
+        team_id: int,
+        season: str | None = None,
+        season_type: str = "Regular Season",
+    ):
+        df = self.fetch_team_game_logs(season=season, season_type=season_type)
+        if df.empty or "TEAM_ID" not in df.columns:
+            return pd.DataFrame(columns=df.columns)
+        return df[pd.to_numeric(df["TEAM_ID"], errors="coerce") == int(team_id)].copy()
 
     @cached(ttl_seconds=60 * 60)
     def fetch_team_lineups(
         self,
         team_id: int,
-        season: str = "2025-26",
+        season: str | None = None,
         group_quantity: int = 5,
     ):
-        lineups = leaguedashlineups.LeagueDashLineups(
-            team_id_nullable=team_id,
-            season=season,
-            group_quantity=group_quantity,
-            measure_type_detailed_defense="Advanced",
-            per_mode_detailed="PerGame",
-            timeout=self.timeout,
+        season = resolve_nba_season(season)
+        lineups = self._request(
+            f"team lineups {team_id} {season}",
+            lambda: leaguedashlineups.LeagueDashLineups(
+                team_id_nullable=team_id,
+                season=season,
+                group_quantity=group_quantity,
+                measure_type_detailed_defense="Advanced",
+                per_mode_detailed="PerGame",
+                timeout=self.timeout,
+            ),
         )
         return lineups.get_data_frames()[0]
 
     @cached(ttl_seconds=60 * 15)
     def fetch_game_players(self, game_id: str):
-        safe_id = str(game_id).zfill(10)
-        box = boxscoretraditionalv2.BoxScoreTraditionalV2(
-            game_id=safe_id,
-            timeout=self.timeout,
-        )
-        df = box.get_data_frames()[0]
+        df, _ = self.fetch_game_boxscore(game_id)
         if df.empty:
             return []
         cols = [c for c in ["PLAYER_ID", "PLAYER_NAME"] if c in df.columns]
@@ -119,33 +200,40 @@ class NBAClient:
                 if has_player_cols:
                     if players.empty:
                         players = frame
-                # Prefer dedicated team summary frames, not player rows that also include teamId.
-                if has_team_cols and not has_player_cols:
-                    if teams.empty:
-                        teams = frame
             if players.empty:
                 for frame in frames:
                     if frame is not None and not frame.empty:
                         players = frame
                         break
-            if teams.empty and len(frames) > 1:
-                for frame in frames:
-                    if frame is not None and not frame.empty and frame is not players:
-                        teams = frame
-                        break
+            team_candidates = []
+            for frame in frames:
+                if frame is None or frame.empty:
+                    continue
+                cols = set(frame.columns)
+                if ("teamId" in cols or "TEAM_ID" in cols) and not (
+                    "personId" in cols or "playerId" in cols or "PLAYER_ID" in cols
+                ):
+                    team_candidates.append(frame)
+            if team_candidates:
+                # V3 currently returns a four-row starter/bench split before
+                # the two-row team totals. Prefer exactly one row per team.
+                teams = min(team_candidates, key=lambda frame: len(frame))
             return players, teams
 
         if boxscoretraditionalv3 is None:
             raise RuntimeError("BoxScoreTraditionalV3 is not available in installed nba_api")
 
-        box = boxscoretraditionalv3.BoxScoreTraditionalV3(
-            game_id=safe_id,
-            start_period=1,
-            end_period=10,
-            start_range=0,
-            end_range=0,
-            range_type=0,
-            timeout=self.timeout,
+        box = self._request(
+            f"box score {safe_id}",
+            lambda: boxscoretraditionalv3.BoxScoreTraditionalV3(
+                game_id=safe_id,
+                start_period=1,
+                end_period=10,
+                start_range=0,
+                end_range=0,
+                range_type=0,
+                timeout=self.timeout,
+            ),
         )
         frames = box.get_data_frames()
         players_df, teams_df = _select_frames(frames)

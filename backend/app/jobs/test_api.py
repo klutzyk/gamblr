@@ -1,9 +1,12 @@
 from ..services.nba_client import NBAClient
-import requests
+from ..core.nba_season import current_nba_season
+
+SEASON = current_nba_season()
 
 
 def main():
-
+    api_tests()
+    direct_tests()
 
 def api_tests():
     client = NBAClient()
@@ -11,7 +14,7 @@ def api_tests():
     # Recent performers: last 5 games, top 10 by fantasy points
     print("Recent performers (last 5 games)")
     df_recent = client.fetch_player_stats(
-        season="2025-26",
+        season=SEASON,
         per_mode_detailed="PerGame",
         measure_type_detailed_defense="Base",
         season_type_all_star="Regular Season",
@@ -37,10 +40,9 @@ def direct_tests():
     print(df_info)
     print(df_seasons)
 
-    # First 30 guards in January of 2025-26 season, per game stats
-    print("First 30 guards in January of 2025-26 season, per game stats")
+    print(f"First 30 guards in January of {SEASON} season, per game stats")
     df = client.fetch_player_stats(
-        season="2025-26",
+        season=SEASON,
         per_mode_detailed="PerGame",
         measure_type_detailed_defense="Base",
         season_type_all_star="Regular Season",
@@ -53,7 +55,7 @@ def direct_tests():
     # Total stats for all players in February, Regular Season
     print("Total stats for all players in February, Regular Season")
     df2 = client.fetch_player_stats(
-        season="2025-26",
+        season=SEASON,
         per_mode_detailed="Totals",
         measure_type_detailed_defense="Base",
         season_type_all_star="Regular Season",

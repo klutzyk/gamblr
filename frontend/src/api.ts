@@ -11,6 +11,26 @@ export type PlayerRow = {
   [key: string]: unknown;
 };
 
+export function currentNbaSeason(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "numeric",
+  }).formatToParts(now);
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const startYear = month >= 7 ? year : year - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
+}
+
+export function recentNbaSeasons(count = 8): string[] {
+  const startYear = Number(currentNbaSeason().slice(0, 4));
+  return Array.from({ length: count }, (_, index) => {
+    const year = startYear - index;
+    return `${year}-${String((year + 1) % 100).padStart(2, "0")}`;
+  });
+}
+
 export type PlayerPropsResponse = {
   game_id: number;
   markets: unknown[];
@@ -86,6 +106,8 @@ export type PredictionRow = {
   pred_p50?: number;
   pred_p90?: number;
   confidence?: number;
+  sample_size?: number;
+  data_quality?: "very_limited" | "limited" | "developing" | "established";
   under_risk?: number | null;
   under_risk_n?: number | null;
   last_under_date?: string | null;
@@ -680,7 +702,7 @@ async function postJson<T>(
 const PLAYER_TTL = 10 * 60 * 1000;
 
 export function getTopScorers(
-  season = "2025-26",
+  season = currentNbaSeason(),
   top_n = 10
 ): Promise<PlayerRow[]> {
   return fetchWithCache<PlayerRow[]>(
@@ -691,7 +713,7 @@ export function getTopScorers(
 }
 
 export function getTopAssists(
-  season = "2025-26",
+  season = currentNbaSeason(),
   top_n = 10
 ): Promise<PlayerRow[]> {
   return fetchWithCache<PlayerRow[]>(
@@ -702,7 +724,7 @@ export function getTopAssists(
 }
 
 export function getTopRebounders(
-  season = "2025-26",
+  season = currentNbaSeason(),
   top_n = 10
 ): Promise<PlayerRow[]> {
   return fetchWithCache<PlayerRow[]>(
@@ -713,7 +735,7 @@ export function getTopRebounders(
 }
 
 export function getGuardStats(
-  season = "2025-26",
+  season = currentNbaSeason(),
   top_n = 10
 ): Promise<PlayerRow[]> {
   return fetchWithCache<PlayerRow[]>(
@@ -724,7 +746,7 @@ export function getGuardStats(
 }
 
 export function getRecentPerformers(
-  season = "2025-26",
+  season = currentNbaSeason(),
   last_n_games = 5,
   top_n = 10
 ): Promise<PlayerRow[]> {
@@ -1180,7 +1202,7 @@ export function getRecentPlayerGameDates(
   );
 }
 
-export function updateTeamGames(season = "2025-26"): Promise<Record<string, unknown>> {
+export function updateTeamGames(season = currentNbaSeason()): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>("/db/team-games/update", { season });
 }
 

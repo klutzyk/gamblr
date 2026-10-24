@@ -19,6 +19,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from app.core.config import settings  # noqa: E402
 from app.db.url_utils import to_sync_db_url  # noqa: E402
 from ml.nba.update_rolling import update_rolling_stats  # noqa: E402
+from app.core.nba_season import current_nba_season, validate_nba_season  # noqa: E402
 
 
 def prompt(text: str, default: str | None = None) -> str:
@@ -118,6 +119,11 @@ def parse_args():
         help="Skip /ml/train/all and reuse existing model files.",
     )
     parser.add_argument(
+        "--season",
+        default=current_nba_season(),
+        help="NBA season in YYYY-YY format (defaults to current US Eastern league year).",
+    )
+    parser.add_argument(
         "--timeout-seconds",
         type=float,
         default=0,
@@ -128,6 +134,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+    try:
+        season = validate_nba_season(args.season)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     request_timeout: Optional[float] = None if args.timeout_seconds <= 0 else args.timeout_seconds
     print("Gamblr pipeline runner")
     base_url = prompt("API base URL", "http://127.0.0.1:8000")
@@ -182,18 +192,18 @@ def main():
                     client,
                     "POST",
                     "/db/games/ingest",
-                    {"since": since_date},
+                    {"since": since_date, "season": season},
                 )
                 if update_team_games:
                     print("Ingesting team game logs since date...")
-                    call_api(client, "POST", "/db/team-games/update")
+                    call_api(client, "POST", "/db/team-games/update", {"season": season})
             else:
                 print("Ingesting player game logs since date...")
                 start = call_api(
                     client,
                     "POST",
                     "/db/last-n/update/start",
-                    {"since": since_date},
+                    {"since": since_date, "season": season},
                 )
                 job_id = start["job_id"]
                 print(f"Polling ingest job {job_id}...")
@@ -222,7 +232,7 @@ def main():
 
                     time.sleep(20)
                 print("Ingesting team game logs since date...")
-                call_api(client, "POST", "/db/team-games/update")
+                call_api(client, "POST", "/db/team-games/update", {"season": season})
         else:
             print("Skipping ingest step.")
 
@@ -232,7 +242,7 @@ def main():
                 client,
                 "POST",
                 "/db/players/refresh-team-abbr",
-                {"fallback": str(refresh_player_fallback).lower()},
+                {"fallback": str(refresh_player_fallback).lower(), "season": season},
                 timeout_seconds=request_timeout,
             )
 

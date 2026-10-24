@@ -449,7 +449,7 @@ def _join_predictions_to_props(scored, props: list[dict[str, Any]], *, limit: in
 
 @router.get("/propline/hr-ev-board")
 async def get_propline_hr_ev_board(
-    day: str = Query("tomorrow", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: str = Query("tomorrow", pattern="^(today|tomorrow|yesterday|auto)$"),
     date: str | None = Query(None, description="Optional YYYY-MM-DD override."),
     bookmaker: str = Query("fanduel"),
     max_events: int | None = Query(30, ge=1, le=30),

@@ -31,6 +31,8 @@ import {
   type BestBetsResponse,
   type BestBetsProgress,
   type PredictionDayParam,
+  currentNbaSeason,
+  recentNbaSeasons,
 } from "./api";
 
 type NormalizedPropRow = {
@@ -339,7 +341,8 @@ function PredictionsGrid({
     const resolvedTeamId =
       teamId ?? (teamAbbr ? TEAM_ID_BY_ABBR[teamAbbr] : undefined);
     if (!resolvedTeamId) return "";
-    return `https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/${resolvedTeamId}/2025/260x190/${playerId}.png`;
+    const seasonYear = currentNbaSeason().slice(0, 4);
+    return `https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/${resolvedTeamId}/${seasonYear}/260x190/${playerId}.png`;
   };
 
   return (
@@ -468,8 +471,17 @@ function PredictionsGrid({
                   </div>
                   {typeof pred.confidence === "number" && (
                     <div className="prediction-confidence">
-                      <span>Confidence</span>
+                      <span>Reliability</span>
                       <strong>{pred.confidence}%</strong>
+                    </div>
+                  )}
+                  {typeof pred.sample_size === "number" && (
+                    <div className="text-xs text-secondary mt-2">
+                      Current-season sample: {pred.sample_size} game
+                      {pred.sample_size === 1 ? "" : "s"}
+                      {pred.data_quality
+                        ? ` · ${pred.data_quality.replace("_", " ")}`
+                        : ""}
                     </div>
                   )}
                   <div className="prediction-range">
@@ -645,6 +657,7 @@ function DoubleTripleGrid({ rows }: { rows: DoubleTriplePredictionRow[] }) {
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("predictions");
   const [userRegion, setUserRegion] = useState<UserRegion>("au");
+  const [selectedSeason, setSelectedSeason] = useState(currentNbaSeason());
 
   const [topScorers, setTopScorers] =
     useState<ApiState<PlayerRow[]>>(initialState);
@@ -913,23 +926,23 @@ function App() {
   }
 
   const handleLoadTopScorers = () =>
-    safeLoad(topScorers, setTopScorers, () => getTopScorers(), 5 * 60 * 1000);
+    safeLoad(topScorers, setTopScorers, () => getTopScorers(selectedSeason), 5 * 60 * 1000);
   const handleLoadTopAssists = () =>
-    safeLoad(topAssists, setTopAssists, () => getTopAssists(), 5 * 60 * 1000);
+    safeLoad(topAssists, setTopAssists, () => getTopAssists(selectedSeason), 5 * 60 * 1000);
   const handleLoadTopRebounders = () =>
     safeLoad(
       topRebounders,
       setTopRebounders,
-      () => getTopRebounders(),
+      () => getTopRebounders(selectedSeason),
       5 * 60 * 1000
     );
   const handleLoadGuards = () =>
-    safeLoad(guards, setGuards, () => getGuardStats(), 5 * 60 * 1000);
+    safeLoad(guards, setGuards, () => getGuardStats(selectedSeason), 5 * 60 * 1000);
   const handleLoadRecent = () =>
     safeLoad(
       recent,
       setRecent,
-      () => getRecentPerformers(),
+      () => getRecentPerformers(selectedSeason),
       5 * 60 * 1000
     );
 
@@ -2834,6 +2847,19 @@ function App() {
                 </a>
               </div>
               <div className="d-flex align-items-center gap-2">
+                <label className="text-xs text-white opacity-8 mb-0" htmlFor="season-select">
+                  Season
+                </label>
+                <select
+                  id="season-select"
+                  className="form-select form-select-sm region-select"
+                  value={selectedSeason}
+                  onChange={(e) => setSelectedSeason(e.target.value)}
+                >
+                  {recentNbaSeasons(8).map((season) => (
+                    <option key={season} value={season}>{season}</option>
+                  ))}
+                </select>
                 <label className="text-xs text-white opacity-8 mb-0" htmlFor="region-select">
                   Region
                 </label>

@@ -10,6 +10,10 @@ class SportsDataClient:
 
     @cached(ttl_seconds=60 * 5)
     async def get_player_props_by_game(self, game_id: int):
+        if not self.api_key:
+            raise RuntimeError(
+                "SPORTSDATA_API_KEY is not configured; SportsData player props are optional"
+            )
         url = f"{self.base_url}/odds/json/BettingPlayerPropsByGameID/{game_id}"
         params = {"key": self.api_key}
 
