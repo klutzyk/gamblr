@@ -58,7 +58,8 @@ def walk_forward_backtest(
 
     df_raw = pd.read_sql(
         """
-        SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
+        SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup,
+               COALESCE(pg.team_abbreviation, p.team_abbreviation) AS team_abbreviation,
                pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
                pg.fgm, pg.fga, pg.fg3m, pg.fg3a
         FROM player_game_stats pg

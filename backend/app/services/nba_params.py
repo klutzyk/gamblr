@@ -1,6 +1,7 @@
-# Default NBA API parameters for traditional player stats
+# Default NBA API parameters for traditional player stats. Season is resolved
+# at request time by NBAClient so this module never goes stale at league-year
+# rollover.
 TRADITIONAL_PARAMS = {
-    "Season": "2025-26",
     "SeasonType": "Regular Season",
     "PerMode": "PerGame",
     "PlayerExperience": "",

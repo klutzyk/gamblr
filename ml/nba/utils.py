@@ -1,6 +1,14 @@
 from typing import Optional
 import pandas as pd
 
+
+def _nba_season_series(dates: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(dates, errors="coerce")
+    start_year = parsed.dt.year.where(parsed.dt.month >= 7, parsed.dt.year - 1)
+    return start_year.map(
+        lambda year: f"{int(year)}-{(int(year) + 1) % 100:02d}" if pd.notna(year) else None
+    )
+
 POINTS_FEATURES = [
     "avg_minutes_last5",
     "avg_minutes_last10",
@@ -466,6 +474,8 @@ def add_player_rolling_features(df_raw: pd.DataFrame) -> pd.DataFrame:
             df[col] = 0
     df = df.sort_values(["player_id", "game_date"])
 
+    df["season"] = df.get("season", _nba_season_series(df["game_date"]))
+    df["season"] = df["season"].fillna(_nba_season_series(df["game_date"]))
     grouped = df.groupby("player_id")
 
     df["avg_points_last5"] = grouped["points"].transform(
@@ -558,7 +568,7 @@ def add_player_rolling_features(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     df["days_since_last_game"] = grouped["game_date"].diff().dt.days
     df["is_back_to_back"] = (df["days_since_last_game"] <= 1).astype(int)
-    df["games_played_season"] = grouped.cumcount()
+    df["games_played_season"] = df.groupby(["player_id", "season"]).cumcount()
     df["is_home"] = df["matchup"].apply(lambda x: 1 if "@" not in x else 0)
     df["usage_proxy_last10"] = df["avg_fga_last10"] + df["avg_turnovers_last10"]
 
@@ -1005,7 +1015,17 @@ def compute_prediction_features(
         df_next["game_date"] - df_next["player_id"].map(last_game_dates)
     ).dt.days
     df_next["is_back_to_back"] = (df_next["days_since_last_game"] <= 1).astype(int)
-    df_next["games_played_season"] = df_next["player_id"].map(grouped.size())
+    history_seasons = _nba_season_series(df_history["game_date"])
+    target_seasons = _nba_season_series(df_next["game_date"])
+    season_counts = (
+        df_history.assign(_season=history_seasons)
+        .groupby(["player_id", "_season"])
+        .size()
+    )
+    df_next["games_played_season"] = [
+        int(season_counts.get((pid, season), 0))
+        for pid, season in zip(df_next["player_id"], target_seasons)
+    ]
     df_next["is_home"] = df_next["matchup"].apply(lambda x: 1 if "@" not in x else 0)
     df_next["usage_proxy_last10"] = df_next["avg_fga_last10"] + df_next["avg_turnovers_last10"]
 

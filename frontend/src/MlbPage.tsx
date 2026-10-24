@@ -568,6 +568,15 @@ function MlbPredictionsGrid({
   market: MlbMarketName;
   userRegion: UserRegion;
 }) {
+  if (!rows.length) {
+    return (
+      <p className="text-secondary mt-3 mb-0">
+        No MLB predictions are stored for this slate. Use Get Predictions to refresh source data
+        and compute the slate when the season is active.
+      </p>
+    );
+  }
+
   const config = MARKET_CONFIG[market];
   if (!rows.length) {
     return (
@@ -1938,8 +1947,9 @@ export default function MlbPage() {
             day: predictionDay,
             date,
             limit_per_market: 200,
-            ensure_data: true,
+            ensure_data: force,
             refresh: force,
+            compute_if_missing: force,
             refresh_key: force ? Date.now() : undefined,
           })
           );
@@ -2414,7 +2424,7 @@ export default function MlbPage() {
                         <button
                           className="btn btn-sm bg-gradient-primary mb-0"
                           type="button"
-                          onClick={() => void loadPredictions()}
+                          onClick={() => void loadPredictions(true)}
                           disabled={predictionsState.loading}
                         >
                           {predictionsState.loading ? (

@@ -14,6 +14,7 @@ from app.core.constants import (
     # CONFIDENCE_UNDER_PENALTY,
     CONFIDENCE_UNDER_BONUS,
 )
+from app.core.prediction_safety import confidence_cap_for_sample
 import joblib
 from pathlib import Path
 from .utils import (
@@ -192,7 +193,8 @@ def _predict_stat(
     df_history = pd.read_sql(
         text(
             f"""
-            SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
+            SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup,
+                   COALESCE(pg.team_abbreviation, p.team_abbreviation) AS team_abbreviation,
                    pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
                    pg.fgm, pg.fga, pg.fg3m, pg.fg3a
             FROM player_game_stats pg
@@ -349,6 +351,34 @@ def _predict_stat(
         df_next_features["team_abbreviation"].astype(str).str.upper().map(team_id_map)
     )
 
+    # Confidence is a reliability indicator, not a win probability.  Cap it
+    # aggressively while the current-season sample or new-team sample is thin.
+    season_games = pd.to_numeric(
+        df_next_features.get("games_played_season", 0), errors="coerce"
+    ).fillna(0)
+    if "confidence" not in df_next_features:
+        df_next_features["confidence"] = CONFIDENCE_DEFAULT
+    confidence = pd.to_numeric(df_next_features["confidence"], errors="coerce").fillna(
+        CONFIDENCE_DEFAULT
+    )
+    if "team_change_flag" in df_next_features:
+        changed = pd.to_numeric(df_next_features["team_change_flag"], errors="coerce").fillna(0) > 0
+    else:
+        changed = pd.Series(False, index=df_next_features.index)
+    sample_caps = np.array(
+        [
+            confidence_cap_for_sample(int(games), bool(team_changed))
+            for games, team_changed in zip(season_games, changed)
+        ]
+    )
+    df_next_features["confidence"] = np.minimum(confidence, sample_caps).astype(int)
+    df_next_features["sample_size"] = season_games.astype(int)
+    df_next_features["data_quality"] = np.select(
+        [season_games < 3, season_games < 8, season_games < 15],
+        ["very_limited", "limited", "developing"],
+        default="established",
+    )
+
     result = df_next_features[
         [
             "player_id",
@@ -363,6 +393,8 @@ def _predict_stat(
             "pred_p50",
             "pred_p90",
             "confidence",
+            "sample_size",
+            "data_quality",
             "model_version",
         ]
     ]

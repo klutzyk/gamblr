@@ -19,6 +19,7 @@ from app.models.bookmaker import Bookmaker
 from app.models.event import Event
 from app.models.market import Market
 from app.models.player_prop import PlayerProp
+from app.core.prediction_safety import betting_input_is_fresh
 from app.services.lineup_context import fetch_lineups_payload, build_expected_lineup_sets
 from ml.nba.predict import predict_assists, predict_points, predict_rebounds
 from ml.nba.under_side_model import load_latest_under_side_model, predict_under_probability
@@ -405,6 +406,7 @@ async def get_best_bets(
     min_confidence: int = 55,
     min_edge: float = 0.02,
     min_prob: float = 0.52,
+    max_odds_age_minutes: int = 30,
     use_under_model: bool = False,
     use_under_overlay: bool = True,
     max_candidates: int = 30,
@@ -461,7 +463,8 @@ async def get_best_bets(
             except FileNotFoundError:
                 under_side_model_payload = None
 
-        now_utc = datetime.now(ZoneInfo("UTC")) - timedelta(hours=2)
+        now_utc = datetime.now(ZoneInfo("UTC"))
+        odds_cutoff = now_utc - timedelta(minutes=max(1, min(max_odds_age_minutes, 360)))
         markets_to_use = [
             "player_points",
             "player_assists",
@@ -485,6 +488,7 @@ async def get_best_bets(
                 Event.away_team,
                 Bookmaker.key,
                 Market.key,
+                Market.last_update,
                 PlayerProp.player_name,
                 PlayerProp.side,
                 PlayerProp.line,
@@ -497,6 +501,7 @@ async def get_best_bets(
                 Bookmaker.key == bookmaker,
                 Market.key.in_(tuple(markets_to_use)),
                 Event.commence_time >= now_utc,
+                Market.last_update >= odds_cutoff,
             )
             .order_by(Event.commence_time.asc())
         )
@@ -545,11 +550,19 @@ async def get_best_bets(
                 away_team,
                 book_key,
                 market_key,
+                market_last_update,
                 player_name,
                 side,
                 line,
                 price,
             ) = row
+            if not betting_input_is_fresh(
+                commence_time,
+                market_last_update,
+                now_utc,
+                max_odds_age_minutes=max_odds_age_minutes,
+            ):
+                continue
             matchup = f"{away_team} @ {home_team}"
             if matchup != current_matchup or idx == 1 or idx % 50 == 0:
                 current_matchup = matchup
@@ -619,6 +632,7 @@ async def get_best_bets(
                     "matchup": matchup,
                     "bookmaker": book_key,
                     "market": market_key,
+                    "odds_last_update": market_last_update.isoformat(),
                     "stat_type": stat_type,
                     "player_name": player_name,
                     "side": side,

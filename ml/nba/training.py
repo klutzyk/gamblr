@@ -37,7 +37,8 @@ def _train_model(
     use_ensemble: bool = True,
 ) -> dict:
     query = """
-    SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
+    SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup,
+           COALESCE(pg.team_abbreviation, p.team_abbreviation) AS team_abbreviation,
            pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
            pg.fgm, pg.fga, pg.fg3m, pg.fg3a
     FROM player_game_stats pg

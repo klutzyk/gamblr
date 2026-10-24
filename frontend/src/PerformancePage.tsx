@@ -8,6 +8,7 @@ import {
   getReviewRecent,
   getReviewTrend,
   getReviewPlayerDetail,
+  currentNbaSeason,
   type ReviewOverview,
   type ReviewPlayersResponse,
   type ReviewRecentResponse,
@@ -116,7 +117,8 @@ function getInitials(name: string | null | undefined) {
 function getHeadshotUrl(playerId: number, teamAbbr?: string | null) {
   const teamId = teamAbbr ? TEAM_ID_BY_ABBR[teamAbbr] : undefined;
   if (!teamId) return "";
-  return `https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/${teamId}/2025/260x190/${playerId}.png`;
+  const seasonYear = currentNbaSeason().slice(0, 4);
+  return `https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/${teamId}/${seasonYear}/260x190/${playerId}.png`;
 }
 
 function formatSignedNumber(value: number | null | undefined, digits = 1) {

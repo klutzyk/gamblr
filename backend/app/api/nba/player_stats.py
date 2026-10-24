@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Query
 import asyncio
 from app.services.nba_client import NBAClient
+from app.core.nba_season import resolve_nba_season, season_date_bounds, season_for_date
+from app.core.prediction_safety import confidence_cap_for_sample
 from sqlalchemy import create_engine, text
 from app.core.config import settings
 from fastapi.concurrency import run_in_threadpool
@@ -415,6 +417,51 @@ def _enrich_prediction_frame(
     if lineups_payload is not None:
         df_preds = _attach_prediction_tipoffs(df_preds, lineups_payload)
 
+    # Stored prediction logs predate the sample metadata columns. Rebuild the
+    # current-season count so cached responses obey the same early-season
+    # confidence caps as newly computed predictions.
+    if "sample_size" not in df_preds.columns:
+        player_ids = sorted({int(pid) for pid in df_preds["player_id"].dropna().tolist()})
+        history = pd.DataFrame(columns=["player_id", "game_date"])
+        if player_ids:
+            id_params = {f"pid_{idx}": pid for idx, pid in enumerate(player_ids)}
+            placeholders = ", ".join(f":{key}" for key in id_params)
+            history = pd.read_sql(
+                text(
+                    f"""
+                    SELECT player_id, game_date
+                    FROM player_game_stats
+                    WHERE player_id IN ({placeholders})
+                    """
+                ),
+                sync_engine,
+                params=id_params,
+            )
+            history["game_date"] = pd.to_datetime(history["game_date"])
+
+        def count_current_season_games(row) -> int:
+            target = pd.to_datetime(row["game_date"]).date()
+            start, _ = season_date_bounds(season_for_date(target))
+            if history.empty:
+                return 0
+            dates = history.loc[history["player_id"] == int(row["player_id"]), "game_date"]
+            return int(((dates.dt.date >= start) & (dates.dt.date < target)).sum())
+
+        df_preds = df_preds.copy()
+        df_preds["sample_size"] = df_preds.apply(count_current_season_games, axis=1)
+
+    sample_sizes = pd.to_numeric(df_preds["sample_size"], errors="coerce").fillna(0).astype(int)
+    if "confidence" in df_preds.columns:
+        confidence = pd.to_numeric(df_preds["confidence"], errors="coerce").fillna(0)
+        caps = sample_sizes.map(confidence_cap_for_sample)
+        df_preds["confidence"] = np.minimum(confidence, caps).astype(int)
+    if "data_quality" not in df_preds.columns:
+        df_preds["data_quality"] = np.select(
+            [sample_sizes < 3, sample_sizes < 8, sample_sizes < 15],
+            ["very_limited", "limited", "developing"],
+            default="established",
+        )
+
     under_risk = fetch_under_risk(sync_engine, stat_type, df_preds["player_id"].tolist())
     last_under = compute_last_under_by_threshold(sync_engine, df_preds, stat_type)
     good_ids = fetch_good_player_ids(sync_engine, stat_type)
@@ -497,7 +544,8 @@ def _get_or_compute_predictions(stat_type: str, day: str, *, refresh: bool = Fal
     return df_to_dict(enriched), "refreshed" if refresh else "computed"
 
 @router.get("/top_scorers")
-def top_scorers(season: str = "2025-26", top_n: int = 10):
+def top_scorers(season: str | None = None, top_n: int = 10):
+    season = resolve_nba_season(season)
     df = client.fetch_player_stats(
         season=season,
         per_mode_detailed="PerGame",
@@ -509,7 +557,8 @@ def top_scorers(season: str = "2025-26", top_n: int = 10):
 
 
 @router.get("/top_assists")
-def top_assists(season: str = "2025-26", top_n: int = 10):
+def top_assists(season: str | None = None, top_n: int = 10):
+    season = resolve_nba_season(season)
     df = client.fetch_player_stats(
         season=season,
         per_mode_detailed="PerGame",
@@ -521,7 +570,8 @@ def top_assists(season: str = "2025-26", top_n: int = 10):
 
 
 @router.get("/top_rebounders")
-def top_rebounders(season: str = "2025-26", top_n: int = 10):
+def top_rebounders(season: str | None = None, top_n: int = 10):
+    season = resolve_nba_season(season)
     df = client.fetch_player_stats(
         season=season,
         per_mode_detailed="PerGame",
@@ -533,7 +583,8 @@ def top_rebounders(season: str = "2025-26", top_n: int = 10):
 
 
 @router.get("/guards_stats")
-def guards_stats(season: str = "2025-26", top_n: int = 10):
+def guards_stats(season: str | None = None, top_n: int = 10):
+    season = resolve_nba_season(season)
     df = client.fetch_player_stats(
         season=season,
         per_mode_detailed="PerGame",
@@ -548,7 +599,8 @@ def guards_stats(season: str = "2025-26", top_n: int = 10):
 
 
 @router.get("/recent_performers")
-def recent_performers(season: str = "2025-26", last_n_games: int = 5, top_n: int = 10):
+def recent_performers(season: str | None = None, last_n_games: int = 5, top_n: int = 10):
+    season = resolve_nba_season(season)
     df = client.fetch_player_stats(
         season=season,
         per_mode_detailed="PerGame",
@@ -563,7 +615,7 @@ def recent_performers(season: str = "2025-26", last_n_games: int = 5, top_n: int
 ## Predivtion routes
 @router.get("/predictions/points")
 async def predict_points_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("today", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
@@ -578,7 +630,7 @@ async def predict_points_api(
 
 @router.get("/predictions/assists")
 async def predict_assists_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("today", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
@@ -593,7 +645,7 @@ async def predict_assists_api(
 
 @router.get("/predictions/rebounds")
 async def predict_rebounds_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("today", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
@@ -608,7 +660,7 @@ async def predict_rebounds_api(
 
 @router.get("/predictions/threept")
 async def predict_threept_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("today", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
@@ -623,7 +675,7 @@ async def predict_threept_api(
 
 @router.get("/predictions/threepa")
 async def predict_threepa_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("today", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     refresh: bool = Query(False, description="Bypass stored prediction logs and recompute from current model files."),
 ):
     """
@@ -709,7 +761,7 @@ async def get_prediction_precompute_job(job_id: str):
 
 @router.get("/predictions/doubles")
 async def predict_doubles_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("today", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     top_n: int = Query(30, ge=1, le=200),
 ):
     """
@@ -1465,7 +1517,7 @@ def build_inferred_lineups_from_schedule(engine, day: str):
 
 @router.get("/predictions/first_basket")
 async def predict_first_basket_api(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("today", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     top_n_per_game: int = Query(6, ge=1, le=10),
 ):
     """

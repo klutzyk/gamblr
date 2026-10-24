@@ -1,7 +1,9 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
+import pandas as pd
 from app.models.team_game_stat import TeamGameStat
+from app.core.nba_season import season_for_date
 
 
 async def save_team_game_stats(
@@ -17,8 +19,9 @@ async def save_team_game_stats(
         return 0
 
     if last_game_date is not None and "GAME_DATE" in df.columns:
+        df = df.copy()
         df["GAME_DATE"] = df["GAME_DATE"].apply(
-            lambda d: datetime.strptime(d, "%b %d, %Y").date()
+            lambda d: pd.to_datetime(d, errors="raise").date()
         )
         df = df[df["GAME_DATE"] > last_game_date]
 
@@ -38,6 +41,10 @@ async def save_team_game_stats(
         existing = existing_rows.get(str(game_id))
         if existing:
             has_updates = False
+            existing_date = existing.game_date
+            if not existing.season and existing_date:
+                existing.season = season_for_date(existing_date)
+                has_updates = True
             for col, key in [
                 ("fgm", "FGM"),
                 ("fga", "FGA"),
@@ -54,7 +61,7 @@ async def save_team_game_stats(
 
         game_date = row.get("GAME_DATE")
         if isinstance(game_date, str):
-            game_date = datetime.strptime(game_date, "%b %d, %Y").date()
+            game_date = pd.to_datetime(game_date, errors="raise").date()
         if not game_date:
             continue
 
@@ -68,6 +75,7 @@ async def save_team_game_stats(
                 team_abbreviation=resolved_abbr,
                 game_id=str(game_id),
                 game_date=game_date,
+                season=season_for_date(game_date),
                 matchup=row.get("MATCHUP"),
                 points=row.get("PTS"),
                 assists=row.get("AST"),
