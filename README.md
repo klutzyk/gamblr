@@ -37,7 +37,7 @@ The output is decision support, not certainty. Prediction bands, reliability lab
       <strong>NBA player projections</strong><br />
       Points, assists, rebounds, made threes, and attempted threes with slate, team, search, value, and under-risk controls.
       <br /><br />
-      <img src="docs/screenshots/player-predictions.png" alt="NBA player prediction controls in Gamblr" />
+      <img src="docs/screenshots/main-dashboard.png" alt="NBA player prediction controls in Gamblr" />
     </td>
     <td width="50%" valign="top">
       <strong>NBA matchup view</strong><br />
@@ -51,7 +51,7 @@ The output is decision support, not certainty. Prediction bands, reliability lab
       <strong>Prediction review</strong><br />
       Completed-result summaries, recent trends, and player-level drill-downs for checking model behavior over time.
       <br /><br />
-      <img src="docs/screenshots/prediction-performance.png" alt="Gamblr prediction performance review" />
+      <img src="docs/screenshots/player-predictions.png" alt="Gamblr prediction performance review" />
     </td>
     <td width="50%" valign="top">
       <strong>MLB analytics</strong><br />
