@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import json
 import sys
 import uuid
@@ -37,7 +38,6 @@ from ml.mlb.evaluate import score_completed_games  # noqa: E402
 from ml.mlb.pregame import (  # noqa: E402
     resolve_prediction_date,
     score_market_pregame,
-    score_pregame_slate,
     scored_rows_for_api,
 )
 from ml.mlb.training import train_all as train_all_mlb_markets  # noqa: E402
@@ -46,6 +46,12 @@ from ml.mlb.training import train_market  # noqa: E402
 router = APIRouter()
 
 PLANNED_MARKETS = market_names()
+PRECOMPUTE_MARKETS = (
+    "pitcher_strikeouts",
+    "batter_home_runs",
+    "batter_hits",
+    "batter_total_bases",
+)
 prediction_precompute_jobs: dict[str, dict] = {}
 training_jobs: dict[str, dict] = {}
 
@@ -93,6 +99,7 @@ def _ensure_precompute_job_table(conn) -> None:
             """
         )
     )
+    conn.execute(text("ALTER TABLE mlb_prediction_precompute_jobs ADD COLUMN IF NOT EXISTS current_market TEXT NULL"))
 
 
 def _persist_precompute_job(job: dict) -> None:
@@ -115,6 +122,7 @@ def _persist_precompute_job(job: dict) -> None:
                         steps_total,
                         current_day,
                         current_date_value,
+                        current_market,
                         result,
                         error,
                         created_at,
@@ -134,6 +142,7 @@ def _persist_precompute_job(job: dict) -> None:
                         :steps_total,
                         :current_day,
                         :current_date_value,
+                        :current_market,
                         CAST(:result AS jsonb),
                         :error,
                         :created_at,
@@ -152,6 +161,7 @@ def _persist_precompute_job(job: dict) -> None:
                         steps_total = EXCLUDED.steps_total,
                         current_day = EXCLUDED.current_day,
                         current_date_value = EXCLUDED.current_date_value,
+                        current_market = EXCLUDED.current_market,
                         result = EXCLUDED.result,
                         error = EXCLUDED.error,
                         started_at = EXCLUDED.started_at,
@@ -171,6 +181,7 @@ def _persist_precompute_job(job: dict) -> None:
                     "steps_total": int(job.get("steps_total") or 0),
                     "current_day": job.get("current_day"),
                     "current_date_value": job.get("current_date"),
+                    "current_market": job.get("current_market"),
                     "result": json.dumps(job.get("result")) if job.get("result") is not None else None,
                     "error": job.get("error"),
                     "created_at": job.get("created_at"),
@@ -202,6 +213,7 @@ def _load_precompute_job(job_id: str) -> dict | None:
                         steps_total,
                         current_day,
                         current_date_value,
+                        current_market,
                         result,
                         error,
                         created_at,
@@ -314,6 +326,39 @@ def _stored_market_is_complete(market: str, stored, *, requested_limit: int) -> 
     return True
 
 
+def _score_store_market_payload(
+    *,
+    engine,
+    market: str,
+    day: str,
+    target_date: str | None,
+    limit_per_market: int,
+) -> dict:
+    scored = score_market_pregame(
+        market,
+        engine=engine,
+        day=day,
+        target_date=target_date,
+        limit=None,
+    )
+    upsert_mlb_prediction_logs(
+        engine,
+        market,
+        scored,
+        model_path=scored.attrs.get("artifact_path"),
+        prediction_date=scored.attrs.get("prediction_date"),
+    )
+    try:
+        return _payload_for_scored_market(
+            market,
+            scored,
+            limit=limit_per_market,
+        )
+    finally:
+        del scored
+        gc.collect()
+
+
 @cached(ttl_seconds=300)
 def _build_mlb_prediction_slate_payload(
     *,
@@ -363,28 +408,20 @@ def _build_mlb_prediction_slate_payload(
                     },
                 }
 
-        scored_by_market = score_pregame_slate(
-            database_url=database_url,
-            day=day,
-            target_date=target_date,
-            limit_per_market=None,
-        )
         markets = {}
         prediction_date = target_date
-        for market, scored in scored_by_market.items():
-            prediction_date = scored.attrs.get("prediction_date") or prediction_date
-            upsert_mlb_prediction_logs(
-                engine,
-                market,
-                scored,
-                model_path=scored.attrs.get("artifact_path"),
-                prediction_date=prediction_date,
+        for market in PLANNED_MARKETS:
+            market_payload = _score_store_market_payload(
+                engine=engine,
+                market=market,
+                day=day,
+                target_date=target_date,
+                limit_per_market=limit_per_market,
             )
-            markets[market] = _payload_for_scored_market(
-                market,
-                scored,
-                limit=limit_per_market,
-            )
+            markets[market] = market_payload
+            stored_date = market_payload.get("data", [{}])[0].get("game_date") if market_payload.get("data") else None
+            prediction_date = stored_date or prediction_date
+            gc.collect()
         return {
             "sport": "mlb",
             "status": "scored",
@@ -395,6 +432,7 @@ def _build_mlb_prediction_slate_payload(
             "markets": markets,
         }
     finally:
+        gc.collect()
         engine.dispose()
 
 
@@ -445,7 +483,7 @@ def _build_mlb_market_prediction_payload(
 
         scored = score_market_pregame(
             market,
-            database_url=database_url,
+            engine=engine,
             day=day,
             target_date=target_date,
             limit=None,
@@ -468,6 +506,7 @@ def _build_mlb_market_prediction_payload(
             **_payload_for_scored_market(market, scored, limit=limit),
         }
     finally:
+        gc.collect()
         engine.dispose()
 
 
@@ -764,7 +803,7 @@ def _parse_precompute_days(days: str) -> list[str]:
         if day in valid_days:
             continue
         try:
-            pd.to_datetime(day, format="%Y-%m-%d", errors="raise")
+            datetime.strptime(day, "%Y-%m-%d")
         except (TypeError, ValueError):
             invalid_days.append(day)
     if invalid_days:
@@ -794,16 +833,18 @@ async def _run_mlb_prediction_precompute_job(
     job = prediction_precompute_jobs[job_id]
     job["status"] = "running"
     job["started_at"] = datetime.utcnow().isoformat()
-    job["steps_total"] = len(day_values)
+    job["steps_total"] = len(day_values) * len(PRECOMPUTE_MARKETS)
     _persist_precompute_job(job)
     results: dict[str, dict] = {}
+    completed_steps = 0
 
     try:
-        for step, day in enumerate(day_values, start=1):
+        for day in day_values:
             target_date = resolve_prediction_date(day=day)
             job["current_day"] = day
             job["current_date"] = target_date.isoformat()
-            job["steps_done"] = step - 1
+            job["current_market"] = None
+            job["steps_done"] = completed_steps
             _persist_precompute_job(job)
 
             ensure_result = {"changed": False}
@@ -814,25 +855,39 @@ async def _run_mlb_prediction_precompute_job(
                 )
 
             cache_bust = datetime.utcnow().isoformat() if refresh or ensure_result.get("changed") else None
-            payload = await run_in_threadpool(
-                _build_mlb_prediction_slate_payload,
-                database_url=to_sync_db_url(settings.ML_DATABASE_URL),
-                day=day,
-                target_date=target_date.isoformat(),
-                limit_per_market=limit_per_market,
-                cache_bust=cache_bust,
-                compute_if_missing=True,
-            )
+            market_counts: dict[str, int] = {}
+            for market in PRECOMPUTE_MARKETS:
+                job["current_market"] = market
+                job["steps_done"] = completed_steps
+                _persist_precompute_job(job)
+
+                market_payload = await run_in_threadpool(
+                    _build_mlb_market_prediction_payload,
+                    market=market,
+                    database_url=to_sync_db_url(settings.ML_DATABASE_URL),
+                    day=day,
+                    target_date=target_date.isoformat(),
+                    limit=limit_per_market,
+                    cache_bust=cache_bust,
+                    compute_if_missing=True,
+                )
+                market_counts[market] = int(market_payload.get("count") or 0)
+                completed_steps += 1
+                job["steps_done"] = completed_steps
+                _persist_precompute_job(job)
+                gc.collect()
+
             results[day] = {
-                "date": payload.get("date"),
-                "source": payload.get("source"),
-                "market_counts": _slate_market_counts(payload),
+                "date": target_date.isoformat(),
+                "source": "computed",
+                "market_counts": market_counts,
                 "data_load": ensure_result,
             }
-            job["steps_done"] = step
+            job["current_market"] = None
             _persist_precompute_job(job)
 
         job["status"] = "completed"
+        job["current_market"] = None
         job["result"] = results
         job["finished_at"] = datetime.utcnow().isoformat()
         _persist_precompute_job(job)
@@ -860,9 +915,10 @@ def _create_mlb_prediction_precompute_job(
         "refresh": refresh,
         "ensure_data": ensure_data,
         "steps_done": 0,
-        "steps_total": len(day_values),
+        "steps_total": len(day_values) * len(PRECOMPUTE_MARKETS),
         "current_day": None,
         "current_date": None,
+        "current_market": None,
         "result": None,
         "error": None,
         "created_at": datetime.utcnow().isoformat(),

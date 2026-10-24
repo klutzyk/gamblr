@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from typing import Any
 
 import httpx
@@ -32,8 +34,10 @@ DEFAULT_HOURLY_VARIABLES = [
 
 
 class OpenMeteoClient:
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 30.0, retries: int | None = None):
         self.timeout = timeout
+        self.retries = retries if retries is not None else int(os.getenv("OPEN_METEO_RETRIES", "3"))
+        self.rate_limit_backoff_seconds = float(os.getenv("OPEN_METEO_429_BACKOFF_SECONDS", "10"))
         self.base_url = settings.OPEN_METEO_BASE_URL.rstrip("/")
         self.historical_base_url = settings.OPEN_METEO_HISTORICAL_BASE_URL.rstrip("/")
 
@@ -56,10 +60,34 @@ class OpenMeteoClient:
         cleaned_params = self._clean_params(params or {})
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, params=cleaned_params)
-            response.raise_for_status()
-            logger.info("Open-Meteo GET %s params=%s", url, cleaned_params)
-            return response.json(), str(response.request.url)
+            last_error: Exception | None = None
+            for attempt in range(self.retries + 1):
+                try:
+                    response = await client.get(url, params=cleaned_params)
+                    response.raise_for_status()
+                    logger.info("Open-Meteo GET %s params=%s", url, cleaned_params)
+                    return response.json(), str(response.request.url)
+                except httpx.HTTPStatusError as exc:
+                    last_error = exc
+                    if exc.response.status_code < 500 and exc.response.status_code != 429:
+                        raise
+                except httpx.RequestError as exc:
+                    last_error = exc
+                if attempt < self.retries:
+                    status_code = (
+                        last_error.response.status_code
+                        if isinstance(last_error, httpx.HTTPStatusError)
+                        else None
+                    )
+                    delay = (
+                        self.rate_limit_backoff_seconds * (attempt + 1)
+                        if status_code == 429
+                        else 0.75 * (attempt + 1)
+                    )
+                    await asyncio.sleep(delay)
+            if last_error:
+                raise last_error
+            raise RuntimeError("Open-Meteo request failed without an exception.")
 
     async def get_forecast(
         self,

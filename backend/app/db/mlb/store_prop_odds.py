@@ -8,6 +8,65 @@ import pandas as pd
 from sqlalchemy import text
 
 
+def ensure_mlb_prop_odds_side_schema(engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE mlb_prop_odds_snapshots
+                ADD COLUMN IF NOT EXISTS side text NOT NULL DEFAULT 'Over'
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                DO $$
+                DECLARE
+                    constraint_columns text;
+                BEGIN
+                    SELECT string_agg(att.attname, ',' ORDER BY keys.ordinality)
+                    INTO constraint_columns
+                    FROM pg_constraint con
+                    JOIN unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ordinality) ON true
+                    JOIN pg_attribute att
+                      ON att.attrelid = con.conrelid
+                     AND att.attnum = keys.attnum
+                    WHERE con.conname = 'uq_mlb_prop_odds_snapshot_lookup'
+                      AND con.conrelid = 'mlb_prop_odds_snapshots'::regclass;
+
+                    IF constraint_columns IS DISTINCT FROM (
+                        'provider,bookmaker,market,event_id,normalized_player_name,side,line'
+                    ) THEN
+                        ALTER TABLE mlb_prop_odds_snapshots
+                        DROP CONSTRAINT IF EXISTS uq_mlb_prop_odds_snapshot_lookup;
+
+                        ALTER TABLE mlb_prop_odds_snapshots
+                        ADD CONSTRAINT uq_mlb_prop_odds_snapshot_lookup
+                        UNIQUE (
+                            provider,
+                            bookmaker,
+                            market,
+                            event_id,
+                            normalized_player_name,
+                            side,
+                            line
+                        );
+                    END IF;
+                END $$;
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE mlb_prop_odds_snapshots
+                ALTER COLUMN side DROP DEFAULT
+                """
+            )
+        )
+
+
 def _clean(value: Any) -> Any:
     if pd.isna(value):
         return None
@@ -51,6 +110,7 @@ def upsert_mlb_prop_odds(
     if not props:
         return 0
 
+    ensure_mlb_prop_odds_side_schema(engine)
     game_date_value = pd.to_datetime(game_date).date()
     stmt = text(
         """
@@ -66,6 +126,7 @@ def upsert_mlb_prop_odds(
             away_team,
             player_name,
             normalized_player_name,
+            side,
             line,
             american_odds,
             decimal_odds,
@@ -86,6 +147,7 @@ def upsert_mlb_prop_odds(
             :away_team,
             :player_name,
             :normalized_player_name,
+            :side,
             :line,
             :american_odds,
             :decimal_odds,
@@ -100,6 +162,7 @@ def upsert_mlb_prop_odds(
             market,
             event_id,
             normalized_player_name,
+            side,
             line
         )
         DO UPDATE SET
@@ -134,6 +197,7 @@ def upsert_mlb_prop_odds(
                     "away_team": _clean(prop.get("away_team")),
                     "player_name": _clean(prop.get("player_name")),
                     "normalized_player_name": _clean(prop.get("normalized_player_name")),
+                    "side": _clean(prop.get("side")) or "Over",
                     "line": _float_or_none(prop.get("line")),
                     "american_odds": _int_or_none(prop.get("american_odds")),
                     "decimal_odds": _float_or_none(prop.get("decimal_odds")),
@@ -277,6 +341,7 @@ def load_mlb_prop_odds(
     game_date,
     max_age_minutes: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    ensure_mlb_prop_odds_side_schema(engine)
     sql = """
         SELECT
             event_id,
@@ -287,6 +352,7 @@ def load_mlb_prop_odds(
             market,
             player_name,
             normalized_player_name,
+            side,
             line,
             american_odds,
             decimal_odds,
@@ -307,7 +373,7 @@ def load_mlb_prop_odds(
     if max_age_minutes is not None:
         sql += " AND fetched_at >= :fresh_after"
         params["fresh_after"] = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
-    sql += " ORDER BY fetched_at DESC, event_id, normalized_player_name"
+    sql += " ORDER BY fetched_at DESC, event_id, normalized_player_name, side"
 
     with engine.connect() as conn:
         df = pd.read_sql(text(sql), conn, params=params)

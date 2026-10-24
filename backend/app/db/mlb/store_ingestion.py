@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+import httpx
 import pandas as pd
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
@@ -42,6 +46,7 @@ from app.services.open_meteo_client import OpenMeteoClient
 
 
 UTC = timezone.utc
+logger = logging.getLogger(__name__)
 
 
 def _daterange(start_value: date, end_value: date) -> list[date]:
@@ -291,6 +296,18 @@ def _minimal_player_row(player_id: int | None, full_name: str | None) -> dict[st
     }
 
 
+def _extract_probable_pitchers(
+    payload: dict[str, Any],
+    *,
+    home_team: dict[str, Any] | None = None,
+    away_team: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    probable_pitchers = payload.get("probablePitchers") or {}
+    probable_home = (home_team or {}).get("probablePitcher") or probable_pitchers.get("home") or {}
+    probable_away = (away_team or {}).get("probablePitcher") or probable_pitchers.get("away") or {}
+    return probable_home, probable_away
+
+
 def _build_umpire_row(umpire_payload: dict[str, Any], *, active: bool = True) -> dict[str, Any] | None:
     person = umpire_payload.get("person") or umpire_payload.get("official") or umpire_payload
     umpire_id = _safe_int(person.get("id"))
@@ -506,8 +523,11 @@ def _extract_schedule_game_rows(
             if home_team_id is None or away_team_id is None:
                 continue
 
-            probable_home = home.get("probablePitcher") or {}
-            probable_away = away.get("probablePitcher") or {}
+            probable_home, probable_away = _extract_probable_pitchers(
+                game,
+                home_team=home,
+                away_team=away,
+            )
             home_pitcher_row = _minimal_player_row(
                 _safe_int(probable_home.get("id")),
                 _safe_text(_candidate(probable_home, "fullName", "full_name", "name")),
@@ -1335,8 +1355,11 @@ async def ingest_game_feed(
     if home_team_id is None or away_team_id is None:
         raise ValueError(f"Game {game_pk} missing home/away team ids in feed payload.")
 
-    probable_home = home_team.get("probablePitcher") or {}
-    probable_away = away_team.get("probablePitcher") or {}
+    probable_home, probable_away = _extract_probable_pitchers(
+        game_data,
+        home_team=home_team,
+        away_team=away_team,
+    )
     weather = game_data.get("weather") or {}
     game_row = {
         "game_pk": game_pk,
@@ -1717,6 +1740,9 @@ async def ingest_weather_for_games(
 
     per_game_results = []
     skipped_games = []
+    request_delay_seconds = float(
+        os.getenv("OPEN_METEO_REQUEST_DELAY_SECONDS", "1.5" if os.getenv("RENDER") else "0")
+    )
     for game_pk in game_pks:
         try:
             per_game_results.append(
@@ -1736,9 +1762,20 @@ async def ingest_weather_for_games(
                     "reason": str(exc),
                 }
             )
+        except httpx.HTTPError as exc:
+            await db.rollback()
+            logger.warning("Skipping MLB weather ingest for game_pk=%s after Open-Meteo error: %s", game_pk, exc)
+            skipped_games.append(
+                {
+                    "game_pk": game_pk,
+                    "reason": f"Open-Meteo request failed: {exc}",
+                }
+            )
+        if request_delay_seconds > 0:
+            await asyncio.sleep(request_delay_seconds)
 
     return {
-        "status": "success",
+        "status": "partial_success" if skipped_games else "success",
         "season": season,
         "start_date": start_date,
         "end_date": end_date,

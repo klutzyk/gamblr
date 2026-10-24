@@ -650,3 +650,42 @@ async def get_mlb_cron_status(
         "ingestion_has_rosters": int(payload.get("roster_rows") or 0) > 0,
         "ingestion_has_weather": int(payload.get("weather_rows") or 0) > 0,
     }
+
+
+@router.get("/player-games/recent")
+async def get_recent_mlb_player_games(
+    limit: int = Query(5, ge=1, le=50),
+    db: AsyncSession = Depends(get_mlb_db),
+):
+    stmt = text(
+        """
+        SELECT
+            b.id,
+            b.game_pk,
+            g.official_date AS game_date,
+            b.player_id,
+            p.full_name AS player_name,
+            t.abbreviation AS team_abbreviation,
+            b.batting_order,
+            b.plate_appearances,
+            b.hits,
+            b.home_runs,
+            b.total_bases,
+            b.walks,
+            b.strikeouts
+        FROM mlb_player_game_batting b
+        JOIN mlb_games g ON g.game_pk = b.game_pk
+        LEFT JOIN mlb_players p ON p.id = b.player_id
+        LEFT JOIN mlb_teams t ON t.id = b.team_id
+        ORDER BY g.official_date DESC, b.game_pk DESC, b.id DESC
+        LIMIT :limit
+        """
+    )
+    rows = []
+    result = await db.execute(stmt, {"limit": limit})
+    for row in result.mappings():
+        item = dict(row)
+        if item.get("game_date"):
+            item["game_date"] = item["game_date"].isoformat()
+        rows.append(item)
+    return {"status": "ok", "data": rows}
