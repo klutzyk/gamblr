@@ -722,7 +722,7 @@ async def evaluate_mlb_market(
 
 @router.get("/slate")
 async def get_mlb_prediction_slate(
-    day: str = Query("tomorrow", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("tomorrow", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     date: str | None = Query(None, description="Optional YYYY-MM-DD override."),
     limit_per_market: int = Query(60, ge=1, le=200),
     ensure_data: bool = Query(True, description="Auto-load missing schedule/roster rows before scoring."),
@@ -940,7 +940,7 @@ async def get_mlb_prediction_precompute_job(job_id: str):
 @router.get("/{market}")
 async def get_mlb_predictions(
     market: str,
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "two_days_ago", "auto"]),
+    day: str = Query("today", pattern="^(today|tomorrow|yesterday|two_days_ago|auto)$"),
     date: str | None = Query(None, description="Optional YYYY-MM-DD override."),
     limit: int = Query(100, ge=1, le=500),
     ensure_data: bool = Query(True, description="Auto-load missing schedule/roster rows before scoring."),

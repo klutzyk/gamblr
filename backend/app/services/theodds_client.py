@@ -18,6 +18,13 @@ class TheOddsClient:
             "requests_used": None,
         }
 
+    def _require_api_key(self) -> str:
+        if not self.api_key:
+            raise RuntimeError(
+                "THEODDS_API_KEY is not configured; odds and best-bet refreshes are optional"
+            )
+        return self.api_key
+
     @staticmethod
     def _to_int(value: str | None) -> int | None:
         if value is None:
@@ -74,7 +81,7 @@ class TheOddsClient:
         logger.info("THE ODDS API CALLED: get_sports")
 
         url = f"{self.base_url}/sports"
-        params = {"api_key": self.api_key}
+        params = {"api_key": self._require_api_key()}
 
         async with httpx.AsyncClient(timeout=15) as client:
             res = await client.get(url, params=params)
@@ -108,7 +115,7 @@ class TheOddsClient:
 
         url = f"{self.base_url}/sports/{sport}/odds"
         params: dict[str, Any] = {
-            "api_key": self.api_key,
+            "api_key": self._require_api_key(),
             "markets": markets,
             "oddsFormat": odds_format,
             "dateFormat": date_format,
@@ -136,7 +143,7 @@ class TheOddsClient:
         async with httpx.AsyncClient(timeout=15) as client:
             res = await client.get(
                 f"{self.base_url}/sports/{sport}/events",
-                params={"api_key": self.api_key},
+                params={"api_key": self._require_api_key()},
             )
             res.raise_for_status()
             self._extract_usage(res)
@@ -169,7 +176,7 @@ class TheOddsClient:
         )
 
         params: dict[str, Any] = {
-            "api_key": self.api_key,
+            "api_key": self._require_api_key(),
             "markets": markets,
             "oddsFormat": odds_format,
             "dateFormat": date_format,

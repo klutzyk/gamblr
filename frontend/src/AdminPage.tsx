@@ -12,6 +12,8 @@ import {
   updateRollingFeatures,
   updateTeamGames,
   getUpdateJobStatus,
+  currentNbaSeason,
+  recentNbaSeasons,
 } from "./api";
 import "./AdminPage.css";
 
@@ -39,7 +41,7 @@ export default function AdminPage() {
   const todayIso = new Date().toISOString().slice(0, 10);
   const [sinceDate, setSinceDate] = useState("");
   const [untilDate, setUntilDate] = useState(todayIso);
-  const [season, setSeason] = useState("2025-26");
+  const [season, setSeason] = useState(currentNbaSeason());
   const [useGameIngest, setUseGameIngest] = useState(true);
   const [updateTeamGamesAfterIngest, setUpdateTeamGamesAfterIngest] = useState(false);
   const [refreshPlayerTeams, setRefreshPlayerTeams] = useState(true);
@@ -339,11 +341,15 @@ export default function AdminPage() {
             </div>
             <div className="col-md-2">
               <label className="admin-label">Season</label>
-              <input
-                className="admin-input"
+              <select
+                className="admin-select"
                 value={season}
                 onChange={(e) => setSeason(e.target.value)}
-              />
+              >
+                {recentNbaSeasons(10).map((value) => (
+                  <option value={value} key={value}>{value}</option>
+                ))}
+              </select>
             </div>
             <div className="col-md-2">
               <label className="admin-label">Ingest Mode</label>

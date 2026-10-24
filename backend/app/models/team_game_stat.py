@@ -12,6 +12,7 @@ class TeamGameStat(Base):
     game_id = Column(Text, nullable=False)
 
     game_date = Column(Date, nullable=False)
+    season = Column(Text, nullable=True)
     matchup = Column(Text)
 
     points = Column(Float)

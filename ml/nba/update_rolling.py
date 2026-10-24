@@ -15,60 +15,35 @@ ROLLING_PATH = DATA_DIR / "player_stats_rolling.csv"
 
 def update_rolling_stats(engine):
     """
-    Pull new games from DB, recompute rolling features,
-    and persist latest rolling row per player.
+    Recompute leak-free rolling features from the database and persist the
+    latest row per player.
+
+    The output CSV is intentionally a prediction-time cache, not a source of
+    history.  Reusing it as historical input loses all but one prior game per
+    player and makes incremental refreshes mathematically incorrect.
     """
-
-    # Load last rolling averages table
-    try:
-        df_rolling_old = pd.read_csv(ROLLING_PATH)
-        last_date = df_rolling_old["game_date"].max()
-    except FileNotFoundError:
-        df_rolling_old = pd.DataFrame()
-        last_date = "2000-01-01"  # for the first time its fetched, fetches all the data (new data)
-
-    # Fetch new games
-    query = f"""
-    SELECT pg.player_id, pg.game_id, pg.game_date, pg.matchup, p.team_abbreviation,
+    query = """
+    SELECT pg.player_id, pg.game_id, pg.game_date, pg.season, pg.matchup,
+           COALESCE(pg.team_abbreviation, p.team_abbreviation) AS team_abbreviation,
            pg.minutes, pg.points, pg.assists, pg.rebounds, pg.steals, pg.blocks, pg.turnovers,
            pg.fgm, pg.fga, pg.fg3m, pg.fg3a
     FROM player_game_stats pg
     JOIN players p ON pg.player_id = p.id
-    WHERE pg.game_date > '{last_date}'
-    ORDER BY pg.game_date
+    ORDER BY pg.player_id, pg.game_date, pg.game_id
     """
+    df_history = pd.read_sql(query, engine)
+    if df_history.empty:
+        print("No games available to build rolling averages.")
+        return df_history
 
-    df_new = pd.read_sql(query, engine)
-
-    if df_new.empty:
-        if df_rolling_old.empty:
-            print("No new games to update.")
-            return df_rolling_old
-        # Refresh team abbreviations even when no new games are available.
-        players_df = pd.read_sql(
-            "SELECT id AS player_id, team_abbreviation FROM players", engine
-        )
-        team_map = dict(
-            zip(players_df["player_id"], players_df["team_abbreviation"])
-        )
-        df_rolling_old["team_abbreviation"] = df_rolling_old["player_id"].map(
-            team_map
-        )
-        df_rolling_old.to_csv(ROLLING_PATH, index=False)
-        print("No new games to update. Refreshed team abbreviations.")
-        return df_rolling_old
-
-    # Combine with previous history
-    df_history = pd.concat([df_rolling_old, df_new], ignore_index=True)
+    df_history["game_date"] = pd.to_datetime(df_history["game_date"])
     df_history = compute_history_rolling_features(df_history)
 
     # Keep only the latest row per player
     df_latest = df_history.groupby("player_id").tail(1)
-    players_df = pd.read_sql(
-        "SELECT id AS player_id, team_abbreviation FROM players", engine
-    )
-    team_map = dict(zip(players_df["player_id"], players_df["team_abbreviation"]))
-    df_latest["team_abbreviation"] = df_latest["player_id"].map(team_map)
+    # Historical rows retain their actual team.  The latest game is the most
+    # reliable local roster signal and avoids overwriting it with a stale
+    # players-table assignment after a trade.
     df_latest.to_csv(ROLLING_PATH, index=False)
 
     print(f"Updated rolling averages for {len(df_latest)} players.")

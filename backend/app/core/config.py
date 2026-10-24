@@ -5,18 +5,19 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
-    ML_DATABASE_URL: str
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/gamblr"
+    ML_DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/gamblr_ml"
+    SQL_ECHO: bool = False
     OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1"
     OPEN_METEO_HISTORICAL_BASE_URL: str = "https://historical-forecast-api.open-meteo.com/v1"
 
     # sportsdata.io
-    SPORTSDATA_API_KEY: str
+    SPORTSDATA_API_KEY: str | None = None
     SPORTSDATA_BASE_URL: str = "https://api.sportsdata.io/v3/nba"
 
     # the-odds-api.com
-    THEODDS_BASE_URL: str
-    THEODDS_API_KEY: str
+    THEODDS_BASE_URL: str = "https://api.the-odds-api.com/v4"
+    THEODDS_API_KEY: str | None = None
 
     # prop-line.com
     PROPLINE_API_KEY: str | None = None

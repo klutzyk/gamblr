@@ -34,6 +34,12 @@ import random
 from asyncio_throttle import Throttler
 import pandas as pd
 from app.core.constants import MAX_GAMES_PER_PLAYER
+from app.core.nba_season import (
+    available_nba_seasons,
+    current_nba_season,
+    date_is_in_season,
+    resolve_nba_season,
+)
 from zoneinfo import ZoneInfo
 from ml.nba.backtest import walk_forward_backtest
 from ml.nba.update_rolling import update_rolling_stats
@@ -42,6 +48,11 @@ from ml.nba.update_rolling import update_rolling_stats
 def _parse_minutes(value):
     if value is None:
         return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
@@ -62,6 +73,17 @@ def _parse_minutes(value):
         except ValueError:
             return None
     return None
+
+
+def _normalize_number(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
 
 
 def _normalize_text(value):
@@ -95,6 +117,17 @@ GAME_INGEST_MAX_ATTEMPTS = 4
 GAME_INGEST_BACKOFF_BASE_SECONDS = 1.0
 GAME_INGEST_BACKOFF_CAP_SECONDS = 8.0
 GAME_INGEST_BACKOFF_JITTER_SECONDS = 0.4
+
+
+@router.get("/nba/seasons")
+async def get_nba_seasons(count: int = 8):
+    safe_count = max(1, min(int(count), 30))
+    current = current_nba_season()
+    return {
+        "current_season": current,
+        "timezone": "America/New_York",
+        "seasons": available_nba_seasons(safe_count, current),
+    }
 
 
 def _current_et_date():
@@ -344,8 +377,9 @@ async def refresh_player_props_sync(
 # MIGHT TAKE A LONG TIME
 @router.post("/last-n/all")
 async def store_last_n_games_all_players(
-    season: str = "2025-26", db: AsyncSession = Depends(get_db)
+    season: str | None = None, db: AsyncSession = Depends(get_db)
 ):
+    season = resolve_nba_season(season)
     active_players = players.get_active_players()
     saved = 0
     skipped = 0
@@ -447,6 +481,7 @@ async def _run_last_n_update(
     db: AsyncSession,
     job_id: str | None = None,
 ):
+    season = resolve_nba_season(season)
     schedule_result = await db.execute(
         select(
             GameSchedule.game_id,
@@ -456,6 +491,7 @@ async def _run_last_n_update(
         ).where(
             GameSchedule.game_date >= since_date,
             GameSchedule.game_date <= until_date,
+            GameSchedule.season == season,
         )
     )
     game_rows = schedule_result.all()
@@ -581,7 +617,8 @@ async def _run_last_n_update(
 
         result = await db.execute(
             select(func.max(PlayerGameStat.game_date)).where(
-                PlayerGameStat.player_id == player_id
+                PlayerGameStat.player_id == player_id,
+                PlayerGameStat.season == season,
             )
         )
         last_game_date = result.scalar_one_or_none()
@@ -670,6 +707,7 @@ async def _run_games_ingest(
     db: AsyncSession,
     job_id: str | None = None,
 ):
+    season = resolve_nba_season(season)
     schedule_result = await db.execute(
         select(
             GameSchedule.game_id,
@@ -804,14 +842,25 @@ async def _run_games_ingest(
                     team_abbreviation=team_abbr,
                 )
                 db.add(player)
-            elif player_name and not player.full_name:
-                player.full_name = player_name
-            elif team_abbr and player.team_abbreviation != team_abbr:
-                player.team_abbreviation = team_abbr
+            else:
+                if player_name and not player.full_name:
+                    player.full_name = player_name
+                if team_abbr and player.team_abbreviation != team_abbr:
+                    player.team_abbreviation = team_abbr
 
             existing = existing_players.get(player_id)
             if existing:
                 has_updates = False
+                identity_values = {
+                    "game_date": game_date,
+                    "season": season,
+                    "team_abbreviation": team_abbr,
+                    "matchup": matchup,
+                }
+                for col, value in identity_values.items():
+                    if value is not None and getattr(existing, col) != value:
+                        setattr(existing, col, value)
+                        has_updates = True
                 for col, key in [
                     ("minutes", "MIN"),
                     ("points", "PTS"),
@@ -828,7 +877,9 @@ async def _run_games_ingest(
                     value = row.get(key)
                     if col == "minutes":
                         value = _parse_minutes(value)
-                    if value is not None and getattr(existing, col) is None:
+                    else:
+                        value = _normalize_number(value)
+                    if value is not None and getattr(existing, col) != value:
                         setattr(existing, col, value)
                         has_updates = True
                 if has_updates:
@@ -840,18 +891,20 @@ async def _run_games_ingest(
                     player_id=player_id,
                     game_id=str(game_id),
                     game_date=game_date,
+                    season=season,
+                    team_abbreviation=team_abbr,
                     matchup=matchup,
                     minutes=_parse_minutes(row.get("MIN")),
-                    points=row.get("PTS"),
-                    assists=row.get("AST"),
-                    rebounds=row.get("REB"),
-                    steals=row.get("STL"),
-                    blocks=row.get("BLK"),
-                    turnovers=row.get("TOV"),
-                    fgm=row.get("FGM"),
-                    fga=row.get("FGA"),
-                    fg3m=row.get("FG3M"),
-                    fg3a=row.get("FG3A"),
+                    points=_normalize_number(row.get("PTS")),
+                    assists=_normalize_number(row.get("AST")),
+                    rebounds=_normalize_number(row.get("REB")),
+                    steals=_normalize_number(row.get("STL")),
+                    blocks=_normalize_number(row.get("BLK")),
+                    turnovers=_normalize_number(row.get("TOV")),
+                    fgm=_normalize_number(row.get("FGM")),
+                    fga=_normalize_number(row.get("FGA")),
+                    fg3m=_normalize_number(row.get("FG3M")),
+                    fg3a=_normalize_number(row.get("FG3A")),
                 )
             )
             players_inserted += 1
@@ -883,6 +936,16 @@ async def _run_games_ingest(
                 existing_team = existing_teams.get(team_id)
                 if existing_team:
                     has_updates = False
+                    identity_values = {
+                        "game_date": game_date,
+                        "season": season,
+                        "team_abbreviation": team_abbr,
+                        "matchup": matchup,
+                    }
+                    for col, value in identity_values.items():
+                        if value is not None and getattr(existing_team, col) != value:
+                            setattr(existing_team, col, value)
+                            has_updates = True
                     for col, key in [
                         ("points", "PTS"),
                         ("assists", "AST"),
@@ -893,8 +956,8 @@ async def _run_games_ingest(
                         ("fg3m", "FG3M"),
                         ("fg3a", "FG3A"),
                     ]:
-                        value = row.get(key)
-                        if value is not None and getattr(existing_team, col) is None:
+                        value = _normalize_number(row.get(key))
+                        if value is not None and getattr(existing_team, col) != value:
                             setattr(existing_team, col, value)
                             has_updates = True
                     if has_updates:
@@ -907,15 +970,16 @@ async def _run_games_ingest(
                         team_abbreviation=team_abbr,
                         game_id=str(game_id),
                         game_date=game_date,
+                        season=season,
                         matchup=matchup,
-                        points=row.get("PTS"),
-                        assists=row.get("AST"),
-                        rebounds=row.get("REB"),
-                        turnovers=row.get("TOV"),
-                        fgm=row.get("FGM"),
-                        fga=row.get("FGA"),
-                        fg3m=row.get("FG3M"),
-                        fg3a=row.get("FG3A"),
+                        points=_normalize_number(row.get("PTS")),
+                        assists=_normalize_number(row.get("AST")),
+                        rebounds=_normalize_number(row.get("REB")),
+                        turnovers=_normalize_number(row.get("TOV")),
+                        fgm=_normalize_number(row.get("FGM")),
+                        fga=_normalize_number(row.get("FGA")),
+                        fg3m=_normalize_number(row.get("FG3M")),
+                        fg3a=_normalize_number(row.get("FG3A")),
                     )
                 )
                 teams_inserted += 1
@@ -968,7 +1032,7 @@ async def _run_games_ingest(
 async def ingest_games_by_date(
     since: str,
     until: str | None = None,
-    season: str = "2025-26",
+    season: str | None = None,
     include_team_stats: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
@@ -994,6 +1058,9 @@ async def ingest_games_by_date(
             status_code=400, detail="since must be on or before until"
         )
 
+    season = resolve_nba_season(season)
+    if not date_is_in_season(since_date, season) or not date_is_in_season(until_date, season):
+        raise HTTPException(status_code=400, detail=f"date range is outside NBA season {season}")
     return await _run_games_ingest(
         since_date, until_date, season, include_team_stats, db
     )
@@ -1032,7 +1099,7 @@ async def _run_games_ingest_job(
 async def start_games_ingest(
     since: str,
     until: str | None = None,
-    season: str = "2025-26",
+    season: str | None = None,
     include_team_stats: bool = True,
 ):
     try:
@@ -1050,6 +1117,9 @@ async def start_games_ingest(
     if since_date > until_date:
         raise HTTPException(status_code=400, detail="since must be on or before until")
 
+    season = resolve_nba_season(season)
+    if not date_is_in_season(since_date, season) or not date_is_in_season(until_date, season):
+        raise HTTPException(status_code=400, detail=f"date range is outside NBA season {season}")
     job_id = str(uuid.uuid4())
     update_jobs[job_id] = {
         "job_id": job_id,
@@ -1075,9 +1145,10 @@ async def start_games_ingest(
 
 @router.post("/games/ingest/latest/start")
 async def start_latest_completed_games_ingest(
-    season: str = "2025-26",
+    season: str | None = None,
     include_team_stats: bool = True,
 ):
+    season = resolve_nba_season(season)
     target_date = _latest_completed_nba_et_date()
     since = str(target_date)
     until = str(target_date)
@@ -1213,10 +1284,11 @@ async def _run_nightly_pipeline_job(
 
 @router.post("/pipeline/nightly/start")
 async def start_nightly_pipeline(
-    season: str = "2025-26",
+    season: str | None = None,
     include_team_stats: bool = True,
     fallback_refresh: bool = True,
 ):
+    season = resolve_nba_season(season)
     target_date = _latest_completed_nba_et_date()
     job_id = str(uuid.uuid4())
     update_jobs[job_id] = {
@@ -1260,7 +1332,7 @@ async def start_nightly_pipeline(
 async def update_last_n_games_since(
     since: str,
     until: str | None = None,
-    season: str = "2025-26",
+    season: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -1283,6 +1355,9 @@ async def update_last_n_games_since(
     if since_date > until_date:
         raise HTTPException(status_code=400, detail="since must be on or before until")
 
+    season = resolve_nba_season(season)
+    if not date_is_in_season(since_date, season) or not date_is_in_season(until_date, season):
+        raise HTTPException(status_code=400, detail=f"date range is outside NBA season {season}")
     return await _run_last_n_update(since_date, until_date, season, db)
 
 
@@ -1314,7 +1389,7 @@ async def _run_last_n_update_job(
 async def start_update_last_n_games_since(
     since: str,
     until: str | None = None,
-    season: str = "2025-26",
+    season: str | None = None,
 ):
     """
     Start last-n update in the background and return a job id for polling.
@@ -1334,6 +1409,9 @@ async def start_update_last_n_games_since(
     if since_date > until_date:
         raise HTTPException(status_code=400, detail="since must be on or before until")
 
+    season = resolve_nba_season(season)
+    if not date_is_in_season(since_date, season) or not date_is_in_season(until_date, season):
+        raise HTTPException(status_code=400, detail=f"date range is outside NBA season {season}")
     job_id = str(uuid.uuid4())
     update_jobs[job_id] = {
         "job_id": job_id,
@@ -1428,7 +1506,7 @@ async def get_recent_player_game_dates(limit: int = 5, db: AsyncSession = Depend
 
 @router.post("/last-n/backfill-shooting")
 async def backfill_shooting_stats(
-    season: str = "2025-26",
+    season: str | None = None,
     db: AsyncSession = Depends(get_db),
     limit: int | None = None,
 ):
@@ -1436,6 +1514,7 @@ async def backfill_shooting_stats(
     One-off backfill for players whose player_game_stats rows are missing shooting fields.
     Only refetches those players and updates missing columns (no full reinsert).
     """
+    season = resolve_nba_season(season)
     result = await db.execute(
         select(PlayerGameStat.player_id)
         .where(
@@ -1560,7 +1639,7 @@ async def backfill_player_team_abbr(
 async def refresh_player_team_abbr(
     db: AsyncSession = Depends(get_db),
     limit: int | None = None,
-    season: str = "2025-26",
+    season: str | None = None,
     fallback: bool = True,
 ):
     """
@@ -1568,6 +1647,7 @@ async def refresh_player_team_abbr(
     then optional per-player fallback. Updates existing players and creates
     missing records when possible.
     """
+    season = resolve_nba_season(season)
     active_players = players.get_active_players()
     if limit:
         active_players = active_players[:limit]
@@ -1692,7 +1772,7 @@ async def refresh_player_team_abbr(
 
 @router.post("/team-games/backfill-shooting")
 async def backfill_team_shooting_stats(
-    season: str = "2025-26",
+    season: str | None = None,
     db: AsyncSession = Depends(get_db),
     limit: int | None = None,
 ):
@@ -1700,6 +1780,7 @@ async def backfill_team_shooting_stats(
     One-off backfill for teams whose team_game_stats rows are missing shooting fields.
     Only refetches those teams and updates missing columns.
     """
+    season = resolve_nba_season(season)
     result = await db.execute(
         select(TeamGameStat.team_id)
         .where(
@@ -1775,7 +1856,7 @@ async def backfill_team_shooting_stats(
 
 @router.post("/team-games/all")
 async def store_team_games_all_teams(
-    season: str = "2025-26",
+    season: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     teams = nba_teams.get_teams()
@@ -1834,9 +1915,11 @@ async def store_team_games_all_teams(
 
 @router.post("/team-games/update")
 async def update_team_games_all_teams(
-    season: str = "2025-26",
+    season: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    season = resolve_nba_season(season)
+    season = resolve_nba_season(season)
     teams = nba_teams.get_teams()
     inserted = 0
     skipped = 0
@@ -1849,7 +1932,8 @@ async def update_team_games_all_teams(
 
         result = await db.execute(
             select(func.max(TeamGameStat.game_date)).where(
-                TeamGameStat.team_id == team_id
+                TeamGameStat.team_id == team_id,
+                TeamGameStat.season == season,
             )
         )
         last_game_date = result.scalar_one_or_none()
@@ -1901,10 +1985,11 @@ async def update_team_games_all_teams(
 
 @router.post("/lineups/all")
 async def store_lineups_all_teams(
-    season: str = "2025-26",
+    season: str | None = None,
     group_quantity: int = 5,
     db: AsyncSession = Depends(get_db),
 ):
+    season = resolve_nba_season(season)
     teams = nba_teams.get_teams()
     inserted = 0
     skipped = 0
@@ -1964,9 +2049,10 @@ async def store_lineups_all_teams(
 @router.post("/last-n/{player_id}")
 async def store_last_n_games_player(
     player_id: int,
-    season: str = "2025-26",
+    season: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    season = resolve_nba_season(season)
     df = nba_client.fetch_player_game_log(player_id, season)
 
     if df.empty:
@@ -2011,18 +2097,20 @@ async def load_all_teams(db: AsyncSession = Depends(get_db)):
 # fetch and store the schedule info for the given season
 @router.post("/schedule/load")
 async def load_season_schedule(
-    season: str = "2025-26",
+    season: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
     Load all games for a season from NBA API into DB.
     """
     try:
-        await load_schedule(db, season)
+        season = resolve_nba_season(season)
+        counts = await load_schedule(db, season)
         return {
             "status": "success",
             "season": season,
             "message": "Schedule loaded/updated",
+            **counts,
         }
     except Exception as e:
         logger.error(f"Error loading schedule for season {season}: {e}")

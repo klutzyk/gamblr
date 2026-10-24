@@ -5,6 +5,10 @@ def to_async_db_url(database_url: str) -> str:
     """Convert sync PostgreSQL URLs into asyncpg URLs when needed."""
     if "+asyncpg" in database_url:
         async_url = database_url
+    elif database_url.startswith("postgresql+psycopg2://"):
+        async_url = database_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+    elif database_url.startswith("postgresql+psycopg://"):
+        async_url = database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
     elif database_url.startswith("postgresql://"):
         async_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     elif database_url.startswith("postgres://"):
@@ -33,7 +37,11 @@ def to_async_db_url(database_url: str) -> str:
 
 def to_sync_db_url(database_url: str) -> str:
     """Convert async SQLAlchemy URL into a psycopg2-compatible sync URL."""
-    sync_url = database_url.replace("+asyncpg", "", 1)
+    sync_url = database_url.replace("+asyncpg", "+psycopg2", 1)
+    if sync_url.startswith("postgres://"):
+        sync_url = sync_url.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif sync_url.startswith("postgresql://"):
+        sync_url = sync_url.replace("postgresql://", "postgresql+psycopg2://", 1)
     parsed = urlparse(sync_url)
     if not parsed.query:
         return sync_url

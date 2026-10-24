@@ -11,6 +11,8 @@ class PlayerGameStat(Base):
     game_id = Column(Text, nullable=False)
 
     game_date = Column(Date, nullable=False)
+    season = Column(Text, nullable=True)
+    team_abbreviation = Column(Text, nullable=True)
     matchup = Column(Text)
 
     minutes = Column(Float)
