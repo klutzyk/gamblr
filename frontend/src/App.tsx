@@ -483,7 +483,7 @@ function PredictionsGrid({
                       <strong>{pred.confidence}%</strong>
                     </div>
                   )}
-                  {typeof pred.sample_size === "number" && (
+                  {/* {typeof pred.sample_size === "number" && (
                     <div className="text-xs text-secondary mt-2">
                       Current-season sample: {pred.sample_size} game
                       {pred.sample_size === 1 ? "" : "s"}
@@ -491,7 +491,7 @@ function PredictionsGrid({
                         ? ` · ${pred.data_quality.replace("_", " ")}`
                         : ""}
                     </div>
-                  )}
+                  )} */}
                   <div className="prediction-range">
                     <div
                       className={`prediction-range-fill ${confidenceClass}`}
