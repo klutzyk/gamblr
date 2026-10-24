@@ -25,6 +25,7 @@ from app.db.mlb.store_prediction_logs import load_mlb_prediction_logs, upsert_ml
 from app.db.url_utils import to_sync_db_url
 from app.services.propline_client import PropLineClient
 from app.services.theodds_client import TheOddsClient
+from typing import Literal
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 if str(ROOT_DIR) not in sys.path:
@@ -729,7 +730,7 @@ async def get_propline_mlb_events():
 
 @router.get("/best-bets")
 async def get_mlb_best_bets(
-    day: str = Query("today", enum=["today", "tomorrow", "yesterday", "auto"]),
+    day: Literal["today", "tomorrow", "yesterday", "auto"] = Query("today"),
     date: str | None = Query(None, description="Optional YYYY-MM-DD override."),
     bookmaker: str = Query("fanduel"),
     markets: str = Query(",".join(BEST_BET_MARKETS)),
